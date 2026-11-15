@@ -3,6 +3,25 @@
 User-facing changes in each Rayline release. Install commands and signed
 assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock/releases).
 
+## 0.5.2 (2026-11-15)
+
+### Added
+
+- **Local routing decisions.** With `routing.decisions: "local"` in a local-mode
+  config, the local process decides each turn's route itself with the public
+  ARC 1.0 release (`rayline-ai/ARC-1.0`) instead of calling the Rayline Routes
+  API. On first use it downloads the release and about 1 GB of encoder weights
+  and checks them against their pins. See [Local mode](docs/local-mode.md).
+- **The local ARC encoder ships with Rayline on macOS arm64.** The installers,
+  `rayline update` and Homebrew install `rayline-arc-encoder` and its license
+  beside `rayline`, verified against the release's `SHA256SUMS`.
+
+### Changed
+
+- **The local-mode start-up check no longer posts an empty route request.**
+  It asks the hosted Decisions router for its models, and a 400 no longer
+  counts as ready.
+
 ## 0.5.1 (2026-11-13)
 
 ### Changed
