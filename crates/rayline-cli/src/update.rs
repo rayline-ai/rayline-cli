@@ -2247,14 +2247,51 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn downloads_stream_a_large_file_to_disk() -> TestResult {
-        let body: Vec<u8> = (0..8 * 1024 * 1024).map(|i: u32| (i % 251) as u8).collect();
-        let server = FakeReleaseServer::start(Files::from([("/big".to_owned(), body.clone())]));
+    async fn downloads_stream_to_disk_as_the_body_arrives() -> TestResult {
+        // The server sends the first part of the body, then holds the rest
+        // until that part is on disk: a download that buffered the whole body
+        // in memory would never write it, and the server would report so.
+        const FIRST: usize = 64 * 1024;
+        let body: Vec<u8> = (0..4 * 1024 * 1024).map(|i: u32| (i % 251) as u8).collect();
         let dir = temp_update_dir()?;
         let path = dir.join("big");
-        download_to(&format!("{}/big", server.base_url), &path).await?;
+        let part = path.with_extension("part");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let address = listener.local_addr()?;
+        let served = body.clone();
+        let watched = part.clone();
+        let serve = std::thread::spawn(move || -> std::io::Result<bool> {
+            use std::io::{Read, Write};
+            let (mut stream, _) = listener.accept()?;
+            let mut request = [0_u8; 1024];
+            let _ = stream.read(&mut request)?;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
+                served.len()
+            )?;
+            stream.write_all(&served[..FIRST])?;
+            stream.flush()?;
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            let mut streamed = false;
+            while std::time::Instant::now() < deadline {
+                if fs::metadata(&watched).is_ok_and(|meta| meta.len() >= FIRST as u64) {
+                    streamed = true;
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            stream.write_all(&served[FIRST..])?;
+            Ok(streamed)
+        });
+        download_to(&format!("http://{address}/big"), &path).await?;
+        let streamed = serve.join().expect("server thread")?;
+        assert!(
+            streamed,
+            "the first part was not written before the rest arrived"
+        );
         assert_eq!(fs::read(&path)?, body);
-        assert!(!path.with_extension("part").exists());
+        assert!(!part.exists());
         fs::remove_dir_all(dir)?;
         Ok(())
     }
