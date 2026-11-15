@@ -115,7 +115,7 @@ Harness-specific options and subcommands are **kept for review** (section 9).
    With `decisions` `local`, the error says local ARC refused or couldn't decide the turn on this machine, and a refusal points at `routing.decisions_model` and `models`.
 9. When the core fails a turn before any output because it couldn't reach the endpoint the decision selected, the local process doesn't resend it, and the harness gets 502 with `x-should-retry: false`. The error names Rayline cloud when every model is Rayline cloud's, else "Rayline cloud, or an inference server in `endpoints`", and says to check the network and any `HTTPS_PROXY` the local process was started with.
 10. `runtime.log` gets a line, never with the request's content, for every request the local process refuses (an untrusted origin, a missing token, a body over 64 MiB: status and path) and every error the core answers with (status, path and error type; a 502 before any output as item 8 or 9 classifies it).
-11. `--decisions` sets `routing.decisions`, over the file and `RAYLINE_ROUTING_DECISIONS`. With `--decisions local` and no `routing` section in the config (or no config file), start uses `routing` with `decisions_model` `arc-swift-1.0`, `policy.preset` `arc-policy.prefer-local.v1` and no `classifier_model`. `--decisions hosted` has no such defaults.
+11. `--decisions` sets `routing.decisions`, over the file and `RAYLINE_ROUTING_DECISIONS`. With `--decisions local` and no `routing` section in the config (or no config file), start uses `routing` with `decisions_model` `arc-swift-1.0`, `policy.preset` `arc-policy.prefer-local.v1` and no `classifier_model`; `RAYLINE_ROUTING_*` overrides apply to those defaults as to a file's `routing`. `--decisions hosted` has no such defaults.
 12. `rayline local status --json` prints `{"running": false}` when nothing runs. Otherwise:
 
    | Key | Value |
@@ -129,7 +129,7 @@ Harness-specific options and subcommands are **kept for review** (section 9).
    | `decisions_model` | `routing.decisions_model`. |
    | `routes` | With `local` decisions only: `url`, the local Routes API (`POST /v1/routes`), and `token_file`, the file holding its bearer token. |
 
-   The token is never printed. Other local programs (pi-arc, for one) read it from `token_file` and send `Authorization: Bearer <token>`. It admits `POST /v1/routes` and `GET /health` only; any other path is refused 403, so it can't send anything to Rayline cloud. The local process writes the file (mode 0600) when it starts with `local` decisions and removes it when it stops; a new start makes a new token.
+   The token is never printed. Other local programs (pi-arc, for one) read it from `token_file` and send `Authorization: Bearer <token>`. It admits `POST /v1/routes` only; any other method or path is refused 403, so it can't send anything to Rayline cloud. The local process writes the file (mode 0600) when it starts with `local` decisions and removes it when it stops; a new start makes a new token.
 
 ### 3.4 `rayline top`
 
@@ -273,7 +273,7 @@ Required for local mode. Its presence in a `--config` file selects local mode.
 | Key | Type | Required | Meaning |
 |---|---|---|---|
 | `decisions_model` | string | yes | Which ARC product makes decisions (for example `arc-swift-1.0`). No default in code, except `rayline local start --decisions local` without `routing` (section 3.3 item 11). With `decisions` `local`, it must be `arc-swift-1.0` or `arc-sage-1.0` (or their short and data-mode spellings, such as `arc-swift` or `arc-sage-zdr-1.0`); any other value fails load naming the key. |
-| `classifier_model` | string | to run Claude Code | The model that serves Claude Code's auto-mode safety classifier calls, sent to Rayline cloud. No default in code. A local-mode `rayline run claude` without it fails before anything starts, naming the key; a local process started without it refuses classifier calls. |
+| `classifier_model` | string | to run Claude Code | The model that serves Claude Code's auto-mode safety classifier calls, sent to Rayline cloud. No default in code. A local-mode `rayline run claude` without it fails before anything starts, naming the key, and so does one that would use a local process started without it; such a process refuses classifier calls. |
 | `policy.preset` | non-empty string | yes | ARC's preset id (`arc-policy.package-default.v1`, `arc-policy.hybrid-default.v1` or `arc-policy.prefer-local.v1`). Sent to ARC unchanged; no short names. The same exception as `decisions_model` applies. |
 | `policy.overrides` | object | no | ARC's own `routing.policy.overrides` shape, sent to ARC unchanged. ARC validates it. |
 | `decisions` | `local` or `hosted` | no, default `hosted` | Where the local process gets its decisions. `hosted`: the environment's Rayline router decides. Set `local` to decide on this machine: ARC runs inside the local process from the ARC release (item 1); no decision goes to Rayline cloud. |

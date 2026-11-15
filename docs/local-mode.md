@@ -232,7 +232,7 @@ pi-arc finds the local Routes API with `rayline local status --json`:
   output is `{"running": false}`.
 - The token is never printed. Read it from `token_file` (mode 0600) and send
   `Authorization: Bearer <token>` to `routes.url`. It admits `POST /v1/routes`
-  and `GET /health` only; it can't send anything to Rayline cloud.
+  only; it can't send anything to Rayline cloud.
 - The URL and token change on every start. Run `rayline local status --json`
   again after a connection error or a 401.
 - The request is the Routes API request: `model` (`arc-swift-1.0` or
