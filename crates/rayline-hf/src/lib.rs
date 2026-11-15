@@ -190,7 +190,9 @@ pub struct Download<'a> {
     /// The commit is a pin, not the repo's `main`: `refs/main` is left as
     /// it is.
     pub pinned: bool,
-    /// Told the file's bytes on disk so far, as they arrive.
+    /// Told the file's bytes on disk so far: once before the first new
+    /// byte (a resumed download's bytes already there), then as they
+    /// arrive.
     pub on_bytes: Option<OnBytes<'a>>,
 }
 
@@ -663,6 +665,10 @@ fn attempt_download(
         (file, 0u64)
     };
 
+    // Before any new bytes: what a resumed download already has.
+    if let Some(OnBytes(on_bytes)) = on_bytes {
+        on_bytes(bytes_downloaded);
+    }
     let mut reader = response;
     let mut buf = [0u8; 65536];
 

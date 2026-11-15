@@ -86,7 +86,7 @@ Harness-specific options and subcommands are **kept for review** (section 9).
 
 | Command | Does |
 |---|---|
-| `rayline local start [--config <file>]` | Start the local process from the default config file, or from `<file>`. The config must have a `routing` section. |
+| `rayline local start [--config <file>]` | Start the local process from the default config file, or from `<file>`. The config must have a `routing` section. While it waits for the process, stderr shows `Starting the local process (ARC encoder and execution core)...` with `decisions` `local`, else `Starting the local process...`, and the ready line ends `(started in <s> s)`. |
 | `rayline local status` | Show whether the local process is running, its address, the config file and the environment it was started from. |
 | `rayline local stop` | Stop the local process. External inference servers keep running. |
 
@@ -269,7 +269,7 @@ Required for local mode. Its presence in a `--config` file selects local mode.
    - The pin is `arc_release`, else the built-in release (`rayline-ai/ARC-1.0` at a commit, directory and manifest sha256 compiled into Rayline).
    - `manifest.json` must match the pinned sha256 (and be at most 1 MiB), and every file it lists the size and sha256 it lists. A cached file that matches is not downloaded again; one that doesn't is downloaded again. A download that doesn't match is removed from the cache, and start fails naming the file; so does a file that can't be downloaded. A `prices.json` the manifest doesn't list fails start naming it.
    - A private repo needs a Hugging Face token (section 7.1 item 6); without one, start fails saying to set `HF_TOKEN`.
-   - Start shows the download on stderr as one transfer of the release's files and the encoder weights, in MB with its rate. On a terminal it is one line that updates in place. Elsewhere it prints a line when the download starts, at each further tenth or 10 seconds after the last line, `Verifying the ARC release...` once the last bytes are in, and `ARC release downloaded: <MB> in <s> s (<rate>)`. When nothing needs downloading, it prints only `ARC release cached`. It then prints `Starting the local process...` while it waits, and the ready line says how long that took. A closed stderr doesn't stop start.
+   - Start shows the download on stderr as one transfer of the release's files and the encoder weights, in MB with its rate. On a terminal it is one line that updates in place. Elsewhere it prints a line when the download starts, at each further tenth or 10 seconds after the last line, `Verifying the ARC release...` once the last bytes are in, and `ARC release downloaded: <MB> in <s> s (<rate>)`. The rate counts only bytes this start downloaded. When nothing needs downloading, it prints only `ARC release cached`. A closed stderr doesn't stop start.
    - The encoder weights (about 1 GB) come from `rayline-ai/ARC-1.0` at the built-in release's commit and a sha256 compiled into Rayline, whatever `arc_release` says, without a token, by the same rules. A release in `arc_release` must be built for those weights; Rayline can't check that.
    - When neither the release nor the `models` prices it takes price any model, start fails saying so.
    - Start still contacts the environment's Rayline router and checks each `models` entry's `tokenizer` (section 5.3), as with `hosted`.

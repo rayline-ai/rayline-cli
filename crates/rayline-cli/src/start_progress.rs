@@ -4,7 +4,7 @@
 //! starts, about every 10 seconds or 10 %, and when it ends. A closed
 //! stderr is ignored.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::io::{self, IsTerminal, Write};
 use std::time::{Duration, Instant};
 
@@ -17,16 +17,22 @@ const EVERY: Duration = Duration::from_secs(10);
 pub struct Progress {
     out: RefCell<Box<dyn Write + Send>>,
     tty: bool,
+    /// A terminal line is drawn without its newline.
+    open: Cell<bool>,
     state: RefCell<Transfer>,
 }
 
 /// The ARC release's bytes: those expected, those of files already done,
-/// and those of the file now downloading.
+/// and those of the file now downloading. `fresh` counts only bytes this
+/// start downloaded, not those a resumed download already had.
 #[derive(Default)]
 struct Transfer {
     total: u64,
     done: u64,
     current: u64,
+    /// The file now downloading's bytes on disk when it began.
+    base: Option<u64>,
+    fresh: u64,
     started: Option<Instant>,
     shown: Option<Instant>,
     tenths: u64,
@@ -48,12 +54,14 @@ impl Progress {
         Self {
             out: RefCell::new(out),
             tty,
+            open: Cell::new(false),
             state: RefCell::new(Transfer::default()),
         }
     }
 
     /// A finished phase: its own line.
     pub fn line(&self, text: &str) {
+        self.open.set(false);
         self.write(&if self.tty {
             format!("\r\x1b[K{text}\n")
         } else {
@@ -65,6 +73,7 @@ impl Progress {
     /// replaces it.
     pub fn status(&self, text: &str) {
         if self.tty {
+            self.open.set(true);
             self.write(&format!("\r\x1b[K{text}"));
         }
     }
@@ -72,6 +81,7 @@ impl Progress {
     /// A phase under way: on a terminal, a line the next one replaces;
     /// elsewhere, its own line.
     pub fn phase(&self, text: &str) {
+        self.open.set(self.tty);
         self.write(&if self.tty {
             format!("\r\x1b[K{text}")
         } else {
@@ -81,20 +91,29 @@ impl Progress {
 
     /// Clears a terminal's unfinished line, so the next output starts clean.
     pub fn clear(&self) {
-        if self.tty {
+        if self.open.replace(false) {
             self.write("\r\x1b[K");
         }
     }
 
-    /// `bytes` more will be downloaded.
+    /// `bytes` more will be downloaded. A total that grows after the
+    /// download looked complete (a cached file that didn't match) is not
+    /// verifying yet, and counts its tenths afresh.
     pub fn expect(&self, bytes: u64) {
-        self.state.borrow_mut().total += bytes;
+        let mut state = self.state.borrow_mut();
+        state.total += bytes;
+        state.verifying = false;
+        state.tenths = ((state.done + state.current) * 10)
+            .checked_div(state.total)
+            .unwrap_or(0);
     }
 
     /// The file downloading now has `bytes` on disk.
     pub fn on_bytes(&self, bytes: u64) {
         let line = {
             let mut state = self.state.borrow_mut();
+            let base = *state.base.get_or_insert(bytes);
+            state.fresh += bytes.saturating_sub(base.max(state.current));
             state.current = bytes;
             let now = Instant::now();
             let started = *state.started.get_or_insert(now);
@@ -103,7 +122,10 @@ impl Progress {
             if state.shown.is_none() {
                 state.shown = Some(now);
                 Some(if self.tty {
-                    format!("Downloading ARC release: {}", fraction(got, total, started))
+                    format!(
+                        "Downloading ARC release: {}",
+                        fraction(got, total, state.fresh, started)
+                    )
                 } else {
                     format!("Downloading ARC release: {} MB", megabytes(total))
                 })
@@ -117,7 +139,7 @@ impl Progress {
                     state.tenths = tenths;
                     Some(format!(
                         "Downloading ARC release: {}",
-                        fraction(got, total, started)
+                        fraction(got, total, state.fresh, started)
                     ))
                 } else {
                     None
@@ -144,14 +166,15 @@ impl Progress {
         let mut state = self.state.borrow_mut();
         state.done += state.current;
         state.current = 0;
+        state.base = None;
     }
 
     /// The release is in the cache: says whether it was downloaded, or
     /// was there already.
     pub fn release_ready(&self) {
-        let (started, got) = {
+        let (started, got, fresh) = {
             let state = self.state.borrow();
-            (state.started, state.done)
+            (state.started, state.done, state.fresh)
         };
         match started {
             Some(started) => {
@@ -159,11 +182,16 @@ impl Progress {
                 self.line(&format!(
                     "ARC release downloaded: {} MB in {seconds:.1} s ({})",
                     megabytes(got),
-                    rate(got, seconds)
+                    rate(fresh, seconds)
                 ));
             }
             None => self.line("ARC release cached"),
         }
+    }
+
+    #[cfg(test)]
+    fn fresh(&self) -> u64 {
+        self.state.borrow().fresh
     }
 
     fn write(&self, text: &str) {
@@ -172,15 +200,23 @@ impl Progress {
     }
 }
 
-/// `got / total MB (p%), r MB/s`; the rate once a second has passed.
-fn fraction(got: u64, total: u64, started: Instant) -> String {
+impl Drop for Progress {
+    /// A start that fails mid-line leaves the error its own line.
+    fn drop(&mut self) {
+        self.clear();
+    }
+}
+
+/// `got / total MB (p%), r MB/s`, the rate of the `fresh` bytes once a
+/// second has passed.
+fn fraction(got: u64, total: u64, fresh: u64, started: Instant) -> String {
     let percent = (got * 100).checked_div(total).unwrap_or(100);
     let seconds = started.elapsed().as_secs_f64();
     let shown = format!("{} / {} MB ({percent}%)", megabytes(got), megabytes(total));
     if seconds < 1.0 {
         shown
     } else {
-        format!("{shown}, {}", rate(got, seconds))
+        format!("{shown}, {}", rate(fresh, seconds))
     }
 }
 
@@ -257,6 +293,58 @@ pub(crate) mod tests {
         assert!(lines[10].starts_with("Downloading ARC release: 100 / 100 MB (100%)"));
         assert_eq!(lines[11], "Verifying the ARC release...");
         assert!(lines[12].starts_with("ARC release downloaded: 100 MB in "));
+    }
+
+    #[test]
+    fn a_resumed_download_rates_only_its_new_bytes() {
+        let progress = Progress::new(Box::new(io::sink()), false);
+        progress.expect(100);
+        progress.on_bytes(90);
+        progress.on_bytes(95);
+        progress.on_bytes(100);
+        assert_eq!(progress.fresh(), 10);
+    }
+
+    #[test]
+    fn a_total_that_grows_after_completing_verifies_again_at_its_end() {
+        let out = Captured::default();
+        let progress = Progress::new(Box::new(out.clone()), false);
+        progress.expect(10_000_000);
+        progress.on_bytes(0);
+        progress.on_bytes(10_000_000);
+        progress.file_done();
+        progress.expect(10_000_000);
+        progress.on_bytes(0);
+        progress.on_bytes(10_000_000);
+        let text = out.text();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.starts_with("Verifying"))
+                .count(),
+            2,
+            "{text}"
+        );
+        assert_eq!(
+            lines.last(),
+            Some(&"Verifying the ARC release..."),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_terminal_line_left_open_is_cleared_when_progress_ends() {
+        let out = Captured::default();
+        drop({
+            let progress = Progress::new(Box::new(out.clone()), true);
+            progress.status("Checking the ARC release...");
+            progress
+        });
+        assert!(out.text().ends_with("\r\x1b[K"), "{:?}", out.text());
+        let out = Captured::default();
+        drop(Progress::new(Box::new(out.clone()), true));
+        assert_eq!(out.text(), "");
     }
 
     #[test]
