@@ -361,6 +361,14 @@ fn load_from(
         None => Value::Object(Map::new()),
     };
 
+    // Refused in every mode, as its file key is.
+    if env(RENAMED_ROUTING_DECISIONS).is_some() {
+        return Err(ConfigError::Env {
+            var: RENAMED_ROUTING_DECISIONS,
+            key: ROUTING_ROUTER.1,
+            problem: format!("was renamed `{}`", ROUTING_ROUTER.0),
+        });
+    }
     let doc = Doc { file: &file };
     let raw = doc.root(&root)?;
     // `--router local` without `routing` starts from its defaults, which
@@ -498,13 +506,6 @@ fn apply_routing_overrides(
     routing: Option<RawRouting>,
     env: &EnvLookup<'_>,
 ) -> Result<Option<RawRouting>, ConfigError> {
-    if env(RENAMED_ROUTING_DECISIONS).is_some() {
-        return Err(ConfigError::Env {
-            var: RENAMED_ROUTING_DECISIONS,
-            key: ROUTING_ROUTER.1,
-            problem: format!("was renamed `{}`", ROUTING_ROUTER.0),
-        });
-    }
     let decisions_model = env_string(env, ROUTING_DECISIONS_MODEL)?;
     let classifier_model = env_string(env, ROUTING_CLASSIFIER_MODEL)?;
     let preset = env_string(env, ROUTING_POLICY_PRESET)?;
@@ -2305,19 +2306,24 @@ mod tests {
                 "must be one of `local`, `hosted`".to_owned()
             )
         );
-        // Its name before the rename is refused, naming the new one.
-        let renamed = load_env(
-            &home,
-            opts(Mode::Cloud),
-            &[("RAYLINE_ROUTING_DECISIONS", "local")],
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(
-            renamed.contains("`RAYLINE_ROUTING_DECISIONS`")
-                && renamed.contains("was renamed `RAYLINE_ROUTING_ROUTER`"),
-            "{renamed}"
-        );
+        // Its name before the rename is refused, naming the new one, in
+        // every mode and whether or not the file has `routing`.
+        let mut bare = example();
+        remove(&mut bare, &["routing"]);
+        let no_routing = temp_home();
+        write_default(&no_routing, &bare);
+        for home in [&home, &no_routing] {
+            for mode in [Mode::Cloud, Mode::NoRouting, Mode::Local] {
+                let renamed = load_env(home, opts(mode), &[("RAYLINE_ROUTING_DECISIONS", "local")])
+                    .unwrap_err()
+                    .to_string();
+                assert!(
+                    renamed.contains("`RAYLINE_ROUTING_DECISIONS`")
+                        && renamed.contains("was renamed `RAYLINE_ROUTING_ROUTER`"),
+                    "{mode:?}: {renamed}"
+                );
+            }
+        }
     }
 
     #[test]
