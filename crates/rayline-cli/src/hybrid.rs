@@ -670,17 +670,17 @@ async fn probe_decisions(
             ProbeVerdict::Ready => return Ok(()),
             ProbeVerdict::KeyRefused(status) => {
                 return Err(io::Error::other(format!(
-                    "Decisions at {url} refused the Rayline key (HTTP {status}). Run `rayline {env_flag}auth login`, then try again."
+                    "The router at {models} refused the Rayline key (HTTP {status}). Run `rayline {env_flag}auth login`, then try again."
                 )));
             }
             ProbeVerdict::RateLimited => {
                 return Err(io::Error::other(format!(
-                    "Decisions at {url} refused the readiness check with HTTP 429: the Rayline key is rate limited or out of quota; check your account, then retry"
+                    "The router at {models} refused the readiness check with HTTP 429: the Rayline key is rate limited or out of quota; check your account, then retry"
                 )));
             }
             ProbeVerdict::Rejected(status) => {
                 return Err(io::Error::other(format!(
-                    "Decisions at {url} answered HTTP {status} to a readiness check; the local process cannot start"
+                    "The router at {models} answered HTTP {status} to a readiness check; the local process cannot start"
                 )));
             }
             ProbeVerdict::Unavailable => {
@@ -690,12 +690,12 @@ async fn probe_decisions(
                         Err(error) => error.to_string(),
                     };
                     return Err(io::Error::other(format!(
-                        "Decisions at {url} is unreachable or not ready ({detail}); check your network, then retry"
+                        "The router at {models} is unreachable or not ready ({detail}); check your network, then retry"
                     )));
                 }
                 if !announced {
                     announced = true;
-                    say(format!("Waiting for Decisions at {url}..."));
+                    say(format!("Waiting for the router at {models}..."));
                 }
                 tokio::time::sleep(Duration::from_secs(3)).await;
             }
