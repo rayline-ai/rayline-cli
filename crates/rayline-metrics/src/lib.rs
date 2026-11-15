@@ -478,6 +478,10 @@ struct RequestRecord {
     error: Option<String>,
 }
 
+/// Output timed over less than this is too short to rate: a short response
+/// that arrives in one burst would rate as thousands of tokens a second.
+const MIN_RATED_OUTPUT_MS: u64 = 500;
+
 /// How long the output took: from the first output, unless it all came in
 /// a burst at the end. A provider that holds a tool call's input back sends
 /// it within milliseconds of the end, and timing from its first byte would
@@ -577,7 +581,8 @@ impl RequestRecord {
             .and_then(|(tokens, first)| {
                 let generation_ms =
                     generation_ms(self.response_started_at_unix_ms, first, completed_or_now);
-                (generation_ms > 0).then(|| tokens as f64 / (generation_ms as f64 / 1000.0))
+                (generation_ms >= MIN_RATED_OUTPUT_MS)
+                    .then(|| tokens as f64 / (generation_ms as f64 / 1000.0))
             });
         RequestSnapshot {
             request_id: self.request_id.clone(),
@@ -920,6 +925,20 @@ mod tests {
         record.first_token_at_unix_ms = Some(4_400);
         record.output_tokens = Some(1_000);
         assert_eq!(record.snapshot(6_000).output_tps, Some(1_000.0));
+    }
+
+    #[test]
+    fn output_timed_over_less_than_half_a_second_has_no_rate() {
+        let mut record = RequestRecord::new("req-1".to_owned(), 1_000);
+        record.target = Some("remote".to_owned());
+        record.response_started_at_unix_ms = Some(2_000);
+        record.first_token_at_unix_ms = Some(2_000);
+        record.completed_at_unix_ms = Some(2_109);
+        record.output_tokens = Some(131);
+        assert_eq!(record.snapshot(3_000).output_tps, None);
+        // From half a second, it has one.
+        record.completed_at_unix_ms = Some(2_500);
+        assert_eq!(record.snapshot(3_000).output_tps, Some(262.0));
     }
 
     #[test]
