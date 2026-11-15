@@ -4,7 +4,7 @@
 //!
 //! Each `models` entry is served by its endpoint under its `model` name, with
 //! one deployment per protocol the endpoint lists. A model ARC picks that is
-//! not in `models` goes to Rayline cloud: the [`CLOUD_MODELS`] pins, less any
+//! not in `models` goes to Rayline Platform: the [`CLOUD_MODELS`] pins, less any
 //! whose id a `models` entry takes. Each deployment has one derived action
 //! named as ARC names the model's actions ([`registry_action_model`]), so the
 //! core binds a model's deployments as one action per control, one deployment
@@ -22,11 +22,11 @@ const API_MODE_V2: &str = "execution_context_v2";
 /// The variable the core reads the Rayline router key from, for Decisions
 /// and the cloud pins.
 pub(crate) const ROUTER_KEY_ENV: &str = "RAYLINE_ROUTER_API_KEY";
-/// Context window of the Rayline cloud models, Claude Opus 5.5, Sonnet 5.5
+/// Context window of the Rayline Platform models, Claude Opus 5.5, Sonnet 5.5
 /// and Haiku 5.5 (pricing snapshot 2026-10-16, `context_window_tokens`; Haiku
 /// read from the dev and prod catalogs 2026-11-09, `context_length`).
 const CLOUD_CONTEXT_WINDOW: u64 = 1_000_000;
-/// The Rayline cloud models, as `(cloud_id, registry_model,
+/// The Rayline Platform models, as `(cloud_id, registry_model,
 /// max_output_tokens)`. Each has one `model_pin` deployment per protocol, at
 /// the router's path for it.
 ///

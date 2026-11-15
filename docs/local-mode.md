@@ -1,9 +1,9 @@
 # Local mode
 
 In local mode a coding harness talks to a Rayline process on your machine
-instead of to Rayline cloud. For every request, ARC picks the model, and the
+instead of to Rayline Platform. For every request, ARC picks the model, and the
 local process sends the request to one of your own inference servers listed in
-`settings.json`, or to Rayline cloud for any other model.
+`settings.json`, or to Rayline Platform for any other model.
 
 Local mode controls where inference runs; `routing.router` controls
 where routing decisions are made (default `hosted`: the request is sent to
@@ -20,7 +20,7 @@ Cloud mode, the default, needs none of this. See
 - On macOS, macOS 13 or later.
 
 Your own inference servers are optional. With none listed, every model ARC
-picks goes to Rayline cloud. Rayline doesn't start, download or stop your
+picks goes to Rayline Platform. Rayline doesn't start, download or stop your
 servers, and `rayline local stop` leaves them running.
 
 ARC makes every routing decision. See
@@ -68,7 +68,7 @@ The config has three sections. A local-mode config needs `routing`. Add
 }
 ```
 
-Rayline cloud is built in and has no entry. It serves every protocol a harness
+Rayline Platform is built in and has no entry. It serves every protocol a harness
 speaks.
 
 ### `endpoints`
@@ -97,7 +97,7 @@ list `openai_responses`.
 
 ### `models`
 
-These are the models ARC can pick that Rayline cloud doesn't serve. Each is
+These are the models ARC can pick that Rayline Platform doesn't serve. Each is
 keyed by the model id ARC returns.
 
 | Key | Type | Required | Meaning |
@@ -114,11 +114,11 @@ that model's endpoint under its `model` name. ARC doesn't publish the models
 it knows yet, so every entry needs `context_window` and `max_output_tokens`,
 and the local process refuses to start without them.
 
-The only other models ARC can pick are three Rayline cloud models:
+The only other models ARC can pick are three Rayline Platform models:
 `anthropic/claude-opus-5.5`, `anthropic/claude-sonnet-5.5` and
 `anthropic/claude-haiku-5.5`. Each has a 1,000,000-token context window and a
 128,000-token output ceiling, and ARC prices them. When ARC picks one, the
-request goes to Rayline cloud. A `models` entry keyed by one of these ids
+request goes to Rayline Platform. A `models` entry keyed by one of these ids
 replaces that cloud model.
 
 Every entry works the same way. No setting marks a model as local.
@@ -128,10 +128,10 @@ Every entry works the same way. No setting marks a model as local.
 | Key | Type | Required | Meaning |
 |---|---|---|---|
 | `decisions_model` | string | yes | The ARC product that makes the decisions, for example `arc-swift-1.0`. |
-| `classifier_model` | string | to run Claude Code | The model that serves Claude Code's auto-mode safety classifier calls. These calls go to Rayline cloud. |
+| `classifier_model` | string | to run Claude Code | The model that serves Claude Code's auto-mode safety classifier calls. These calls go to Rayline Platform. |
 | `policy.preset` | non-empty string | yes | The id of an ARC preset: `arc-policy.package-default.v1`, `arc-policy.hybrid-default.v1` or `arc-policy.prefer-local.v1`. It is sent to ARC unchanged. |
 | `policy.overrides` | object | no | Overrides in ARC's own `routing.policy.overrides` shape, sent to ARC unchanged. ARC validates them. |
-| `router` | `local` or `hosted` | no, default `hosted` | `hosted`: Rayline cloud's ARC decides. Set `local` to decide on this machine: ARC runs inside the local process, and no routing decision goes to Rayline cloud. |
+| `router` | `local` or `hosted` | no, default `hosted` | `hosted`: Rayline Platform's ARC decides. Set `local` to decide on this machine: ARC runs inside the local process, and no routing decision goes to Rayline Platform. |
 | `arc_release` | object with `repo`, `revision`, `manifest_sha256`, and optionally `dir` | no | Overrides the built-in ARC release for `local` decisions with a Hugging Face repo, a full commit id, the sha256 of the release's `manifest.json`, and the repo directory it is in (default the repo root). For a private repo, set `HF_TOKEN` or sign in with `huggingface-cli login`. |
 
 `local` decisions are a preview. They need the ARC encoder binary
@@ -232,7 +232,7 @@ pi-arc finds the local Routes API with `rayline local status --json`:
   output is `{"running": false}`.
 - The token is never printed. Read it from `token_file` (mode 0600) and send
   `Authorization: Bearer <token>` to `routes.url`. It admits `POST /v1/routes`
-  only; it can't send anything to Rayline cloud.
+  only; it can't send anything to Rayline Platform.
 - The URL and token change on every start. Run `rayline local status --json`
   again after a connection error or a 401.
 - The request is the Routes API request: `model` (`arc-swift-1.0` or
@@ -263,10 +263,7 @@ says so and exits with an error.
 Rayline checks the config once, when it loads, and refuses to run with an
 error that names the key. It refuses:
 
-1. An unknown key, at any level Rayline defines. `routing.decisions`,
-   `RAYLINE_ROUTING_DECISIONS` and `--decisions`, the earlier names of
-   `routing.router`, its env override and its flag, are refused with an error
-   that names the new name.
+1. An unknown key, at any level Rayline defines.
 2. A wrong type, an empty string, or a value out of range.
 3. In a local-mode run, an endpoint that doesn't list the protocol of the
    harness being run. Cloud mode doesn't use endpoints, and

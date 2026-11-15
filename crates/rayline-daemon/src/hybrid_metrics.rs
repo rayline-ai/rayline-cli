@@ -14,7 +14,7 @@ struct Deployment {
     wire_model: String,
 }
 
-/// Where a deployment runs: this machine or Rayline cloud.
+/// Where a deployment runs: this machine or Rayline Platform.
 #[derive(Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 enum DeploymentKind {
@@ -89,7 +89,7 @@ impl RoutingMetadata {
         Ok(metadata)
     }
 
-    /// Whether every deployment is Rayline cloud.
+    /// Whether every deployment is Rayline Platform.
     pub(super) fn all_cloud(&self) -> bool {
         self.deployments
             .values()

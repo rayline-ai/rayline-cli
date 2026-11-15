@@ -5,10 +5,10 @@ your coding harness on ARC, which picks the model for each request.
 
 A harness runs in one of two modes:
 
-- **Cloud mode**, the default. The harness talks to Rayline cloud directly.
+- **Cloud mode**, the default. The harness talks to Rayline Platform directly.
 - **Local mode.** The harness talks to a Rayline process on your machine. For
   each request, that process sends the request to one of your own inference
-  servers or to Rayline cloud, depending on the model ARC picks.
+  servers or to Rayline Platform, depending on the model ARC picks.
 
 ## Install
 

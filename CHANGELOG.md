@@ -47,8 +47,8 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 - **`arc-1.0` with local decisions is refused when the config loads**, naming
   `routing.decisions_model`, instead of refusing every turn. Errors from local
   ARC now say the decision was made on this machine.
-- **An unreachable Rayline cloud fails a turn once**, with a message that names
-  Rayline cloud and says to check the network and `HTTPS_PROXY`, instead of
+- **An unreachable Rayline Platform fails a turn once**, with a message that names
+  Rayline Platform and says to check the network and `HTTPS_PROXY`, instead of
   the harness retrying for minutes.
 - **Refusals are logged.** The execution core's refusals, and the gateway's
   own 413, are now logged in `runtime.log` (never the request body).

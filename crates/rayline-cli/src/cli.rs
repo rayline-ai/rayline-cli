@@ -656,9 +656,6 @@ fn parse_local_start(args: &mut Args<'_>) -> Result<OrHelp<Local>, UsageError> {
                 })?;
                 set_once(&mut router, parsed, name, LOCAL_START)?;
             }
-            "--decisions" => {
-                return Err(LOCAL_START.error("--decisions was renamed --router".to_owned()));
-            }
             "--help" if inline.is_none() => return Ok(Err(LOCAL_START_HELP)),
             _ => return Err(unexpected(LOCAL_START, arg)),
         }
@@ -1171,16 +1168,6 @@ mod tests {
             &["run", "codex", "app", "--local", "--config", "x.json"],
         ] {
             assert_error(args, "`--local` and `--config` can't be used together");
-        }
-    }
-
-    #[test]
-    fn the_renamed_decisions_flag_names_its_new_name() {
-        for args in [
-            &["local", "start", "--decisions", "local"][..],
-            &["local", "start", "--decisions=hosted"],
-        ] {
-            assert_error(args, "--decisions was renamed --router");
         }
     }
 

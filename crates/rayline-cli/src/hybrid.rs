@@ -327,7 +327,7 @@ pub(crate) async fn stop() -> ExitCode {
         async {
             let (_, paths) = local_paths()?;
             let _lock = acquire_lock(&paths.lock())?;
-            if live_record(&paths)?.is_none() {
+            if running(&paths)?.is_none() {
                 clear_state(&paths)?;
                 println!("Local process: not running");
                 return Ok(());
@@ -1350,22 +1350,6 @@ fn require_fresh_session(harness: &str, args: &[OsString]) -> io::Result<()> {
 /// The running local process's record, or `None` when none is running: no
 /// record, or one whose process has exited.
 fn running(paths: &Paths) -> io::Result<Option<Supervisor>> {
-    let Some((pid, record)) = live_record(paths)? else {
-        return Ok(None);
-    };
-    serde_json::from_value(record).map(Some).map_err(|error| {
-        io::Error::other(format!(
-            "the local process (pid {pid}) was started by an earlier Rayline, whose {} this \
-             one can't read ({error}); stop it with `rayline local stop` and run again",
-            paths.supervisor().display()
-        ))
-    })
-}
-
-/// The pid and record of `supervisor.json` while its process runs, whatever
-/// else the record holds: `rayline local stop` stops a process any Rayline
-/// started.
-fn live_record(paths: &Paths) -> io::Result<Option<(i32, Value)>> {
     let bytes = match fs::read(paths.supervisor()) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -1399,7 +1383,9 @@ fn live_record(paths: &Paths) -> io::Result<Option<(i32, Value)>> {
     if !process_exists(pid)? {
         return Ok(None);
     }
-    Ok(Some((pid, record)))
+    serde_json::from_value(record)
+        .map(Some)
+        .map_err(|error| invalid(error.to_string()))
 }
 
 /// Remove what a local process that is no longer running left behind.
@@ -2680,24 +2666,15 @@ mod tests {
             assert_eq!(record(u64::from(child.id())).unwrap(), None);
         }
 
-        // A live process's record with a field this Rayline doesn't know,
-        // such as one an earlier build wrote, says to stop it; stopping
-        // reads only its pid.
+        // A live process's record with an unknown field is an error.
         fs::write(
             paths.supervisor(),
-            json!({"pid": std::process::id(), "config": "/c.json", "env": null,
-                   "decisions": {"mode": "hosted"}})
-            .to_string(),
+            json!({"pid": std::process::id(), "config": "/c.json", "env": null, "port": 9})
+                .to_string(),
         )
         .unwrap();
         let error = running(&paths).unwrap_err().to_string();
-        for part in ["supervisor.json", "earlier Rayline", "rayline local stop"] {
-            assert!(error.contains(part), "{error}");
-        }
-        assert_eq!(
-            live_record(&paths).unwrap().map(|(pid, _)| pid),
-            i32::try_from(std::process::id()).ok()
-        );
+        assert!(error.contains("supervisor.json"), "{error}");
         let _ = fs::remove_dir_all(&dir);
     }
 

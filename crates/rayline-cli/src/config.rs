@@ -291,9 +291,6 @@ const ROUTING_CLASSIFIER_MODEL: (&str, &str) = (
 const ROUTING_POLICY_PRESET: (&str, &str) =
     ("RAYLINE_ROUTING_POLICY_PRESET", "routing.policy.preset");
 const ROUTING_ROUTER: (&str, &str) = ("RAYLINE_ROUTING_ROUTER", "routing.router");
-/// `RAYLINE_ROUTING_ROUTER`'s name before it was renamed: refused, naming
-/// the new one.
-const RENAMED_ROUTING_DECISIONS: &str = "RAYLINE_ROUTING_DECISIONS";
 const UPDATE_CHANNEL: (&str, &str) = ("RAYLINE_UPDATE_CHANNEL", "update.channel");
 
 /// Loads the config. Precedence, lowest to highest: built-in defaults, the
@@ -361,14 +358,6 @@ fn load_from(
         None => Value::Object(Map::new()),
     };
 
-    // Refused in every mode, as its file key is.
-    if env(RENAMED_ROUTING_DECISIONS).is_some() {
-        return Err(ConfigError::Env {
-            var: RENAMED_ROUTING_DECISIONS,
-            key: ROUTING_ROUTER.1,
-            problem: format!("was renamed `{}`", ROUTING_ROUTER.0),
-        });
-    }
     let doc = Doc { file: &file };
     let raw = doc.root(&root)?;
     // `--router local` without `routing` starts from its defaults, which
@@ -746,9 +735,6 @@ impl<'a> Doc<'a> {
     fn routing(&self, value: &Value) -> Result<RawRouting, ConfigError> {
         let key = "routing";
         let routing = self.object(value, key)?;
-        if routing.contains_key("decisions") {
-            return Err(self.err("routing.decisions", "was renamed `routing.router`"));
-        }
         self.known_keys(
             routing,
             key,
@@ -2218,14 +2204,6 @@ mod tests {
                 "must be one of `local`, `hosted`".to_owned()
             )
         );
-        // Its name before the rename is refused, naming the new one.
-        assert_eq!(
-            key_error(routing(json!({"decisions": "local"}))),
-            (
-                "routing.decisions".to_owned(),
-                "was renamed `routing.router`".to_owned()
-            )
-        );
 
         let release = json!({"repo": "org/arc", "revision": "a".repeat(40),
                              "manifest_sha256": "b".repeat(64)});
@@ -2306,24 +2284,6 @@ mod tests {
                 "must be one of `local`, `hosted`".to_owned()
             )
         );
-        // Its name before the rename is refused, naming the new one, in
-        // every mode and whether or not the file has `routing`.
-        let mut bare = example();
-        remove(&mut bare, &["routing"]);
-        let no_routing = temp_home();
-        write_default(&no_routing, &bare);
-        for home in [&home, &no_routing] {
-            for mode in [Mode::Cloud, Mode::NoRouting, Mode::Local] {
-                let renamed = load_env(home, opts(mode), &[("RAYLINE_ROUTING_DECISIONS", "local")])
-                    .unwrap_err()
-                    .to_string();
-                assert!(
-                    renamed.contains("`RAYLINE_ROUTING_DECISIONS`")
-                        && renamed.contains("was renamed `RAYLINE_ROUTING_ROUTER`"),
-                    "{mode:?}: {renamed}"
-                );
-            }
-        }
     }
 
     #[test]
@@ -2507,10 +2467,7 @@ mod tests {
         let home = temp_home();
         write_default(&home, &example());
         let file = write_file(&home, "other.json", &example());
-        // The override table, and the one renamed var it refuses.
-        let table: Vec<&str> = std::iter::once(RENAMED_ROUTING_DECISIONS)
-            .chain(OVERRIDES.iter().map(|(var, _)| *var))
-            .collect();
+        let table: Vec<&str> = OVERRIDES.iter().map(|(var, _)| *var).collect();
         for mode in [
             Mode::Cloud,
             Mode::Local,
