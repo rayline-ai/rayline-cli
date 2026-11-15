@@ -137,7 +137,10 @@ impl Progress {
                 let due = state
                     .shown
                     .is_some_and(|shown| now - shown >= if self.tty { REDRAW } else { EVERY });
-                if due || (!self.tty && tenths > state.tenths) {
+                // The last bytes are always drawn, so a terminal's line ends
+                // at 100%.
+                let complete = got >= total;
+                if due || complete || (!self.tty && tenths > state.tenths) {
                     state.shown = Some(now);
                     state.tenths = tenths;
                     Some(format!(
@@ -213,8 +216,7 @@ impl Drop for Progress {
 /// `got / total MB (p%), r MB/s`, the rate of the `fresh` bytes once a
 /// second has passed.
 fn fraction(got: u64, total: u64, fresh: u64, started: Instant) -> String {
-    // Rounded, so the last whole megabyte reads 100%.
-    let percent = (got * 100 + total / 2).checked_div(total).unwrap_or(100);
+    let percent = (got * 100).checked_div(total).unwrap_or(100);
     let seconds = started.elapsed().as_secs_f64();
     let shown = format!("{} / {} MB ({percent}%)", megabytes(got), megabytes(total));
     if seconds < 1.0 {
@@ -273,15 +275,25 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn the_percent_rounds_so_the_end_reads_100() {
-        let started = Instant::now();
+    fn a_terminal_line_ends_at_100_percent_and_never_reads_it_early() {
+        let out = Captured::default();
+        let progress = Progress::new(Box::new(out.clone()), true);
         let total = 1_112_400_000;
-        assert!(
-            fraction(total - 100_000, total, 0, started).starts_with("1,112 / 1,112 MB (100%)")
+        progress.expect(total);
+        progress.on_bytes(0);
+        // Within a redraw interval of the first frame: drawn only once complete.
+        progress.on_bytes(total - 100_000);
+        progress.on_bytes(total);
+        let text = out.text();
+        let frames: Vec<&str> = text.split("\r\x1b[K").filter(|f| !f.is_empty()).collect();
+        assert_eq!(
+            frames[frames.len() - 2],
+            "Downloading ARC release: 1,112 / 1,112 MB (100%)",
+            "{text}"
         );
-        assert!(fraction(total / 2, total, 0, started).starts_with("556 / 1,112 MB (50%)"));
-        assert!(fraction(0, total, 0, started).starts_with("0 / 1,112 MB (0%)"));
-        assert!(fraction(0, 0, 0, started).starts_with("0 / 0 MB (100%)"));
+        assert_eq!(frames[frames.len() - 1], "Verifying the ARC release...");
+        let started = Instant::now();
+        assert!(fraction(total - 100_000, total, 0, started).ends_with("(99%)"));
     }
 
     #[test]
