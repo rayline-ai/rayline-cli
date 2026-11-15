@@ -195,7 +195,12 @@ pub(crate) async fn start(settings: &Settings) -> ExitCode {
                     running.config.display()
                 )));
             }
-            launch(&home, &paths, settings, &|line| println!("{line}")).await
+            // Progress lines only: a closed stdout (`| head`) must not stop
+            // the launch halfway.
+            launch(&home, &paths, settings, &|line| {
+                let _ = io::Write::write_all(&mut io::stdout(), format!("{line}\n").as_bytes());
+            })
+            .await
         }
         .await,
     )

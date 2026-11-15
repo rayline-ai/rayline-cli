@@ -426,11 +426,20 @@ async fn handle(state: Arc<Gateway>, request: Request<Incoming>) -> Response<Bod
         return response;
     }
     if let Err(error) = state.inbound.check(&Method::POST, "/", request.headers()) {
-        tracing::warn!(
-            status = error.status.as_u16(),
-            path = request.uri().path(),
-            "the gateway refused a request without its token"
-        );
+        // Claude Code checks `/api/hello` without a key at every start.
+        if request.uri().path() == "/api/hello" {
+            tracing::debug!(
+                status = error.status.as_u16(),
+                path = "/api/hello",
+                "the gateway refused a request without its token"
+            );
+        } else {
+            tracing::warn!(
+                status = error.status.as_u16(),
+                path = request.uri().path(),
+                "the gateway refused a request without its token"
+            );
+        }
         return error_response(error.status, error.message);
     }
     if request.method() == Method::GET && request.uri().path() == "/v1/router/top/snapshot" {
