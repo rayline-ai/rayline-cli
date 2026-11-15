@@ -270,10 +270,11 @@ rayline top --json
 ```
 
 `rayline top` shows live request metrics from the local process. `--json`
-prints one snapshot and exits. Its first line says where routing decisions
-are made, such as `Decisions: local ARC (arc-swift-1.0) on this machine`, and
-each request shows where its decision was made, how long a local decision
-took and the event it was made for. If no local process is running, `rayline top`
+prints one snapshot and exits. Under its title, `top` says where routing
+decisions are made, such as `Decisions: local ARC (arc-swift-1.0) on this
+machine` (the `decisions` key in `--json`), and each request shows where its
+decision was made, how long a local decision took and the event it was made
+for. If no local process is running, `rayline top`
 says so and exits with an error.
 
 ## Config errors

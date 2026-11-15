@@ -29,7 +29,7 @@ pub use catalog::{Action, Catalog, CatalogError};
 pub use digest::{jcs, offer_sha256, price_sha256, sha256_hex};
 pub use error::Refusal;
 pub use execution::{
-    ActionCache, Attribution, CapacityFact, Compaction, Event, PinStatus, Pinned, Turn,
+    ActionCache, Attribution, CapacityFact, Compaction, EVENT_KINDS, Event, PinStatus, Pinned, Turn,
 };
 pub use parse::{
     CacheContext, DecideInput, Legs, OperatingPoint, PackageRef, ParseContext, Parsed,

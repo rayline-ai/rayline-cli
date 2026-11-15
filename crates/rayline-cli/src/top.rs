@@ -516,15 +516,20 @@ fn decision_cell(row: &Value) -> String {
     }
 }
 
+/// Terminals at least this wide show every column; narrower ones leave out
+/// input tokens, cache %, age, prefill rate and the decision's event, so the
+/// model stays in view.
+const WIDE_TOP: u16 = 140;
+
 fn top_table_header(width: u16) -> String {
-    if width < 120 {
+    if width < WIDE_TOP {
         format!(
-            "{:<14} {:<7} {:<10} {:>7} {:>7} {:>7} {:>6} {:>6} {:<12} {:<11} MODEL",
-            "REQ", "TARGET", "STATE", "OUT", "CACHE %", "TTFT", "PF", "TG", "DECISION", "EVENT"
+            "{:<14} {:<7} {:<10} {:>7} {:>7} {:>6} {:<11} MODEL",
+            "REQ", "TARGET", "STATE", "OUT", "TTFT", "TG", "DECISION"
         )
     } else {
         format!(
-            "{:<18} {:<8} {:<10} {:>7} {:>7} {:>7} {:>8} {:>8} {:>6} {:>6} {:<12} {:<12} MODEL / POLICY",
+            "{:<18} {:<8} {:<10} {:>7} {:>7} {:>7} {:>8} {:>8} {:>6} {:>6} {:<11} {:<11} MODEL / POLICY",
             "REQ",
             "TARGET",
             "STATE",
@@ -542,32 +547,29 @@ fn top_table_header(width: u16) -> String {
 }
 
 fn top_table_row(row: &Value, width: u16) -> String {
-    let request_id = truncate_cell(
-        value_str(row, "request_id"),
-        if width < 120 { 14 } else { 18 },
-    );
     let target = truncate_cell(top_target_cell(row), 8);
     let state = truncate_cell(value_str(row, "state"), 10);
     let output_tokens = count_cell(row, "output_tokens");
     let ttft = ms_cell(row, "ttft_ms");
-    let prefill_tps = rate_cell(row, "prefill_tps");
     let generation_tps = rate_cell(row, "output_tps");
-    let cache_hit = percent_cell(row, "cache_hit_ratio");
-    let decision = truncate_cell(&decision_cell(row), 12);
+    let decision = truncate_cell(&decision_cell(row), 11);
     let model = top_model_cell(row);
 
-    if width < 120 {
-        let event = truncate_cell(value_str(row, "decision_event"), 11);
+    if width < WIDE_TOP {
+        let request_id = truncate_cell(value_str(row, "request_id"), 14);
         return format!(
-            "{request_id:<14} {target:<7} {state:<10} {output_tokens:>7} {cache_hit:>7} {ttft:>7} {prefill_tps:>6} {generation_tps:>6} {decision:<12} {event:<11} {model}"
+            "{request_id:<14} {target:<7} {state:<10} {output_tokens:>7} {ttft:>7} {generation_tps:>6} {decision:<11} {model}"
         );
     }
 
-    let event = truncate_cell(value_str(row, "decision_event"), 12);
+    let request_id = truncate_cell(value_str(row, "request_id"), 18);
+    let event = truncate_cell(value_str(row, "decision_event"), 11);
     let input_tokens = count_cell(row, "input_tokens");
+    let cache_hit = percent_cell(row, "cache_hit_ratio");
     let age = ms_cell(row, "duration_ms");
+    let prefill_tps = rate_cell(row, "prefill_tps");
     format!(
-        "{request_id:<18} {target:<8} {state:<10} {input_tokens:>7} {output_tokens:>7} {cache_hit:>7} {age:>8} {ttft:>8} {prefill_tps:>6} {generation_tps:>6} {decision:<12} {event:<12} {model}"
+        "{request_id:<18} {target:<8} {state:<10} {input_tokens:>7} {output_tokens:>7} {cache_hit:>7} {age:>8} {ttft:>8} {prefill_tps:>6} {generation_tps:>6} {decision:<11} {event:<11} {model}"
     )
 }
 
@@ -1033,10 +1035,16 @@ mod tests {
                 "model"
             ]
         );
-        let header = top_table_header(80);
-        assert!(header.find("DECISION") < header.find("EVENT"));
-        assert!(header.find("EVENT") < header.find("MODEL"));
-        assert!(top_table_row(&row, 80).contains("local 38ms   task_start"));
+        // The model starts where its header does, and in view, at every width.
+        for width in [80, 119, 120, 139, 140, 200] {
+            let header = top_table_header(width);
+            let model = header.find("MODEL").expect("model column");
+            assert!(model + 10 <= usize::from(width), "{width}: {header}");
+            let line = top_table_row(&row, width);
+            assert_eq!(line.find("model"), Some(model), "{width}: {line}");
+            assert!(line.contains("local 38ms "), "{width}: {line}");
+            assert_eq!(line.contains("task_start"), width >= WIDE_TOP, "{width}");
+        }
     }
 
     #[test]

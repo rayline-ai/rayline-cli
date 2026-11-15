@@ -21,7 +21,8 @@ const MAX_TTL_S: f64 = 24.0 * 3600.0;
 const MAX_COUNT: u64 = 100_000_000;
 const MAX_ATTEMPT: u64 = 64;
 
-const EVENT_KINDS: &[&str] = &[
+/// The event kinds of the execution context, such as `task_start`.
+pub const EVENT_KINDS: &[&str] = &[
     "task_start",
     "user_message",
     "tool_result",

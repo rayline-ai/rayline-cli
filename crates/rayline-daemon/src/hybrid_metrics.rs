@@ -252,10 +252,12 @@ impl RoutingMetadata {
             endpoint_id: deployment.map(|deployment| deployment.id.clone()),
             requested_model: None,
             policy: self.policy.clone(),
-            // `kind/basis`: the decision's event is its kind.
+            // `kind/basis`: the decision's event is its kind, when it is
+            // one the contract defines.
             decision_event: event
                 .as_deref()
                 .and_then(|event| event.split('/').next())
+                .filter(|kind| rayline_arc_routes::EVENT_KINDS.contains(kind))
                 .map(str::to_owned),
             task_class: event,
             decision: Some(self.decision().to_owned()),
@@ -423,6 +425,17 @@ mod tests {
         assert_eq!(row.decision_ms, Some(38));
         // Read once: the time is gone with its receipt.
         assert_eq!(times.take("rt_2"), None);
+
+        // An event that isn't one of the contract's kinds is not shown.
+        let mut odd = receipt("rt_3");
+        odd.insert("x-rayline-event", "anything at all/x".parse().unwrap());
+        let other = RequestObservation::start(metrics.clone(), b"{}");
+        metadata.record(&other, &odd, "instance");
+        let rows = metrics.snapshot().active;
+        let row = rows
+            .iter()
+            .find(|row| row.task_class.as_deref() == Some("anything at all/x"));
+        assert_eq!(row.expect("row").decision_event, None);
     }
 
     #[test]
