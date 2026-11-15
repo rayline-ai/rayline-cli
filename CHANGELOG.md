@@ -7,20 +7,58 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 
 ### Added
 
-- **Local routing decisions.** With `routing.decisions: "local"` in a local-mode
-  config, the local process decides each turn's route itself with the public
-  ARC 1.0 release (`rayline-ai/ARC-1.0`) instead of calling the Rayline Routes
-  API. On first use it downloads the release and about 1 GB of encoder weights
-  and checks them against their pins. See [Local mode](docs/local-mode.md).
+- **Routing decisions can run locally (preview).** With `routing.decisions:
+  "local"` (or `rayline local start --decisions local`), the local process
+  decides each turn's route on your Mac with the public ARC 1.0 release
+  (`rayline-ai/ARC-1.0`) instead of calling the Rayline Routes API. It uses
+  `arc-swift-1.0` or `arc-sage-1.0`. On first use it downloads the release and
+  about 1 GB of encoder weights, anonymously, and checks them against their
+  pins. Turns still run on the models you route to. See
+  [Local mode](docs/local-mode.md).
 - **The local ARC encoder ships with Rayline on macOS arm64.** The installers,
   `rayline update` and Homebrew install `rayline-arc-encoder` beside `rayline`,
-  with its license, verified against the release's `SHA256SUMS`.
+  verified against the release's signed `SHA256SUMS`. Homebrew keeps its
+  license in `pkgshare`.
+- **`rayline local start` shows its progress:** the ARC release download, with
+  its size and rate, then verifying it and starting the local process. Without
+  a terminal it prints a line at each 10%.
+- **`rayline local status --json`** reports whether the local process runs, its
+  URL and its decisions. With local decisions it also names a token file
+  (mode 0600, removed on stop) that admits only route decisions, so another
+  program on the same machine can ask the local process for decisions.
+- **`rayline local start --decisions local` works without a settings file**,
+  with `arc-swift-1.0` and the prefer-local policy. `routing.classifier_model`
+  is needed only to run Claude Code, and a Claude Code run without it fails
+  before starting, naming the key.
 
 ### Changed
 
+- **`rayline update` keeps the encoder in line with the release.** It installs
+  the encoder and its license when they are missing or differ from the signed
+  `SHA256SUMS`, also when Rayline itself is already the latest, and skips
+  files that match. Downloads stream to disk with connect and idle timeouts
+  instead of a 30-second limit, so a large file on a slow connection finishes.
 - **The local-mode start-up check no longer posts an empty route request.**
   It asks the hosted Decisions router for its models, and a 400 no longer
   counts as ready.
+
+### Fixed
+
+- **`arc-1.0` with local decisions is refused when the config loads**, naming
+  `routing.decisions_model`, instead of refusing every turn. Errors from local
+  ARC now say the decision was made on this machine.
+- **An unreachable Rayline cloud fails a turn once**, with a message that names
+  Rayline cloud and says to check the network and `HTTPS_PROXY`, instead of
+  the harness retrying for minutes.
+- **Refusals are logged.** Every non-success response is logged in
+  `runtime.log` with its status, path, error type and route id (never the
+  body).
+- **`rayline top` counts cloud turns as remote**, and no longer shows output
+  rates above 20,000 tok/s for turns whose output arrives in one burst at the
+  end (such as a tool call).
+- **Claude Code's default thinking display (`updates`) is accepted.** Before,
+  each Claude Code start got two refusals and resent without it. The bundled
+  execution core (`rayline-core`) is now pinned to `af9b0050`.
 
 ## 0.5.1 (2026-11-13)
 
