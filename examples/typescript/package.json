@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Use Rayline's hosted cloud router from TypeScript via the Anthropic SDK.",
+  "description": "Use the Rayline Platform router from TypeScript via the Anthropic SDK.",
   "scripts": {
     "start": "tsx main.ts"
   },

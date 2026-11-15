@@ -74,7 +74,7 @@ struct Supervisor {
     /// didn't record them: such a process serves no run, and `rayline local
     /// stop` still stops it.
     #[serde(default)]
-    decisions: Option<DecisionsSource>,
+    router: Option<RouterSource>,
     /// `routing.decisions_model`. Absent in a record from a Rayline that
     /// didn't record it.
     #[serde(default)]
@@ -85,11 +85,11 @@ struct Supervisor {
     classifier_model: Option<String>,
 }
 
-/// `routing.decisions`, and for `local` the ARC release with the built-in
+/// `routing.router`, and for `local` the ARC release with the built-in
 /// pin resolved.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
-enum DecisionsSource {
+enum RouterSource {
     Hosted,
     Local {
         repo: String,
@@ -99,12 +99,12 @@ enum DecisionsSource {
     },
 }
 
-impl DecisionsSource {
+impl RouterSource {
     fn of(settings: &Settings) -> Self {
         let Some(routing) = settings
             .routing
             .as_ref()
-            .filter(|routing| routing.decisions == crate::config::Decisions::Local)
+            .filter(|routing| routing.router == crate::config::Router::Local)
         else {
             return Self::Hosted;
         };
@@ -121,7 +121,7 @@ impl DecisionsSource {
     }
 }
 
-impl std::fmt::Display for DecisionsSource {
+impl std::fmt::Display for RouterSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Hosted => f.write_str("hosted decisions"),
@@ -187,9 +187,9 @@ impl Supervisor {
                 env_words(settings.env.as_deref())
             )));
         }
-        let decisions = DecisionsSource::of(settings);
-        if self.decisions.as_ref() != Some(&decisions) {
-            let started = self.decisions.as_ref().map_or_else(
+        let decisions = RouterSource::of(settings);
+        if self.router.as_ref() != Some(&decisions) {
+            let started = self.router.as_ref().map_or_else(
                 || "decisions it didn't record (an earlier Rayline started it)".to_owned(),
                 ToString::to_string,
             );
@@ -305,9 +305,9 @@ fn status_json(running: &Supervisor, state: &Value, paths: &Paths) -> io::Result
         "url": url(state)?,
         "config": running.config,
         "environment": running.env.as_deref().unwrap_or("prod"),
-        "decisions": match running.decisions {
-            Some(DecisionsSource::Local { .. }) => "local",
-            Some(DecisionsSource::Hosted) | None => "hosted",
+        "router": match running.router {
+            Some(RouterSource::Local { .. }) => "local",
+            Some(RouterSource::Hosted) | None => "hosted",
         },
         "decisions_model": running.decisions_model,
     });
@@ -416,7 +416,7 @@ async fn run_harness(
     if local_decisions(settings) && !reads_anthropic_messages(harness) {
         return Err(io::Error::other(format!(
             "local ARC decisions read only Claude Code, OpenCode, Pi and omp turns, not \
-             {harness}'s; set `routing.decisions` to `hosted` to run {harness}"
+             {harness}'s; set `routing.router` to `hosted` to run {harness}"
         )));
     }
     if harness == "claude"
@@ -530,7 +530,7 @@ async fn launch(
     let hosted = crate::status::hosted_environment(settings);
     let config =
         crate::hybrid_profile::core_config(settings, &hosted.base_url).map_err(io::Error::other)?;
-    // With `routing.decisions` `local`, the local process runs the ARC
+    // With `routing.router` `local`, the local process runs the ARC
     // encoder and a loopback routes service, and points the core's Decisions
     // at it; the config keeps the router, which the classifier still uses.
     // The local process refuses Decisions anywhere but this router or a
@@ -667,7 +667,7 @@ async fn launch(
             pid: child.id(),
             config: config_file,
             env: settings.env.clone(),
-            decisions: Some(DecisionsSource::of(settings)),
+            router: Some(RouterSource::of(settings)),
             decisions_model: settings
                 .routing
                 .as_ref()
@@ -877,7 +877,7 @@ fn current_exe() -> io::Result<PathBuf> {
     fs::canonicalize(std::env::current_exe()?)
 }
 
-/// The local ARC files of `routing.decisions` `local`.
+/// The local ARC files of `routing.router` `local`.
 struct LocalArc {
     /// Where the decisions come from, for the start report.
     source: String,
@@ -908,7 +908,7 @@ fn arc_encoder_weights() -> crate::arc_release::Pinned<'static> {
 }
 
 fn local_arc(home: &Path, routing: &crate::config::Routing) -> io::Result<Option<LocalArc>> {
-    if routing.decisions == crate::config::Decisions::Hosted {
+    if routing.router == crate::config::Router::Hosted {
         return Ok(None);
     }
     // Development overrides: `RAYLINE_ARC_MODEL` and `RAYLINE_ARC_ENCODER`
@@ -977,7 +977,7 @@ fn local_arc(home: &Path, routing: &crate::config::Routing) -> io::Result<Option
                 error.kind(),
                 format!(
                     "`local` decisions need the ARC encoder `rayline-arc-encoder` beside `rayline`, \
-                     which only macOS arm64 releases ship; set `routing.decisions` to `hosted` \
+                     which only macOS arm64 releases ship; set `routing.router` to `hosted` \
                      ({error})"
                 ),
             )
@@ -1277,12 +1277,12 @@ fn harness_command(
 }
 
 /// Refuse a command line local mode can't run, before anything starts.
-/// Whether `routing.decisions` is `local`.
+/// Whether `routing.router` is `local`.
 fn local_decisions(settings: &Settings) -> bool {
     settings
         .routing
         .as_ref()
-        .is_some_and(|routing| routing.decisions == crate::config::Decisions::Local)
+        .is_some_and(|routing| routing.router == crate::config::Router::Local)
 }
 
 /// Whether the harness speaks Anthropic Messages, the one request format
@@ -2071,7 +2071,7 @@ mod tests {
             mode: crate::config::Mode::LocalFile(&file),
             env: None,
             harness_protocol: None,
-            decisions: None,
+            router: None,
         })
         .unwrap();
         let withheld = [
@@ -2380,7 +2380,7 @@ mod tests {
             mode: crate::config::Mode::LocalFile(&file),
             env,
             harness_protocol: None,
-            decisions: None,
+            router: None,
         })
         .unwrap()
     }
@@ -2394,7 +2394,7 @@ mod tests {
             pid: 7,
             config: PathBuf::from("/home/u/.config/rayline/settings.json"),
             env: None,
-            decisions: Some(DecisionsSource::Local {
+            router: Some(RouterSource::Local {
                 repo: "rayline-ai/ARC-1.0".to_owned(),
                 revision: "0".repeat(40),
                 manifest_sha256: "0".repeat(64),
@@ -2413,7 +2413,7 @@ mod tests {
                 "url": "http://127.0.0.1:5000",
                 "config": "/home/u/.config/rayline/settings.json",
                 "environment": "prod",
-                "decisions": "local",
+                "router": "local",
                 "decisions_model": "arc-swift-1.0",
                 "routes": {
                     "url": "http://127.0.0.1:5001/v1/routes",
@@ -2421,14 +2421,14 @@ mod tests {
                 },
             })
         );
-        running.decisions = Some(DecisionsSource::Hosted);
+        running.router = Some(RouterSource::Hosted);
         let hosted = status_json(
             &running,
             &json!({"listen_url": "http://127.0.0.1:5000"}),
             &paths,
         )
         .unwrap();
-        assert_eq!(hosted["decisions"], "hosted");
+        assert_eq!(hosted["router"], "hosted");
         assert!(hosted.get("routes").is_none());
     }
 
@@ -2438,7 +2438,7 @@ mod tests {
             pid: 7,
             config: PathBuf::from("/c.json"),
             env: None,
-            decisions: Some(DecisionsSource::Hosted),
+            router: Some(RouterSource::Hosted),
             decisions_model: None,
             classifier_model: None,
         };
@@ -2539,14 +2539,14 @@ mod tests {
         let dir = temp_dir("openai-local");
         let mut settings = local_settings(&dir, "a.json", None);
         if let Some(routing) = settings.routing.as_mut() {
-            routing.decisions = crate::config::Decisions::Local;
+            routing.router = crate::config::Router::Local;
         }
         for harness in ["codex", "hermes", "openclaw"] {
             let error = run_harness(&settings, harness, &[])
                 .await
                 .unwrap_err()
                 .to_string();
-            assert!(error.contains("`routing.decisions` to `hosted`"), "{error}");
+            assert!(error.contains("`routing.router` to `hosted`"), "{error}");
         }
         let _ = fs::remove_dir_all(&dir);
     }
@@ -2559,17 +2559,17 @@ mod tests {
             pid: 7,
             config: fs::canonicalize(&started.file).unwrap(),
             env: None,
-            decisions: Some(DecisionsSource::of(&started)),
+            router: Some(RouterSource::of(&started)),
             decisions_model: None,
             classifier_model: None,
         };
         supervisor.check_serves(&started).unwrap();
-        assert_eq!(supervisor.decisions, Some(DecisionsSource::Hosted));
+        assert_eq!(supervisor.router, Some(RouterSource::Hosted));
 
         // A record from a Rayline that didn't record decisions serves no run.
         let earlier: Supervisor =
             serde_json::from_str(r#"{"pid": 7, "config": "/c.json", "env": null}"#).unwrap();
-        assert_eq!(earlier.decisions, None);
+        assert_eq!(earlier.router, None);
         let earlier = Supervisor {
             config: supervisor.config.clone(),
             ..earlier
@@ -2584,7 +2584,7 @@ mod tests {
 
         let mut local = local_settings(&dir, "a.json", None);
         if let Some(routing) = local.routing.as_mut() {
-            routing.decisions = crate::config::Decisions::Local;
+            routing.router = crate::config::Router::Local;
         }
         let built_in = crate::arc_release::built_in();
         assert_eq!(
@@ -2604,7 +2604,7 @@ mod tests {
                 ..built_in
             });
         }
-        assert_ne!(DecisionsSource::of(&pinned), DecisionsSource::of(&local));
+        assert_ne!(RouterSource::of(&pinned), RouterSource::of(&local));
 
         let other = local_settings(&dir, "b.json", None);
         let error = supervisor.check_serves(&other).unwrap_err().to_string();
@@ -2640,7 +2640,7 @@ mod tests {
             fs::write(
                 paths.supervisor(),
                 json!({"pid": pid, "config": "/c.json", "env": "dev",
-                       "decisions": {"mode": "hosted"}})
+                       "router": {"mode": "hosted"}})
                 .to_string(),
             )
             .unwrap();
@@ -2652,7 +2652,7 @@ mod tests {
                 pid: std::process::id(),
                 config: PathBuf::from("/c.json"),
                 env: Some("dev".to_owned()),
-                decisions: Some(DecisionsSource::Hosted),
+                router: Some(RouterSource::Hosted),
                 decisions_model: None,
                 classifier_model: None,
             })

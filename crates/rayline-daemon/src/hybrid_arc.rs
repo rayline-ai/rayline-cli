@@ -665,7 +665,7 @@ pub fn with_local_decisions(
             anyhow::ensure!(
                 release.has_prices() || caller_priced,
                 "the ARC release prices no model and `models` gives no price it can use; \
-                 use an ARC release with prices, or set `routing.decisions` to `hosted`"
+                 use an ARC release with prices, or set `routing.router` to `hosted`"
             );
             skipped
         }

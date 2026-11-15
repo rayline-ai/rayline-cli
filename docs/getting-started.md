@@ -92,7 +92,7 @@ rayline run codex -- exec "summarize this repo"
 ```
 
 - With neither `--local` nor `--config`, the run is in **cloud mode**. The
-  harness talks to Rayline cloud directly, and no local process runs. Config
+  harness talks to Rayline Platform directly, and no local process runs. Config
   comes from `~/.config/rayline/settings.json`, and that file is optional.
 - `--local` runs in **local mode**, through the local Rayline process. See
   [Local mode](local-mode.md).

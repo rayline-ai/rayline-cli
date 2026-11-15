@@ -2,7 +2,7 @@
 
 `scripts/acceptance.sh` runs real turns through every harness, in cloud mode (`rayline run <harness>`) and in local mode (`rayline run <harness> --local`), for several models and four cases each. A change is done when every cell passes in both modes.
 
-Cloud turns run on Rayline cloud and are billed to your account (some tens of cents per full run).
+Cloud turns run on Rayline Platform and are billed to your account (some tens of cents per full run).
 
 ## Prerequisites
 

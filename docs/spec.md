@@ -62,7 +62,7 @@ Harnesses:
 rayline run <HARNESS> [--local | --config <file>] [HARNESS ARGS]...
 ```
 
-1. With neither flag: **cloud mode**. Config from `~/.config/rayline/settings.json`. No local process. The harness talks to Rayline cloud directly.
+1. With neither flag: **cloud mode**. Config from `~/.config/rayline/settings.json`. No local process. The harness talks to Rayline Platform directly.
 2. `--local`: **local mode**. Config from `~/.config/rayline/settings.json`. The harness talks to the local process, which is started if it isn't running. The config must have a `routing` section (section 5.4).
 3. `--config <file>`: config from `<file>` instead of the default file (it replaces it, never merges). If the file has a `routing` section the run is in local mode, otherwise cloud mode.
 4. `--local` and `--config` together are a usage error.
@@ -86,13 +86,13 @@ Harness-specific options and subcommands are **kept for review** (section 9).
 
 | Command | Does |
 |---|---|
-| `rayline local start [--config <file>] [--decisions <local\|hosted>]` | Start the local process from the default config file, or from `<file>`. The config must have a `routing` section, except with `--decisions local` (item 11). While it waits for the process, stderr shows `Starting the local process (ARC encoder and execution core)...` with `decisions` `local`, else `Starting the local process...`, and the ready line ends `(started in <s> s)`. |
+| `rayline local start [--config <file>] [--router <local\|hosted>]` | Start the local process from the default config file, or from `<file>`. The config must have a `routing` section, except with `--router local` (item 11). While it waits for the process, stderr shows `Starting the local process (ARC encoder and execution core)...` with `router` `local`, else `Starting the local process...`, and the ready line ends `(started in <s> s)`. |
 | `rayline local status [--json]` | Show whether the local process is running, its address, the config file and the environment it was started from. `--json` prints it as one JSON object (item 12). |
 | `rayline local stop` | Stop the local process. External inference servers keep running. |
 
 1. One local process per machine, with its state in `~/.rayline/local/`.
 2. `start` while it is running is an error that names the running process and its config file.
-3. A `rayline run ... --local` or `--config` run whose config file differs from the one the running process was started from, or whose `--env` differs, or whose `routing.decisions` (and, for `local`, ARC release: its repo, commit, directory and manifest sha256) differs, is an error. It never silently uses the running process's config.
+3. A `rayline run ... --local` or `--config` run whose config file differs from the one the running process was started from, or whose `--env` differs, or whose `routing.router` (and, for `local`, ARC release: its repo, commit, directory and manifest sha256) differs, is an error. It never silently uses the running process's config.
 4. On macOS, `rayline local` and local-mode runs require macOS 13 or later.
 5. Starting the local process downloads the tokenizer of each `models` entry that names one (section 5.3) into the Hugging Face cache (section 8.2). When Hugging Face doesn't answer within 20 seconds or a file fails to download, it uses the last complete copy in the cache and says that it is the cached copy. With no complete cached copy, start fails with an error that names the config file, the `models` entry and the tokenizer.
 6. The token counter reads the tokenizer repo's files in the layouts Hugging Face models publish:
@@ -112,10 +112,10 @@ Harness-specific options and subcommands are **kept for review** (section 9).
 
    The core passes on the service's two headers separately: `Retry-After` only as delta-seconds, and `X-Should-Retry` only as exactly `true` or `false`. A refusal can carry one without the other, and the local process uses the one it gets. A missing header takes its own default, and only for an unavailable or busy service. Without `retry-after`, the local process waits about 5 seconds for its resend and tells the harness `retry-after: 30`. Without `x-should-retry`, the turn may be resent. When the service doesn't answer, the core passes on neither.
 
-   With `decisions` `local`, the error says local ARC refused or couldn't decide the turn on this machine, and a refusal points at `routing.decisions_model` and `models`.
-9. When the core fails a turn before any output because it couldn't reach the endpoint the decision selected, the local process doesn't resend it, and the harness gets 502 with `x-should-retry: false`. The error names Rayline cloud when every model is Rayline cloud's, else "Rayline cloud, or an inference server in `endpoints`", and says to check the network and any `HTTPS_PROXY` the local process was started with.
+   With `router` `local`, the error says local ARC refused or couldn't decide the turn on this machine, and a refusal points at `routing.decisions_model` and `models`.
+9. When the core fails a turn before any output because it couldn't reach the endpoint the decision selected, the local process doesn't resend it, and the harness gets 502 with `x-should-retry: false`. The error names Rayline Platform when every model is Rayline Platform's, else "Rayline Platform, or an inference server in `endpoints`", and says to check the network and any `HTTPS_PROXY` the local process was started with.
 10. `runtime.log` gets a line, never with the request's content, for every request the local process refuses (an untrusted origin, a missing token, a body over 64 MiB: status and path) and every error the core answers with (status, path and error type; a 502 before any output as item 8 or 9 classifies it).
-11. `--decisions` sets `routing.decisions`, over the file and `RAYLINE_ROUTING_DECISIONS`. With `--decisions local` and no `routing` section in the config (or no config file), start uses `routing` with `decisions_model` `arc-swift-1.0`, `policy.preset` `arc-policy.prefer-local.v1` and no `classifier_model`; `RAYLINE_ROUTING_*` overrides apply to those defaults as to a file's `routing`. `--decisions hosted` has no such defaults.
+11. `--router` sets `routing.router`, over the file and `RAYLINE_ROUTING_ROUTER`. With `--router local` and no `routing` section in the config (or no config file), start uses `routing` with `decisions_model` `arc-swift-1.0`, `policy.preset` `arc-policy.prefer-local.v1` and no `classifier_model`; `RAYLINE_ROUTING_*` overrides apply to those defaults as to a file's `routing`. `--router hosted` has no such defaults.
 12. `rayline local status --json` prints `{"running": false}` when nothing runs. Otherwise:
 
    | Key | Value |
@@ -125,11 +125,11 @@ Harness-specific options and subcommands are **kept for review** (section 9).
    | `url` | The gateway address, as `status` prints it. |
    | `config` | The config file it was started from. |
    | `environment` | `prod` or the `--env` name. |
-   | `decisions` | `local` or `hosted`. |
+   | `router` | `local` or `hosted`. |
    | `decisions_model` | `routing.decisions_model`. |
    | `routes` | With `local` decisions only: `url`, the local Routes API (`POST /v1/routes`), and `token_file`, the file holding its bearer token. |
 
-   The token is never printed. Other local programs (pi-arc, for one) read it from `token_file` and send `Authorization: Bearer <token>`. It admits `POST /v1/routes` only; any other method or path is refused 403, so it can't send anything to Rayline cloud. The local process writes the file (mode 0600) when it starts with `local` decisions and removes it when it stops; a new start makes a new token.
+   The token is never printed. Other local programs (pi-arc, for one) read it from `token_file` and send `Authorization: Bearer <token>`. It admits `POST /v1/routes` only; any other method or path is refused 403, so it can't send anything to Rayline Platform. The local process writes the file (mode 0600) when it starts with `local` decisions and removes it when it stops; a new start makes a new token.
 
 ### 3.4 `rayline top`
 
@@ -221,9 +221,9 @@ One file: `~/.config/rayline/settings.json`, written by the user. `--config <fil
 }
 ```
 
-### 5.1 Rayline cloud
+### 5.1 Rayline Platform
 
-Rayline cloud (prod) is built in and has no entry. It serves every protocol a harness speaks. Login is always Rayline session login.
+Rayline Platform (prod) is built in and has no entry. It serves every protocol a harness speaks. Login is always Rayline session login.
 
 ### 5.2 `endpoints`
 
@@ -239,7 +239,7 @@ In local mode each harness speaks one protocol, the only one its Rayline config 
 
 ### 5.3 `models`
 
-Models ARC can pick that are not served by Rayline cloud, keyed by the model id ARC returns.
+Models ARC can pick that are not served by Rayline Platform, keyed by the model id ARC returns.
 The action ARC identifies is the model id after its provider prefix (`qwen/qwen3.8-27b` -> `qwen3.8-27b`).
 
 | Key | Type | Required | Meaning |
@@ -252,9 +252,9 @@ The action ARC identifies is the model id after its provider prefix (`qwen/qwen3
 | `price` | object `input`, `output`, `cache_read`, `cache_write` (numbers >= 0) | no | Overrides ARC's price for this model only. |
 
 1. When ARC picks a model in `models`, the local process sends the request to its endpoint under its `model` name.
-2. The only models ARC can pick that are not in `models` are these three Rayline cloud models. When ARC picks one, it goes to Rayline cloud. A request over Messages carries its Rayline cloud id, and one over Chat Completions or Responses carries its id in the core's registry:
+2. The only models ARC can pick that are not in `models` are these three Rayline Platform models. When ARC picks one, it goes to Rayline Platform. A request over Messages carries its Rayline Platform id, and one over Chat Completions or Responses carries its id in the core's registry:
 
-   | Rayline cloud id | Id in the core's registry | Context window | Output ceiling | Input modalities |
+   | Rayline Platform id | Id in the core's registry | Context window | Output ceiling | Input modalities |
    |---|---|---|---|---|
    | `claude-opus-5-5` | `anthropic/claude-opus-5.5` | 1,000,000 | 128,000 | `["text"]` |
    | `claude-sonnet-5-5` | `anthropic/claude-sonnet-5.5` | 1,000,000 | 128,000 | `["text"]` |
@@ -272,17 +272,17 @@ Required for local mode. Its presence in a `--config` file selects local mode.
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
-| `decisions_model` | string | yes | Which ARC product makes decisions (for example `arc-swift-1.0`). No default in code, except `rayline local start --decisions local` without `routing` (section 3.3 item 11). With `decisions` `local`, it must be `arc-swift-1.0` or `arc-sage-1.0` (or their short and data-mode spellings, such as `arc-swift` or `arc-sage-zdr-1.0`); any other value fails load naming the key. |
-| `classifier_model` | string | to run Claude Code | The model that serves Claude Code's auto-mode safety classifier calls, sent to Rayline cloud. No default in code. A local-mode `rayline run claude` without it fails before anything starts, naming the key, and so does one that would use a local process started without it; such a process refuses classifier calls. |
+| `decisions_model` | string | yes | Which ARC product makes decisions (for example `arc-swift-1.0`). No default in code, except `rayline local start --router local` without `routing` (section 3.3 item 11). With `router` `local`, it must be `arc-swift-1.0` or `arc-sage-1.0` (or their short and data-mode spellings, such as `arc-swift` or `arc-sage-zdr-1.0`); any other value fails load naming the key. |
+| `classifier_model` | string | to run Claude Code | The model that serves Claude Code's auto-mode safety classifier calls, sent to Rayline Platform. No default in code. A local-mode `rayline run claude` without it fails before anything starts, naming the key, and so does one that would use a local process started without it; such a process refuses classifier calls. |
 | `policy.preset` | non-empty string | yes | ARC's preset id (`arc-policy.package-default.v1`, `arc-policy.hybrid-default.v1` or `arc-policy.prefer-local.v1`). Sent to ARC unchanged; no short names. The same exception as `decisions_model` applies. |
 | `policy.overrides` | object | no | ARC's own `routing.policy.overrides` shape, sent to ARC unchanged. ARC validates it. |
-| `decisions` | `local` or `hosted` | no, default `hosted` | Where the local process gets its decisions. `hosted`: the environment's Rayline router decides. Set `local` to decide on this machine: ARC runs inside the local process from the ARC release (item 1); no decision goes to Rayline cloud. |
+| `router` | `local` or `hosted` | no, default `hosted` | Where the local process gets its decisions. `hosted`: the environment's Rayline router decides. Set `local` to decide on this machine: ARC runs inside the local process from the ARC release (item 1); no decision goes to Rayline Platform. |
 | `arc_release.repo` | string `<owner>/<name>` | with `arc_release` | The Hugging Face repo of the ARC release `local` decisions download instead of the built-in one. |
 | `arc_release.revision` | 40 lowercase hex digits | with `arc_release` | The repo's commit. |
 | `arc_release.manifest_sha256` | 64 lowercase hex digits | with `arc_release` | The sha256 of the release's `manifest.json`. |
 | `arc_release.dir` | relative path of plain names joined by `/` | no, default the repo root | The repo directory that holds the release. |
 
-1. With `decisions` `local`, starting the local process loads the ARC runtime release at a pinned commit, before it reports ready:
+1. With `router` `local`, starting the local process loads the ARC runtime release at a pinned commit, before it reports ready:
    - The pin is `arc_release`, else the built-in release (`rayline-ai/ARC-1.0` at a commit, directory and manifest sha256 compiled into Rayline).
    - `manifest.json` must match the pinned sha256 (and be at most 1 MiB), and every file it lists the size and sha256 it lists. A cached file that matches is not downloaded again; one that doesn't is downloaded again. A download that doesn't match is removed from the cache, and start fails naming the file; so does a file that can't be downloaded. A `prices.json` the manifest doesn't list fails start naming it.
    - A private repo needs a Hugging Face token (section 7.1 item 6); without one, start fails saying to set `HF_TOKEN`.
@@ -290,11 +290,11 @@ Required for local mode. Its presence in a `--config` file selects local mode.
    - The encoder weights (about 1 GB) come from `rayline-ai/ARC-1.0` at the built-in release's commit and a sha256 compiled into Rayline, whatever `arc_release` says, without a token, by the same rules. A release in `arc_release` must be built for those weights; Rayline can't check that.
    - When neither the release nor the `models` prices it takes price any model, start fails saying so.
    - Start still contacts the environment's Rayline router and checks each `models` entry's `tokenizer` (section 5.3), as with `hosted`.
-2. With `decisions` `local`, the local process runs the ARC encoder, `rayline-arc-encoder`, installed beside `rayline`. Only macOS arm64 releases ship it; without it, start fails with an error that says so and to use `hosted`.
-3. With `decisions` `local`, a `models` entry the ARC release doesn't know, or that neither its `price` nor the release prices, is skipped: the local process doesn't route to it, and `rayline local start` prints one warning per skipped entry, naming it and why. Turns route among the remaining models. When every `models` entry is skipped, start fails with an error naming them. Item 5 is checked first.
-4. With `decisions` `local`, every turn routes by a local ARC decision; there is no fallback. A turn the decider can't decide fails with the decider's error code: one whose request holds more than the decider reads (over a million JSON values; over 16 bytes of text, images not counted, per token of the encoder's largest context of 270,336 tokens; over 1,024 tools; or over 64 working directories), or holds content the decider can't encode yet (images and documents), and any turn while the encoder is down. `rayline run codex`, `hermes` and `openclaw` (harnesses that don't send Anthropic Messages) fail before anything starts, with an error saying to use `hosted`.
-5. With `decisions` `local`, a `models` entry's `price` needs a release that takes caller prices; with one that doesn't, start fails naming each `models.<id>.price` to remove.
-6. With `decisions` `local`, when the encoder exits, the local process logs it and starts it again after 2, 4, then 8 seconds. After 3 restarts within 10 minutes it logs an error and stops restarting until `rayline local stop`.
+2. With `router` `local`, the local process runs the ARC encoder, `rayline-arc-encoder`, installed beside `rayline`. Only macOS arm64 releases ship it; without it, start fails with an error that says so and to use `hosted`.
+3. With `router` `local`, a `models` entry the ARC release doesn't know, or that neither its `price` nor the release prices, is skipped: the local process doesn't route to it, and `rayline local start` prints one warning per skipped entry, naming it and why. Turns route among the remaining models. When every `models` entry is skipped, start fails with an error naming them. Item 5 is checked first.
+4. With `router` `local`, every turn routes by a local ARC decision; there is no fallback. A turn the decider can't decide fails with the decider's error code: one whose request holds more than the decider reads (over a million JSON values; over 16 bytes of text, images not counted, per token of the encoder's largest context of 270,336 tokens; over 1,024 tools; or over 64 working directories), or holds content the decider can't encode yet (images and documents), and any turn while the encoder is down. `rayline run codex`, `hermes` and `openclaw` (harnesses that don't send Anthropic Messages) fail before anything starts, with an error saying to use `hosted`.
+5. With `router` `local`, a `models` entry's `price` needs a release that takes caller prices; with one that doesn't, start fails naming each `models.<id>.price` to remove.
+6. With `router` `local`, when the encoder exits, the local process logs it and starts it again after 2, 4, then 8 seconds. After 3 restarts within 10 minutes it logs an error and stops restarting until `rayline local stop`.
 
 ### 5.5 Internal: `environments`
 
@@ -339,7 +339,7 @@ Each scalar key Rayline defines can be overridden by one env var named `RAYLINE_
 | `routing.decisions_model` | `RAYLINE_ROUTING_DECISIONS_MODEL` |
 | `routing.classifier_model` | `RAYLINE_ROUTING_CLASSIFIER_MODEL` |
 | `routing.policy.preset` | `RAYLINE_ROUTING_POLICY_PRESET` |
-| `routing.decisions` | `RAYLINE_ROUTING_DECISIONS` |
+| `routing.router` | `RAYLINE_ROUTING_ROUTER` |
 | `update.channel` | `RAYLINE_UPDATE_CHANNEL` |
 
 1. Precedence, lowest to highest: built-in defaults, the config file, env overrides, flags.
@@ -357,7 +357,7 @@ Load refuses, naming the key:
 4. A model entry whose `endpoint` is not in `endpoints`.
 5. Local mode without `routing`, or `routing` missing a required key.
 6. `--env <name>` with no `environments.<name>` entry. `prod` gets no special case.
-7. A routing env override when the file has no `routing` section. The mode comes from the file only. `rayline local start --decisions local` is the exception (section 3.3 item 11), and commands that use no `routing` (`auth`, `top`, `update`, `local status`, `local stop`) read neither `routing` nor its `RAYLINE_ROUTING_*` overrides, so neither can stop them.
+7. A routing env override when the file has no `routing` section. The mode comes from the file only. `rayline local start --router local` is the exception (section 3.3 item 11), and commands that use no `routing` (`auth`, `top`, `update`, `local status`, `local stop`) read neither `routing` nor its `RAYLINE_ROUTING_*` overrides, so neither can stop them.
 8. A `--config <file>` that doesn't exist. Only the default file is optional.
 9. A key repeated in one JSON object, an empty map key, a URL that isn't absolute `http` or `https`, a duplicate in `protocols`, or a `price` missing any of its four fields.
 
@@ -563,7 +563,7 @@ Everything below is deleted outright: code, tests, docs and help text.
 11. A missing classifier key or model silently skipping the classifier route.
 12. The model taken from `--model`, then the request, then `ANTHROPIC_MODEL`.
 13. Lowercase proxy env var fallbacks.
-14. Hard-coded model constants: `DECISIONS_MODEL`, `LOCAL_REGISTRY_MODEL`, `DEFAULT_LOCAL_CONTEXT_WINDOW`, `CLASSIFIER_MODEL`. `CLOUD_MODELS` and `CLOUD_CONTEXT_WINDOW` stay for now: in local mode, the models ARC can pick that are not in `models` are exactly the three Rayline cloud models in section 5.3 item 2, each with a 1,000,000-token window and a 128,000-token output ceiling. They go when the Rayline router publishes ARC's model set.
+14. Hard-coded model constants: `DECISIONS_MODEL`, `LOCAL_REGISTRY_MODEL`, `DEFAULT_LOCAL_CONTEXT_WINDOW`, `CLASSIFIER_MODEL`. `CLOUD_MODELS` and `CLOUD_CONTEXT_WINDOW` stay for now: in local mode, the models ARC can pick that are not in `models` are exactly the three Rayline Platform models in section 5.3 item 2, each with a 1,000,000-token window and a 128,000-token output ceiling. They go when the Rayline router publishes ARC's model set.
 15. The second copy of ARC's preset list in the core.
 16. Install leftovers: cleanup of the old uv install and handling for releases from before the core.
 

@@ -8,7 +8,7 @@
 //! treats the request as a harness side call and holds it on the action that
 //! served the last turn, which under `prefer_local` is the local model.
 //!
-//! The gateway therefore sends a classifier request straight to Rayline cloud:
+//! The gateway therefore sends a classifier request straight to Rayline Platform:
 //! the Decisions router's `/v1/messages`, with the Decisions credential and
 //! `routing.classifier_model` (passed as `--classifier-model`) as the model.
 

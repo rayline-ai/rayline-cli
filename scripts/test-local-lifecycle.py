@@ -88,7 +88,7 @@ def main():
                         "policy": {"preset": "arc-policy.prefer-local.v1"},
                         # The fixture router decides: this checks supervision,
                         # not local ARC, which needs the encoder.
-                        "decisions": "hosted"},
+                        "router": "hosted"},
         }))
 
         def rayline_cmd(*args, success=True):

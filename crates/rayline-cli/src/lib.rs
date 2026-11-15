@@ -138,8 +138,8 @@ pub async fn run_argv(original_argv: &[OsString]) -> ExitCode {
         mode,
         env: env.as_deref(),
         harness_protocol,
-        decisions: match &command {
-            cli::Command::Local(cli::Local::Start { decisions, .. }) => *decisions,
+        router: match &command {
+            cli::Command::Local(cli::Local::Start { router, .. }) => *router,
             _ => None,
         },
     }) {

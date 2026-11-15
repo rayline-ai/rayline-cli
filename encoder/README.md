@@ -2,7 +2,7 @@
 
 The local ARC encoder: a loopback HTTP server on llama.cpp (`libllama`, static) that runs the public ARC encoder
 GGUF (`rayline-ai/ARC-1.0`) and returns the encoder's final-layer state at requested token offsets. Rayline's local
-ARC decisions (`routing.decisions = local`, PRs #291–#292) start this binary from beside the `rayline` executable
+ARC decisions (`routing.router = local`, PRs #291–#292) start this binary from beside the `rayline` executable
 (`RAYLINE_ARC_ENCODER` names another binary); on its own it is a standalone server. Releases ship it for macOS arm64
 only. The protocol (`/health`, `/encode`, `/close`) is documented at the top
 of `arc_encoder_server.cpp`.

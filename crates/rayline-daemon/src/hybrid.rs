@@ -162,7 +162,7 @@ pub async fn run(args: Args) -> Result<()> {
         && std::env::var(&classifier.auth_env).map_or(true, |key| key.is_empty())
     {
         bail!(
-            "`{}` is not set, so the auto-mode classifier cannot reach Rayline cloud",
+            "`{}` is not set, so the auto-mode classifier cannot reach Rayline Platform",
             classifier.auth_env
         );
     }
@@ -690,7 +690,7 @@ async fn forward(state: &Gateway, request: Request<Incoming>) -> Result<Response
     }
 }
 
-/// Sends an auto-mode classifier request to Rayline cloud the way the core
+/// Sends an auto-mode classifier request to Rayline Platform the way the core
 /// dispatches a model-pin turn.
 async fn send_classifier_to_cloud(
     state: &Gateway,
@@ -725,7 +725,7 @@ async fn send_classifier_to_cloud(
     tracing::info!(
         model = %route.wire_model,
         status = status.as_u16(),
-        "auto-mode classifier sent to Rayline cloud"
+        "auto-mode classifier sent to Rayline Platform"
     );
     if !status.is_success() {
         // The router's message can echo request content, so only its error
@@ -747,7 +747,7 @@ async fn send_classifier_to_cloud(
                     .map(str::to_owned)
             })
             .unwrap_or_default();
-        tracing::warn!(status = status.as_u16(), %error_type, "Rayline cloud refused the auto-mode classifier");
+        tracing::warn!(status = status.as_u16(), %error_type, "Rayline Platform refused the auto-mode classifier");
         let response = buffered_response(
             state,
             status,
@@ -1266,7 +1266,7 @@ fn harness_status(failure: DecisionsFailure) -> (StatusCode, bool) {
 /// Where the core's endpoints are.
 #[derive(Clone, Copy)]
 enum Upstreams {
-    /// Every deployment is Rayline cloud.
+    /// Every deployment is Rayline Platform.
     Cloud,
     /// Some deployments are inference servers from `endpoints`.
     Mixed,
@@ -1292,16 +1292,16 @@ fn explain_decisions_failure(
         (_, DecisionsFailure::Unreachable) => format!(
             "{message}: the local process could not reach {}. Check this machine's network and any proxy (HTTPS_PROXY) the local process was started with, then run `rayline local stop`: the next run starts it again.",
             match upstreams {
-                Upstreams::Cloud => "Rayline cloud",
+                Upstreams::Cloud => "Rayline Platform",
                 Upstreams::Mixed =>
-                    "the model's endpoint (Rayline cloud, or an inference server in `endpoints`)",
+                    "the model's endpoint (Rayline Platform, or an inference server in `endpoints`)",
             }
         ),
         (Decider::Local, DecisionsFailure::Refused) => format!(
-            "{message}: local ARC (`routing.decisions` `local`) refused this turn on this machine, and sending it again will not change that. If it names a model or price, check `routing.decisions_model` and `models` in settings.json and run `rayline local stop`: the next run starts the local process from the changed file."
+            "{message}: local ARC (`routing.router` `local`) refused this turn on this machine, and sending it again will not change that. If it names a model or price, check `routing.decisions_model` and `models` in settings.json and run `rayline local stop`: the next run starts the local process from the changed file."
         ),
         (Decider::Local, DecisionsFailure::Unavailable) => format!(
-            "{message}: local ARC (`routing.decisions` `local`) could not decide this turn right now; its encoder may be restarting. This is retryable: send the turn again after the retry-after interval."
+            "{message}: local ARC (`routing.router` `local`) could not decide this turn right now; its encoder may be restarting. This is retryable: send the turn again after the retry-after interval."
         ),
         (Decider::Local, DecisionsFailure::Auth) => format!(
             "{message}: local ARC refused the local process's own token. Run `rayline local stop`: the next run starts the local process with a new one."
@@ -1854,7 +1854,7 @@ mod tests {
             None
         );
         for (upstreams, named) in [
-            (Upstreams::Cloud, "could not reach Rayline cloud."),
+            (Upstreams::Cloud, "could not reach Rayline Platform."),
             (Upstreams::Mixed, "an inference server in `endpoints`"),
         ] {
             let explained = explain_decisions_failure(
