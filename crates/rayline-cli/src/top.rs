@@ -275,8 +275,8 @@ fn draw_top(
 
     let mut y = 0;
     y = draw_title(stdout, y, width, "Rayline CLI Top")?;
-    if let Some(decisions) = decisions_line(snapshot) {
-        y = draw_colored_line(stdout, y, width, Color::DarkCyan, &decisions)?;
+    if let Some(router) = router_line(snapshot) {
+        y = draw_colored_line(stdout, y, width, Color::DarkCyan, &router)?;
     }
     y = draw_top_summary(stdout, y, width, snapshot, paused, sort)?;
     if let Some(error) = last_error {
@@ -489,26 +489,26 @@ fn top_sort_value(row: &Value, sort: TopSort) -> f64 {
     }
 }
 
-/// Where decisions are made, from the snapshot's `decisions`: `None` from a
+/// The router that decides, from the snapshot's `router`: `None` from a
 /// local process that doesn't say.
-fn decisions_line(snapshot: &Value) -> Option<String> {
-    let decisions = snapshot.get("decisions")?;
-    let model = decisions
+fn router_line(snapshot: &Value) -> Option<String> {
+    let router = snapshot.get("router")?;
+    let model = router
         .get("model")
         .and_then(Value::as_str)
         .map(|model| format!(" ({model})"))
         .unwrap_or_default();
-    match decisions.get("made").and_then(Value::as_str)? {
-        "local" => Some(format!("Decisions: local ARC{model} on this machine")),
-        "hosted" => Some(format!("Decisions: hosted ARC{model} in Rayline cloud")),
+    match router.get("kind").and_then(Value::as_str)? {
+        "local" => Some(format!("Router: local ARC{model} on this machine")),
+        "hosted" => Some(format!("Router: hosted ARC{model} in Rayline Platform")),
         _ => None,
     }
 }
 
-/// Where a row's decision was made, with how long it took when known.
-fn decision_cell(row: &Value) -> String {
+/// The router that decided a row, with how long a local decision took.
+fn router_cell(row: &Value) -> String {
     match (
-        value_str(row, "decision"),
+        value_str(row, "router"),
         row.get("decision_ms").and_then(Value::as_u64),
     ) {
         (made, Some(ms)) => format!("{made} {}", format_ms(ms)),
@@ -525,7 +525,7 @@ fn top_table_header(width: u16) -> String {
     if width < WIDE_TOP {
         format!(
             "{:<14} {:<7} {:<10} {:>7} {:>7} {:>6} {:<11} MODEL",
-            "REQ", "TARGET", "STATE", "OUT", "TTFT", "TG", "DECISION"
+            "REQ", "TARGET", "STATE", "OUT", "TTFT", "TG", "ROUTER"
         )
     } else {
         format!(
@@ -540,7 +540,7 @@ fn top_table_header(width: u16) -> String {
             "TTFT",
             "PF",
             "TG",
-            "DECISION",
+            "ROUTER",
             "EVENT"
         )
     }
@@ -552,13 +552,13 @@ fn top_table_row(row: &Value, width: u16) -> String {
     let output_tokens = count_cell(row, "output_tokens");
     let ttft = ms_cell(row, "ttft_ms");
     let generation_tps = rate_cell(row, "output_tps");
-    let decision = truncate_cell(&decision_cell(row), 11);
+    let router = truncate_cell(&router_cell(row), 11);
     let model = top_model_cell(row);
 
     if width < WIDE_TOP {
         let request_id = truncate_cell(value_str(row, "request_id"), 14);
         return format!(
-            "{request_id:<14} {target:<7} {state:<10} {output_tokens:>7} {ttft:>7} {generation_tps:>6} {decision:<11} {model}"
+            "{request_id:<14} {target:<7} {state:<10} {output_tokens:>7} {ttft:>7} {generation_tps:>6} {router:<11} {model}"
         );
     }
 
@@ -569,7 +569,7 @@ fn top_table_row(row: &Value, width: u16) -> String {
     let age = ms_cell(row, "duration_ms");
     let prefill_tps = rate_cell(row, "prefill_tps");
     format!(
-        "{request_id:<18} {target:<8} {state:<10} {input_tokens:>7} {output_tokens:>7} {cache_hit:>7} {age:>8} {ttft:>8} {prefill_tps:>6} {generation_tps:>6} {decision:<11} {event:<11} {model}"
+        "{request_id:<18} {target:<8} {state:<10} {input_tokens:>7} {output_tokens:>7} {cache_hit:>7} {age:>8} {ttft:>8} {prefill_tps:>6} {generation_tps:>6} {router:<11} {event:<11} {model}"
     )
 }
 
@@ -578,8 +578,8 @@ fn format_top_snapshot(snapshot: &Value) -> String {
     let recent = row_count(snapshot, "recent");
     let totals = &snapshot["totals"];
     let mut output = "Rayline CLI top snapshot\n".to_owned();
-    if let Some(decisions) = decisions_line(snapshot) {
-        output.push_str(&decisions);
+    if let Some(router) = router_line(snapshot) {
+        output.push_str(&router);
         output.push('\n');
     }
     output.push_str(&format!(
@@ -606,10 +606,10 @@ fn format_top_row(row: &Value) -> String {
     let prefill_tps = rate_cell(row, "prefill_tps");
     let generation_tps = rate_cell(row, "output_tps");
     let cache_hit = percent_cell(row, "cache_hit_ratio");
-    let decision = decision_cell(row);
+    let router = router_cell(row);
     let event = value_str(row, "decision_event");
     format!(
-        "{request_id:<22} {target:<10} {state:<10} out={output_tokens:<7} cache%={cache_hit:<7} ttft={ttft:<8} pf={prefill_tps:<6} tg={generation_tps:<6} decision={decision:<12} event={event:<11} {model}\n"
+        "{request_id:<22} {target:<10} {state:<10} out={output_tokens:<7} cache%={cache_hit:<7} ttft={ttft:<8} pf={prefill_tps:<6} tg={generation_tps:<6} router={router:<12} event={event:<11} {model}\n"
     )
 }
 
@@ -999,7 +999,7 @@ mod tests {
             "request_id": "req",
             "target": "local",
             "state": "done",
-            "decision": "local",
+            "router": "local",
             "decision_ms": 38,
             "decision_event": "task_start",
             "executed_model": "model",
@@ -1048,33 +1048,33 @@ mod tests {
     }
 
     #[test]
-    fn top_says_where_decisions_are_made() {
-        let snapshot = |decisions: Value| serde_json::json!({ "decisions": decisions });
+    fn top_names_the_router_that_decides() {
+        let snapshot = |router: Value| serde_json::json!({ "router": router });
         assert_eq!(
-            decisions_line(&snapshot(
-                serde_json::json!({"made": "local", "model": "arc-swift-1.0"})
+            router_line(&snapshot(
+                serde_json::json!({"kind": "local", "model": "arc-swift-1.0"})
             )),
-            Some("Decisions: local ARC (arc-swift-1.0) on this machine".to_owned())
+            Some("Router: local ARC (arc-swift-1.0) on this machine".to_owned())
         );
         assert_eq!(
-            decisions_line(&snapshot(
-                serde_json::json!({"made": "hosted", "model": "arc-sage-1.0"})
+            router_line(&snapshot(
+                serde_json::json!({"kind": "hosted", "model": "arc-sage-1.0"})
             )),
-            Some("Decisions: hosted ARC (arc-sage-1.0) in Rayline cloud".to_owned())
+            Some("Router: hosted ARC (arc-sage-1.0) in Rayline Platform".to_owned())
         );
         assert_eq!(
-            decisions_line(&snapshot(
-                serde_json::json!({"made": "hosted", "model": null})
+            router_line(&snapshot(
+                serde_json::json!({"kind": "hosted", "model": null})
             )),
-            Some("Decisions: hosted ARC in Rayline cloud".to_owned())
+            Some("Router: hosted ARC in Rayline Platform".to_owned())
         );
-        assert_eq!(decisions_line(&serde_json::json!({})), None);
+        assert_eq!(router_line(&serde_json::json!({})), None);
 
-        let row = serde_json::json!({"decision": "hosted", "decision_event": "tool_result"});
-        assert_eq!(decision_cell(&row), "hosted");
-        assert_eq!(decision_cell(&serde_json::json!({})), "-");
+        let row = serde_json::json!({"router": "hosted", "decision_event": "tool_result"});
+        assert_eq!(router_cell(&row), "hosted");
+        assert_eq!(router_cell(&serde_json::json!({})), "-");
         assert_eq!(
-            decision_cell(&serde_json::json!({"decision": "local", "decision_ms": 1_250})),
+            router_cell(&serde_json::json!({"router": "local", "decision_ms": 1_250})),
             "local 1.2s"
         );
     }

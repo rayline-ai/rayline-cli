@@ -132,7 +132,7 @@ impl RoutingMetadata {
         self.local_decisions = Some(times);
     }
 
-    fn decision(&self) -> &'static str {
+    fn router_kind(&self) -> &'static str {
         if self.local_decisions.is_some() {
             "local"
         } else {
@@ -140,9 +140,9 @@ impl RoutingMetadata {
         }
     }
 
-    /// Where decisions are made and by which model, for `top`.
-    pub(super) fn decisions_summary(&self) -> Value {
-        serde_json::json!({"made": self.decision(), "model": self.decisions_model})
+    /// The router that decides, and its model, for `top`.
+    pub(super) fn router_summary(&self) -> Value {
+        serde_json::json!({"kind": self.router_kind(), "model": self.decisions_model})
     }
 
     /// Whether every deployment is Rayline Platform.
@@ -260,7 +260,7 @@ impl RoutingMetadata {
                 .filter(|kind| rayline_arc_routes::EVENT_KINDS.contains(kind))
                 .map(str::to_owned),
             task_class: event,
-            decision: Some(self.decision().to_owned()),
+            router: Some(self.router_kind().to_owned()),
             decision_ms,
         });
     }
@@ -338,7 +338,7 @@ impl RequestObservation {
             requested_model: None,
             policy: Some("classifier cloud pin".to_owned()),
             task_class: Some("sidecall".to_owned()),
-            decision: None,
+            router: None,
             decision_ms: None,
             decision_event: None,
         });
@@ -401,14 +401,14 @@ mod tests {
         let config = json!({"decisions": {"model": "arc-swift-1.0"}});
         let mut metadata = RoutingMetadata::from_config(&config).unwrap();
         assert_eq!(
-            metadata.decisions_summary(),
-            json!({"made": "hosted", "model": "arc-swift-1.0"})
+            metadata.router_summary(),
+            json!({"kind": "hosted", "model": "arc-swift-1.0"})
         );
         let metrics = RouterMetrics::new("hybrid");
         let hosted = RequestObservation::start(metrics.clone(), b"{}");
         metadata.record(&hosted, &receipt("rt_1"), "instance");
         let row = &metrics.snapshot().active[0];
-        assert_eq!(row.decision.as_deref(), Some("hosted"));
+        assert_eq!(row.router.as_deref(), Some("hosted"));
         assert_eq!(row.decision_ms, None);
         assert_eq!(row.decision_event.as_deref(), Some("tool_result"));
         assert_eq!(row.task_class.as_deref(), Some("tool_result/explicit"));
@@ -416,12 +416,12 @@ mod tests {
 
         let times = Arc::new(DecisionTimes::default());
         metadata.decide_locally(times.clone());
-        assert_eq!(metadata.decisions_summary()["made"], "local");
+        assert_eq!(metadata.router_summary()["kind"], "local");
         times.record("rt_2", 38);
         let local = RequestObservation::start(metrics.clone(), b"{}");
         metadata.record(&local, &receipt("rt_2"), "instance");
         let row = &metrics.snapshot().active[0];
-        assert_eq!(row.decision.as_deref(), Some("local"));
+        assert_eq!(row.router.as_deref(), Some("local"));
         assert_eq!(row.decision_ms, Some(38));
         // Read once: the time is gone with its receipt.
         assert_eq!(times.take("rt_2"), None);

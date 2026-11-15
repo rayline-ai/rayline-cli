@@ -471,7 +471,7 @@ async fn handle(state: Arc<Gateway>, request: Request<Incoming>) -> Response<Bod
         snapshot["instance_id"] = json!(state.instance_id);
         snapshot["pid"] = json!(std::process::id());
         snapshot["core_pid"] = json!(state.core_pid);
-        snapshot["decisions"] = state.routing_metadata.decisions_summary();
+        snapshot["router"] = state.routing_metadata.router_summary();
         return json_response(StatusCode::OK, snapshot);
     }
     if request.method() == Method::GET && request.uri().path() == "/healthz" {

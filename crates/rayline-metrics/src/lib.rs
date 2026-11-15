@@ -67,9 +67,9 @@ pub struct RequestSnapshot {
     pub wire_model: Option<String>,
     pub policy: Option<String>,
     pub task_class: Option<String>,
-    /// Where the routing decision was made: `local` or `hosted`. `None`
+    /// The router that decided the request: `local` or `hosted`. `None`
     /// for a request no decision routed (a classifier call).
-    pub decision: Option<String>,
+    pub router: Option<String>,
     /// How long a local decision took.
     pub decision_ms: Option<u64>,
     /// The event the decision was made for, such as `task_start`.
@@ -109,7 +109,7 @@ pub enum MetricsUpdate {
         requested_model: Option<String>,
         policy: Option<String>,
         task_class: Option<String>,
-        decision: Option<String>,
+        router: Option<String>,
         decision_ms: Option<u64>,
         decision_event: Option<String>,
     },
@@ -238,7 +238,7 @@ impl RouterMetrics {
                 requested_model,
                 policy,
                 task_class,
-                decision,
+                router,
                 decision_ms,
                 decision_event,
             } => {
@@ -247,7 +247,7 @@ impl RouterMetrics {
                     .entry(request_id.clone())
                     .or_insert_with(|| RequestRecord::new(request_id.clone(), now));
                 record.state = "routed".to_owned();
-                merge_option(&mut record.decision, decision.clone());
+                merge_option(&mut record.router, router.clone());
                 merge_option(&mut record.decision_ms, *decision_ms);
                 merge_option(&mut record.decision_event, decision_event.clone());
                 record.target = target.clone();
@@ -479,7 +479,7 @@ struct RequestRecord {
     wire_model: Option<String>,
     policy: Option<String>,
     task_class: Option<String>,
-    decision: Option<String>,
+    router: Option<String>,
     decision_ms: Option<u64>,
     decision_event: Option<String>,
     started_at_unix_ms: u64,
@@ -559,7 +559,7 @@ impl RequestRecord {
             wire_model: None,
             policy: None,
             task_class: None,
-            decision: None,
+            router: None,
             decision_ms: None,
             decision_event: None,
             started_at_unix_ms: now,
@@ -623,7 +623,7 @@ impl RequestRecord {
             wire_model: self.wire_model.clone(),
             policy: self.policy.clone(),
             task_class: self.task_class.clone(),
-            decision: self.decision.clone(),
+            router: self.router.clone(),
             decision_ms: self.decision_ms,
             decision_event: self.decision_event.clone(),
             started_at_unix_ms: self.started_at_unix_ms,
@@ -810,7 +810,7 @@ mod tests {
             requested_model: Some("rayline-auto".to_owned()),
             policy: Some("subagent:Explore".to_owned()),
             task_class: Some("subagent".to_owned()),
-            decision: Some("local".to_owned()),
+            router: Some("local".to_owned()),
             decision_ms: Some(38),
             decision_event: Some("task_start".to_owned()),
         });
@@ -818,7 +818,7 @@ mod tests {
         let active = metrics.snapshot();
         assert_eq!(active.active.len(), 1);
         assert_eq!(active.active[0].route_id.as_deref(), Some("local-1"));
-        assert_eq!(active.active[0].decision.as_deref(), Some("local"));
+        assert_eq!(active.active[0].router.as_deref(), Some("local"));
         assert_eq!(active.active[0].decision_ms, Some(38));
         assert_eq!(
             active.active[0].decision_event.as_deref(),
