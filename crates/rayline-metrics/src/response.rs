@@ -58,6 +58,7 @@ pub struct ResponseObserver {
     terminal: bool,
     failed: bool,
     first_token: bool,
+    started: bool,
     finished: bool,
     json_validity: ResponseValidity,
     anthropic_input: Option<u64>,
@@ -77,6 +78,7 @@ impl ResponseObserver {
             terminal: false,
             failed: false,
             first_token: false,
+            started: false,
             finished: false,
             json_validity: ResponseValidity::Unavailable,
             anthropic_input: None,
@@ -180,6 +182,12 @@ impl ResponseObserver {
     fn dispatch(&mut self, event: &str, data: Option<&[u8]>) {
         if self.terminal {
             return;
+        }
+        if !self.started {
+            self.started = true;
+            self.sink.record(MetricsUpdate::ResponseStarted {
+                request_id: self.request_id.clone(),
+            });
         }
         if is_error_type(event) {
             self.failed = true;
