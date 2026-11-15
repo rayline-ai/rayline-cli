@@ -6,6 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::config::ArcRelease;
+use crate::start_progress::Progress;
 
 const MANIFEST_FILE: &str = "manifest.json";
 /// The largest `manifest.json` read or downloaded.
@@ -27,12 +28,13 @@ pub fn built_in() -> ArcRelease {
 /// commit are not downloaded again, so a complete cache works offline. A
 /// cached file that does not match is downloaded once more; a downloaded
 /// file that does not match is removed and refused. `token` authorizes a
-/// private repo.
+/// private repo. `progress` is told what is downloaded.
 pub fn fetch(
     hub: &Path,
     hub_url: &str,
     token: Option<&str>,
     release: &ArcRelease,
+    progress: &Progress,
 ) -> Result<PathBuf, String> {
     let in_release = |name: &str| match &release.dir {
         Some(dir) => format!("{dir}/{name}"),
@@ -50,18 +52,22 @@ pub fn fetch(
         MAX_MANIFEST_BYTES,
         &release.manifest_sha256,
     );
-    let at = fetch_file(hub, hub_url, token, &manifest)?;
+    // The manifest is small, and only once it is read is the release's
+    // size known: it isn't shown.
+    let at = fetch_file(hub, hub_url, token, &manifest, &Progress::silent())?;
     let files = fs::read(&at)
         .map_err(|e| e.to_string())
         .and_then(|raw| rayline_arc_decide::manifest_files(&raw).map_err(|e| e.to_string()))
         .map_err(|e| format!("{} of {}: {e}", manifest.path, release.repo))?;
-    for (name, want) in &files {
-        fetch_file(
-            hub,
-            hub_url,
-            token,
-            &pinned(in_release(name), want.bytes, &want.sha256),
-        )?;
+    let files: Vec<Pinned<'_>> = files
+        .iter()
+        .map(|(name, want)| pinned(in_release(name), want.bytes, &want.sha256))
+        .collect();
+    for file in &files {
+        expect_unless_cached(hub, file, progress);
+    }
+    for file in &files {
+        fetch_file(hub, hub_url, token, file, progress)?;
     }
     Ok(rayline_hf::hf_cache_snapshot_path(
         hub,
@@ -81,15 +87,25 @@ pub struct Pinned<'a> {
     pub sha256: String,
 }
 
+/// Tells `progress` to expect `file`'s bytes when it isn't in the cache at
+/// `hub`. A cached copy that turns out not to match is expected when it is
+/// discarded.
+pub fn expect_unless_cached(hub: &Path, file: &Pinned<'_>, progress: &Progress) {
+    if rayline_hf::cached_hf_file(hub, file.repo, &file.path, file.revision).is_none() {
+        progress.expect(file.max_bytes);
+    }
+}
+
 /// The pinned file's path in the cache at `hub`: the cached copy when it
 /// matches (hashed on every call: a blob's name doesn't prove its bytes),
-/// else downloaded. A copy that doesn't match is removed; a download that
-/// doesn't match is refused.
+/// else downloaded, telling `progress`. A copy that doesn't match is
+/// removed; a download that doesn't match is refused.
 pub fn fetch_file(
     hub: &Path,
     hub_url: &str,
     token: Option<&str>,
     file: &Pinned<'_>,
+    progress: &Progress,
 ) -> Result<PathBuf, String> {
     let (repo, revision, path) = (file.repo, file.revision, file.path.as_str());
     let matches = |at: &Path| {
@@ -101,7 +117,9 @@ pub fn fetch_file(
             return Ok(cached);
         }
         discard(&cached);
+        progress.expect(file.max_bytes);
     }
+    let on_bytes = |bytes| progress.on_bytes(bytes);
     let downloaded = rayline_hf::download_to_hf_cache_at(
         hub,
         hub_url,
@@ -109,12 +127,14 @@ pub fn fetch_file(
             token,
             max_bytes: Some(file.max_bytes),
             pinned: true,
+            on_bytes: Some(rayline_hf::OnBytes(&on_bytes)),
         },
         repo,
         path,
         revision,
     )
     .map_err(|e| format!("cannot download {path} from {repo} at {revision}: {e}"))?;
+    progress.file_done();
     if matches(&downloaded) {
         return Ok(downloaded);
     }
@@ -187,6 +207,15 @@ mod tests {
     }
 
     fn serve(files: BTreeMap<String, Vec<u8>>, private: bool) -> FakeHub {
+        serve_paced(files, private, None)
+    }
+
+    /// A fake Hub that sends each body in ten parts, `pace` apart.
+    fn serve_paced(
+        files: BTreeMap<String, Vec<u8>>,
+        private: bool,
+        pace: Option<std::time::Duration>,
+    ) -> FakeHub {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
         let url = format!("http://{}", listener.local_addr().expect("addr"));
         let served = Arc::new(Mutex::new(Vec::new()));
@@ -224,11 +253,20 @@ mod tests {
                     }
                     Some((path, body)) => {
                         log.lock().expect("lock").push(path.to_owned());
-                        let mut head = format!(
+                        let head = format!(
                             "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                             body.len()
                         )
                         .into_bytes();
+                        if let Some(pace) = pace {
+                            let _ = stream.write_all(&head);
+                            for part in body.chunks(body.len().div_ceil(10).max(1)) {
+                                std::thread::sleep(pace);
+                                let _ = stream.write_all(part).and_then(|()| stream.flush());
+                            }
+                            continue;
+                        }
+                        let mut head = head;
                         head.extend_from_slice(body);
                         head
                     }
@@ -298,11 +336,49 @@ mod tests {
     ];
 
     #[test]
+    fn a_slow_download_shows_progress_lines_off_a_terminal_and_a_cached_one_line() {
+        let hub = scratch("progress");
+        let big = vec![7u8; 3_000_000];
+        let (served, pin) = release(&[("heads.safetensors", &big), ("prices.json", b"{}")]);
+        let fake = serve_paced(served, false, Some(std::time::Duration::from_millis(30)));
+        let out = crate::start_progress::tests::Captured::default();
+        let progress = Progress::new(Box::new(out.clone()), false);
+        fetch(&hub, &fake.url, None, &pin, &progress).expect("fetches");
+        progress.release_ready();
+        let text = out.text();
+        assert!(!text.contains('\r'), "{text}");
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(
+            lines.first(),
+            Some(&"Downloading ARC release: 3 MB"),
+            "{text}"
+        );
+        let updates = lines
+            .iter()
+            .filter(|line| line.starts_with("Downloading ARC release: ") && line.contains("%)"))
+            .count();
+        assert!((3..=10).contains(&updates), "{text}");
+        assert!(
+            lines
+                .last()
+                .is_some_and(|line| line.starts_with("ARC release downloaded: 3 MB in ")),
+            "{text}"
+        );
+
+        let out = crate::start_progress::tests::Captured::default();
+        let progress = Progress::new(Box::new(out.clone()), false);
+        fetch(&hub, &fake.url, None, &pin, &progress).expect("cached");
+        progress.release_ready();
+        assert_eq!(out.text(), "ARC release cached\n");
+        let _ = fs::remove_dir_all(hub);
+    }
+
+    #[test]
     fn a_pinned_release_downloads_once_and_then_loads_offline() {
         let hub = scratch("good");
         let (served, pin) = release(&FILES);
         let fake = fake_hub(served);
-        let dir = fetch(&hub, &fake.url, None, &pin).expect("fetches");
+        let dir = fetch(&hub, &fake.url, None, &pin, &Progress::silent()).expect("fetches");
         for (name, body) in FILES {
             assert_eq!(fs::read(dir.join(name)).expect("cached"), body);
         }
@@ -312,7 +388,10 @@ mod tests {
         let offline = TcpListener::bind("127.0.0.1:0").expect("bind");
         let offline_url = format!("http://{}", offline.local_addr().expect("addr"));
         drop(offline);
-        assert_eq!(fetch(&hub, &offline_url, None, &pin).expect("cached"), dir);
+        assert_eq!(
+            fetch(&hub, &offline_url, None, &pin, &Progress::silent()).expect("cached"),
+            dir
+        );
         let _ = fs::remove_dir_all(hub);
     }
 
@@ -360,7 +439,7 @@ mod tests {
             b"other".to_vec(),
         );
         let fake = fake_hub(served.clone());
-        let error = fetch(&hub, &fake.url, None, &pin).expect_err("refused");
+        let error = fetch(&hub, &fake.url, None, &pin, &Progress::silent()).expect_err("refused");
         assert!(error.contains("runtime/heads.safetensors"), "{error}");
         assert!(error.contains("not the pinned file"), "{error}");
         let path = format!("{RELEASE_DIR}/heads.safetensors");
@@ -369,7 +448,7 @@ mod tests {
         // A manifest that is not the pinned one is refused before any file.
         let mut other = pin.clone();
         other.manifest_sha256 = "f".repeat(64);
-        let error = fetch(&hub, &fake.url, None, &other).expect_err("refused");
+        let error = fetch(&hub, &fake.url, None, &other, &Progress::silent()).expect_err("refused");
         assert!(error.contains("runtime/manifest.json"), "{error}");
         let _ = fs::remove_dir_all(hub);
     }
@@ -379,10 +458,10 @@ mod tests {
         let hub = scratch("repair");
         let (served, pin) = release(&FILES);
         let fake = fake_hub(served);
-        let dir = fetch(&hub, &fake.url, None, &pin).expect("fetches");
+        let dir = fetch(&hub, &fake.url, None, &pin, &Progress::silent()).expect("fetches");
         let heads = fs::canonicalize(dir.join("heads.safetensors")).expect("blob");
         fs::write(&heads, b"changed").expect("tamper");
-        fetch(&hub, &fake.url, None, &pin).expect("repaired");
+        fetch(&hub, &fake.url, None, &pin, &Progress::silent()).expect("repaired");
         assert_eq!(
             fs::read(dir.join("heads.safetensors")).expect("read"),
             b"heads"
@@ -397,13 +476,13 @@ mod tests {
         let hub = scratch("copied");
         let (served, pin) = release(&FILES);
         let fake = fake_hub(served);
-        let dir = fetch(&hub, &fake.url, None, &pin).expect("fetches");
+        let dir = fetch(&hub, &fake.url, None, &pin, &Progress::silent()).expect("fetches");
         let snapshot = dir.join("heads.safetensors");
         let blob = fs::canonicalize(&snapshot).expect("blob");
         fs::write(&blob, b"changed").expect("tamper");
         fs::remove_file(&snapshot).expect("unlink");
         fs::write(&snapshot, b"changed").expect("copy");
-        fetch(&hub, &fake.url, None, &pin).expect("repaired");
+        fetch(&hub, &fake.url, None, &pin, &Progress::silent()).expect("repaired");
         assert_eq!(fs::read(&blob).expect("blob"), b"heads");
         assert_eq!(fs::read(&snapshot).expect("snapshot"), b"heads");
         let _ = fs::remove_dir_all(hub);
@@ -415,7 +494,7 @@ mod tests {
         let (mut served, pin) = release(&FILES);
         served.remove(&format!("{RELEASE_DIR}/prices.json"));
         let fake = fake_hub(served);
-        let error = fetch(&hub, &fake.url, None, &pin).expect_err("missing");
+        let error = fetch(&hub, &fake.url, None, &pin, &Progress::silent()).expect_err("missing");
         assert!(
             error.contains("cannot download runtime/prices.json"),
             "{error}"
@@ -429,7 +508,7 @@ mod tests {
         let hub = scratch("outside");
         let (served, pin) = release(&[("../escape", b"x")]);
         let fake = fake_hub(served);
-        let error = fetch(&hub, &fake.url, None, &pin).expect_err("refused");
+        let error = fetch(&hub, &fake.url, None, &pin, &Progress::silent()).expect_err("refused");
         assert!(error.contains("outside the release"), "{error}");
         let _ = fs::remove_dir_all(hub);
     }
@@ -439,20 +518,27 @@ mod tests {
         let hub = scratch("private");
         let (served, pin) = release_in(None, &FILES);
         let fake = serve(served, true);
-        let error = fetch(&hub, &fake.url, None, &pin).expect_err("401");
+        let error = fetch(&hub, &fake.url, None, &pin, &Progress::silent()).expect_err("401");
         assert!(error.contains("401"), "{error}");
         assert!(error.contains("set HF_TOKEN"), "{error}");
         assert!(fake.served.lock().expect("lock").is_empty());
 
-        let dir = fetch(&hub, &fake.url, Some(TOKEN), &pin).expect("with the token");
+        let dir =
+            fetch(&hub, &fake.url, Some(TOKEN), &pin, &Progress::silent()).expect("with the token");
         // A release at the repo root is the snapshot itself.
         assert!(dir.ends_with(REVISION));
         for (name, body) in FILES {
             assert_eq!(fs::read(dir.join(name)).expect("cached"), body);
         }
 
-        let error =
-            fetch(&scratch("private-wrong"), &fake.url, Some("hf_other"), &pin).expect_err("401");
+        let error = fetch(
+            &scratch("private-wrong"),
+            &fake.url,
+            Some("hf_other"),
+            &pin,
+            &Progress::silent(),
+        )
+        .expect_err("401");
         assert!(error.contains("has no access"), "{error}");
         assert!(!error.contains("hf_other"), "{error}");
         let _ = fs::remove_dir_all(hub);

@@ -549,6 +549,12 @@ async fn launch(
     }
     command.env(crate::hybrid_profile::ROUTER_KEY_ENV, &router_key);
     let mut child = crate::detach::spawn_detached(&mut command)?;
+    let progress = crate::start_progress::Progress::stderr();
+    progress.phase(if local_arc.is_some() {
+        "Starting the local process (ARC encoder and execution core)..."
+    } else {
+        "Starting the local process..."
+    });
     let startup = async {
         let supervisor = Supervisor {
             pid: child.id(),
@@ -576,12 +582,14 @@ async fn launch(
                     return Err(io::Error::other("local process startup identity mismatch"));
                 }
                 health(&client, paths, &state).await?;
+                progress.clear();
                 for line in skipped_models(&state) {
                     say(line);
                 }
                 say(format!(
-                    "Local process ready at {}\nLogs: {}",
+                    "Local process ready at {} (started in {:.1} s)\nLogs: {}",
                     url(&state)?,
+                    started.elapsed().as_secs_f64(),
                     paths.log().display()
                 ));
                 return Ok(());
@@ -597,6 +605,7 @@ async fn launch(
     }
     .await;
     if let Err(error) = startup {
+        progress.clear();
         stop_spawned(&mut child).await?;
         clear_state(paths)?;
         return Err(error);
@@ -773,19 +782,14 @@ const ARC_ENCODER_SHA256: &str = "6aa526ff86148c34977781117a7cf80987583f6797290e
 
 /// The pinned encoder weights in the Hugging Face cache, downloaded on first
 /// use and checked against [`ARC_ENCODER_SHA256`].
-fn arc_encoder_weights(home: &Path) -> io::Result<PathBuf> {
-    let hub = rayline_hf::hf_cache_dir(home).map_err(io::Error::other)?;
-    let hub_url = rayline_hf::hf_endpoint().map_err(io::Error::other)?;
-    let weights = crate::arc_release::Pinned {
+fn arc_encoder_weights() -> crate::arc_release::Pinned<'static> {
+    crate::arc_release::Pinned {
         repo: ARC_REPO,
         revision: ARC_COMMIT,
         path: ARC_ENCODER_FILE.to_owned(),
         max_bytes: ARC_ENCODER_BYTES,
         sha256: ARC_ENCODER_SHA256.to_owned(),
-    };
-    let path = crate::arc_release::fetch_file(&hub, &hub_url, None, &weights)
-        .map_err(|error| io::Error::other(format!("cannot load the ARC encoder: {error}")))?;
-    fs::canonicalize(path)
+    }
 }
 
 fn local_arc(home: &Path, routing: &crate::config::Routing) -> io::Result<Option<LocalArc>> {
@@ -796,33 +800,61 @@ fn local_arc(home: &Path, routing: &crate::config::Routing) -> io::Result<Option
     // name the encoder weights and binary, `RAYLINE_ARC_RELEASE` a release
     // directory. Without them, the
     // pinned encoder and release are downloaded.
-    let (release, source) = match std::env::var_os("RAYLINE_ARC_RELEASE") {
-        Some(dir) => {
-            let dir = PathBuf::from(dir);
+    let release_dir = std::env::var_os("RAYLINE_ARC_RELEASE").map(PathBuf::from);
+    let model = std::env::var_os("RAYLINE_ARC_MODEL").map(PathBuf::from);
+    // What is downloaded shows as one transfer: the encoder weights are
+    // expected up front, and the release's files once its manifest is read.
+    let progress = crate::start_progress::Progress::stderr();
+    let hub = match (&release_dir, &model) {
+        (Some(_), Some(_)) => None,
+        _ => {
+            progress.status("Checking the ARC release...");
+            Some((
+                rayline_hf::hf_cache_dir(home).map_err(io::Error::other)?,
+                rayline_hf::hf_endpoint().map_err(io::Error::other)?,
+            ))
+        }
+    };
+    let weights = arc_encoder_weights();
+    if let (Some((hub, _)), None) = (&hub, &model) {
+        crate::arc_release::expect_unless_cached(hub, &weights, &progress);
+    }
+    let (release, source) = match (release_dir, &hub) {
+        (Some(dir), _) => {
             let source = format!("release directory {}", dir.display());
             (dir, source)
         }
-        None => {
+        (None, Some((hub, hub_url))) => {
             let pin = routing
                 .arc_release
                 .clone()
                 .unwrap_or_else(crate::arc_release::built_in);
-            let hub = rayline_hf::hf_cache_dir(home).map_err(io::Error::other)?;
-            let hub_url = rayline_hf::hf_endpoint().map_err(io::Error::other)?;
             let token = rayline_hf::hf_token(home).map_err(io::Error::other)?;
-            let dir = crate::arc_release::fetch(&hub, &hub_url, token.as_deref(), &pin).map_err(
-                |error| io::Error::other(format!("cannot load the ARC release: {error}")),
-            )?;
+            let dir = crate::arc_release::fetch(hub, hub_url, token.as_deref(), &pin, &progress)
+                .map_err(|error| {
+                    io::Error::other(format!("cannot load the ARC release: {error}"))
+                })?;
             let source = format!("release {} at {}", pin.repo, pin.revision);
             (dir, source)
         }
+        (None, None) => unreachable!("a release to download has a hub"),
     };
     // The encoder weights download after the release, which is small and
     // refuses a pin it cannot meet first.
-    let model = match std::env::var_os("RAYLINE_ARC_MODEL") {
-        Some(model) => PathBuf::from(model),
-        None => arc_encoder_weights(home)?,
+    let model = match (model, &hub) {
+        (Some(model), _) => model,
+        (None, Some((hub, hub_url))) => {
+            let path = crate::arc_release::fetch_file(hub, hub_url, None, &weights, &progress)
+                .map_err(|error| {
+                    io::Error::other(format!("cannot load the ARC encoder: {error}"))
+                })?;
+            fs::canonicalize(path)?
+        }
+        (None, None) => unreachable!("weights to download have a hub"),
     };
+    if hub.is_some() {
+        progress.release_ready();
+    }
     let encoder = match std::env::var_os("RAYLINE_ARC_ENCODER") {
         Some(path) => PathBuf::from(path),
         None => installed_binary("rayline-arc-encoder").map_err(|error| {
