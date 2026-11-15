@@ -206,6 +206,10 @@ pub struct Settings {
 pub enum Mode<'a> {
     /// `rayline run` with neither flag: the default file, cloud mode.
     Cloud,
+    /// A command that uses no `routing` (`auth`, `top`, `update`, `local
+    /// status`, `local stop`): the default file, cloud mode, and the
+    /// `RAYLINE_ROUTING_*` overrides aren't read.
+    NoRouting,
     /// `rayline run --local` and `rayline local start`: the default file,
     /// local mode.
     Local,
@@ -326,7 +330,7 @@ fn load_from(
     env: &EnvLookup<'_>,
 ) -> Result<Settings, ConfigError> {
     let (file, default_file) = match options.mode {
-        Mode::Cloud | Mode::Local => (settings_file(home), true),
+        Mode::Cloud | Mode::NoRouting | Mode::Local => (settings_file(home), true),
         Mode::LocalFile(path) | Mode::File(path) => (path.to_path_buf(), false),
     };
     let text = match std::fs::read_to_string(&file) {
@@ -366,7 +370,11 @@ fn load_from(
         }),
         (routing, _) => routing,
     };
-    let mut routing = apply_routing_overrides(raw_routing, env)?;
+    let mut routing = if options.mode == Mode::NoRouting {
+        raw_routing
+    } else {
+        apply_routing_overrides(raw_routing, env)?
+    };
     if let (Some(decisions), Some(routing)) = (options.decisions, &mut routing) {
         routing.decisions = Some(decisions);
     }
@@ -374,7 +382,7 @@ fn load_from(
     let routing = doc.finish_routing(routing)?;
 
     let local = match options.mode {
-        Mode::Cloud => false,
+        Mode::Cloud | Mode::NoRouting => false,
         Mode::Local | Mode::LocalFile(_) => true,
         Mode::File(_) => routing.is_some(),
     };
@@ -1261,7 +1269,7 @@ mod tests {
         if let Err(error) = &result {
             let file = match options.mode {
                 Mode::File(file) | Mode::LocalFile(file) => file.to_path_buf(),
-                Mode::Cloud | Mode::Local => settings_file(home),
+                Mode::Cloud | Mode::NoRouting | Mode::Local => settings_file(home),
             };
             assert_names_the_file(error, &file);
         }
@@ -2015,6 +2023,14 @@ mod tests {
         assert_eq!(flagged.policy, file.policy);
         assert_eq!(flagged.classifier_model, file.classifier_model);
 
+        // Commands that use no `routing` don't read its overrides, so a
+        // process started this way can be checked and stopped.
+        load_env(
+            &empty,
+            opts(Mode::NoRouting),
+            &[("RAYLINE_ROUTING_CLASSIFIER_MODEL", "c")],
+        )
+        .expect("status and stop load");
         // Env overrides refine the defaults; the flag still wins over
         // `RAYLINE_ROUTING_DECISIONS`.
         let routing = load_env(

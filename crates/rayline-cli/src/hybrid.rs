@@ -145,7 +145,18 @@ impl Supervisor {
     /// Refuses Claude Code on a process started without a classifier model,
     /// which its auto-mode safety checks need.
     fn check_runs(&self, harness: &str) -> io::Result<()> {
-        if harness == "claude" && self.classifier_model.is_none() {
+        if harness != "claude" {
+            return Ok(());
+        }
+        // Every record this Rayline writes has `decisions_model`.
+        if self.decisions_model.is_none() {
+            return Err(io::Error::other(format!(
+                "the local process (pid {}) was started by an earlier Rayline, which didn't \
+                 record its classifier model; stop it with `rayline local stop` and run again",
+                self.pid
+            )));
+        }
+        if self.classifier_model.is_none() {
             return Err(io::Error::other(format!(
                 "the local process (pid {}) was started without \
                  `routing.classifier_model`, which Claude Code needs; stop it with \
@@ -2431,6 +2442,9 @@ mod tests {
             decisions_model: None,
             classifier_model: None,
         };
+        let error = running.check_runs("claude").unwrap_err().to_string();
+        assert!(error.contains("earlier Rayline"), "{error}");
+        running.decisions_model = Some("arc-swift-1.0".to_owned());
         let error = running.check_runs("claude").unwrap_err().to_string();
         assert!(error.contains("routing.classifier_model"), "{error}");
         running.check_runs("pi").unwrap();

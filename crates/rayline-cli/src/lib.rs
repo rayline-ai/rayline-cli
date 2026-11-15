@@ -132,7 +132,7 @@ pub async fn run_argv(original_argv: &[OsString]) -> ExitCode {
         cli::Command::Auth(_)
         | cli::Command::Local(cli::Local::Status { .. } | cli::Local::Stop)
         | cli::Command::Top { .. }
-        | cli::Command::Update(_) => (config::Mode::Cloud, None),
+        | cli::Command::Update(_) => (config::Mode::NoRouting, None),
     };
     let settings = match config::load(&config::LoadOptions {
         mode,

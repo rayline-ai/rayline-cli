@@ -357,7 +357,7 @@ Load refuses, naming the key:
 4. A model entry whose `endpoint` is not in `endpoints`.
 5. Local mode without `routing`, or `routing` missing a required key.
 6. `--env <name>` with no `environments.<name>` entry. `prod` gets no special case.
-7. A routing env override when the file has no `routing` section. The mode comes from the file only.
+7. A routing env override when the file has no `routing` section. The mode comes from the file only. `rayline local start --decisions local` is the exception (section 3.3 item 11), and commands that use no `routing` (`auth`, `top`, `update`, `local status`, `local stop`) don't read the routing overrides.
 8. A `--config <file>` that doesn't exist. Only the default file is optional.
 9. A key repeated in one JSON object, an empty map key, a URL that isn't absolute `http` or `https`, a duplicate in `protocols`, or a `price` missing any of its four fields.
 
