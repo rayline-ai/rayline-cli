@@ -912,6 +912,14 @@ mod tests {
         record.first_token_at_unix_ms = Some(3_400);
         record.output_tokens = Some(500);
         assert_eq!(record.snapshot(6_000).output_tps, Some(250.0));
+        // A response start after the first token never widens the window.
+        record.response_started_at_unix_ms = Some(4_000);
+        assert_eq!(record.snapshot(6_000).output_tps, Some(250.0));
+        // Exactly a quarter of the response is not a burst.
+        record.response_started_at_unix_ms = Some(1_400);
+        record.first_token_at_unix_ms = Some(4_400);
+        record.output_tokens = Some(1_000);
+        assert_eq!(record.snapshot(6_000).output_tps, Some(1_000.0));
     }
 
     #[test]
