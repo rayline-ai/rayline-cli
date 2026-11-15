@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 use std::ffi::OsString;
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -13,9 +13,11 @@ use url::Url;
 use crate::config::UpdateChannel;
 
 const CORE_LICENSE_NAME: &str = "rayline-core-LICENSE";
-/// The local ARC encoder; releases ship it for macOS arm64 only.
+/// The local ARC encoder; releases ship it for macOS arm64 and Linux (NVIDIA CUDA).
 const ENCODER_NAME: &str = "rayline-arc-encoder";
 const ENCODER_LICENSE_NAME: &str = "rayline-arc-encoder-LICENSE";
+/// The platforms whose releases ship the encoder.
+const ENCODER_PLATFORMS: &[&str] = &["macosx_11_0_arm64", "linux_x86_64", "linux_aarch64"];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UpdateRequest {
@@ -58,10 +60,12 @@ struct UpdateArtifacts {
     encoder: Option<EncoderArtifacts>,
 }
 
+/// The encoder files to install. `None`: the installed copy already matches
+/// the release's SHA256SUMS, so it was not downloaded.
 #[derive(Debug)]
 struct EncoderArtifacts {
-    binary: PathBuf,
-    license: PathBuf,
+    binary: Option<PathBuf>,
+    license: Option<PathBuf>,
 }
 
 impl std::fmt::Display for UpdateError {
@@ -169,12 +173,60 @@ async fn run_on(
         request.pinned_version.is_some(),
         request.force,
     );
-    if decision.exit_code == 0 || request.check_only {
+    if request.check_only {
         return Ok(decision);
+    }
+    if decision.exit_code == 0 {
+        // Already current. On a platform whose releases ship the encoder, make
+        // sure the installed one matches this release (an earlier updater may
+        // not have installed it, or it was changed): fetch it alone if not.
+        if target.normalized != current.normalized || !ENCODER_PLATFORMS.contains(&platform_tag) {
+            return Ok(decision);
+        }
+        let temp_dir = temp_update_dir()?;
+        let result = sync_encoder(
+            base_url,
+            &target,
+            platform_tag,
+            &temp_dir,
+            &install_path,
+            pubkeys,
+            request.dry_run,
+        )
+        .await
+        .map(|installed| {
+            if !installed {
+                return decision;
+            }
+            UpdateResult {
+                message: format!(
+                    "{} the ARC encoder for {} {}.\n",
+                    if request.dry_run {
+                        "Would install"
+                    } else {
+                        "Installed"
+                    },
+                    crate::DISPLAY_NAME,
+                    current.public
+                ),
+                exit_code: 0,
+                stderr: false,
+            }
+        });
+        let _ = fs::remove_dir_all(&temp_dir);
+        return result;
     }
 
     let temp_dir = temp_update_dir()?;
-    let artifacts = download_and_verify(base_url, &target, platform_tag, &temp_dir, pubkeys).await;
+    let artifacts = download_and_verify(
+        base_url,
+        &target,
+        platform_tag,
+        &temp_dir,
+        &install_path,
+        pubkeys,
+    )
+    .await;
     let result = match artifacts {
         Ok(artifacts) => {
             if request.dry_run {
@@ -188,9 +240,8 @@ async fn run_on(
                             .encoder
                             .as_ref()
                             .map_or(String::new(), |encoder| format!(
-                                ", and {} with {}",
-                                encoder.binary.display(),
-                                encoder.license.display()
+                                ", and the ARC encoder files {}",
+                                encoder_file_list(encoder)
                             ))
                     ),
                     exit_code: 0,
@@ -208,14 +259,7 @@ async fn run_on(
                 }
                 replace_file(&artifacts.license, &license_install_path, false)?;
                 if let Some(encoder) = &artifacts.encoder {
-                    let encoder_install_path = install_path
-                        .with_file_name(format!("{ENCODER_NAME}{}", std::env::consts::EXE_SUFFIX));
-                    replace_file(
-                        &encoder.license,
-                        &encoder_install_path.with_file_name(ENCODER_LICENSE_NAME),
-                        false,
-                    )?;
-                    replace_binary(&encoder.binary, &encoder_install_path)?;
+                    install_encoder(encoder, &install_path)?;
                 }
                 replace_binary(&artifacts.core, &core_install_path)?;
                 replace_binary(&artifacts.launcher, &install_path)?;
@@ -235,6 +279,67 @@ async fn run_on(
     };
     let _ = fs::remove_dir_all(&temp_dir);
     result
+}
+
+fn encoder_install_path(install_path: &Path) -> PathBuf {
+    install_path.with_file_name(format!("{ENCODER_NAME}{}", std::env::consts::EXE_SUFFIX))
+}
+
+/// Installs the downloaded encoder files beside `rayline`, the license first.
+fn install_encoder(encoder: &EncoderArtifacts, install_path: &Path) -> Result<(), UpdateError> {
+    let encoder_install_path = encoder_install_path(install_path);
+    if let Some(license) = &encoder.license {
+        replace_file(
+            license,
+            &encoder_install_path.with_file_name(ENCODER_LICENSE_NAME),
+            false,
+        )?;
+    }
+    if let Some(binary) = &encoder.binary {
+        replace_binary(binary, &encoder_install_path)?;
+    }
+    Ok(())
+}
+
+fn encoder_file_list(encoder: &EncoderArtifacts) -> String {
+    [&encoder.binary, &encoder.license]
+        .into_iter()
+        .flatten()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(" and ")
+}
+
+/// For a release that is already installed: brings the encoder beside
+/// `install_path` in line with the release's signed SHA256SUMS, downloading
+/// only what is missing or differs. Returns whether anything was (or, on a
+/// dry run, would be) installed.
+async fn sync_encoder(
+    base_url: &str,
+    target: &Version,
+    platform_tag: &str,
+    dest_dir: &Path,
+    install_path: &Path,
+    pubkeys: &[&str],
+    dry_run: bool,
+) -> Result<bool, UpdateError> {
+    let sums = fetch_verified_sums(base_url, target, dest_dir, pubkeys).await?;
+    let Some(encoder) = download_encoder(
+        base_url,
+        &target.normalized,
+        platform_tag,
+        &sums,
+        dest_dir,
+        install_path,
+    )
+    .await?
+    else {
+        return Ok(false);
+    };
+    if !dry_run {
+        install_encoder(&encoder, install_path)?;
+    }
+    Ok(true)
 }
 
 /// Releases are published under their full version, build label included
@@ -411,20 +516,16 @@ pub(crate) fn detect_platform_tag() -> Result<&'static str, UpdateError> {
     }
 }
 
-async fn download_and_verify(
+/// Downloads the release's SHA256SUMS and its signature into `dest_dir` and
+/// returns SHA256SUMS once the signature checks out against `pubkeys`.
+async fn fetch_verified_sums(
     base_url: &str,
     target: &Version,
-    platform_tag: &str,
     dest_dir: &Path,
     pubkeys: &[&str],
-) -> Result<UpdateArtifacts, UpdateError> {
+) -> Result<String, UpdateError> {
     let version = target.normalized.as_str();
     fs::create_dir_all(dest_dir).map_err(io_failed("create", dest_dir))?;
-    let launcher_name = format!("{}-{platform_tag}", crate::CLI_ASSET);
-    let launcher_path = dest_dir.join(&launcher_name);
-    let core_name = format!("rayline-core-{platform_tag}");
-    let core_path = dest_dir.join(&core_name);
-    let license_path = dest_dir.join(CORE_LICENSE_NAME);
     let sums_path = dest_dir.join("SHA256SUMS");
     let sig_path = dest_dir.join("SHA256SUMS.minisig");
 
@@ -441,8 +542,25 @@ async fn download_and_verify(
     let sig_bytes = fs::read(&sig_path).map_err(io_failed("read", &sig_path))?;
     verify_signature(&sums_bytes, &sig_bytes, pubkeys)?;
 
-    let sums = String::from_utf8(sums_bytes)
-        .map_err(|_| UpdateError::Checksum("SHA256SUMS contains invalid UTF-8".to_owned()))?;
+    String::from_utf8(sums_bytes)
+        .map_err(|_| UpdateError::Checksum("SHA256SUMS contains invalid UTF-8".to_owned()))
+}
+
+async fn download_and_verify(
+    base_url: &str,
+    target: &Version,
+    platform_tag: &str,
+    dest_dir: &Path,
+    install_path: &Path,
+    pubkeys: &[&str],
+) -> Result<UpdateArtifacts, UpdateError> {
+    let sums = fetch_verified_sums(base_url, target, dest_dir, pubkeys).await?;
+    let version = target.normalized.as_str();
+    let launcher_name = format!("{}-{platform_tag}", crate::CLI_ASSET);
+    let launcher_path = dest_dir.join(&launcher_name);
+    let core_name = format!("rayline-core-{platform_tag}");
+    let core_path = dest_dir.join(&core_name);
+    let license_path = dest_dir.join(CORE_LICENSE_NAME);
 
     download_to(
         &artifact_url_for(base_url, version, platform_tag, crate::CLI_ASSET),
@@ -463,7 +581,15 @@ async fn download_and_verify(
     verify_checksum(&sums, &launcher_name, &launcher_path)?;
     verify_checksum(&sums, &core_name, &core_path)?;
     verify_checksum(&sums, CORE_LICENSE_NAME, &license_path)?;
-    let encoder = download_encoder(base_url, version, platform_tag, &sums, dest_dir).await?;
+    let encoder = download_encoder(
+        base_url,
+        version,
+        platform_tag,
+        &sums,
+        dest_dir,
+        install_path,
+    )
+    .await?;
 
     Ok(UpdateArtifacts {
         launcher: launcher_path,
@@ -475,39 +601,70 @@ async fn download_and_verify(
 
 /// The local ARC encoder and its license, verified against `sums` (already
 /// signature-checked), when the release lists the encoder for this platform.
-/// A release without it (every platform but macOS arm64) updates without it.
+/// A release without it (Intel macOS, Windows, or an older release) updates
+/// without it. A file already installed beside `install_path` with the listed
+/// sha256 is not downloaded again; `None` when nothing needs installing.
 async fn download_encoder(
     base_url: &str,
     version: &str,
     platform_tag: &str,
     sums: &str,
     dest_dir: &Path,
+    install_path: &Path,
 ) -> Result<Option<EncoderArtifacts>, UpdateError> {
     let name = format!("{ENCODER_NAME}-{platform_tag}");
     if expected_sha256(sums, &name).is_err() {
         return Ok(None);
     }
-    let binary = dest_dir.join(&name);
-    let license = dest_dir.join(ENCODER_LICENSE_NAME);
-    download_to(
-        &artifact_url_for(base_url, version, platform_tag, ENCODER_NAME),
-        &binary,
-    )
-    .await?;
-    download_to(
-        &format!("{base_url}/cli/v{version}/{ENCODER_LICENSE_NAME}"),
-        &license,
-    )
-    .await?;
-    verify_checksum(sums, &name, &binary)?;
-    verify_checksum(sums, ENCODER_LICENSE_NAME, &license)?;
+    let installed_binary = encoder_install_path(install_path);
+    let installed_license = installed_binary.with_file_name(ENCODER_LICENSE_NAME);
+    let binary = if installed_matches(sums, &name, &installed_binary)? {
+        None
+    } else {
+        let binary = dest_dir.join(&name);
+        download_to(
+            &artifact_url_for(base_url, version, platform_tag, ENCODER_NAME),
+            &binary,
+        )
+        .await?;
+        verify_checksum(sums, &name, &binary)?;
+        Some(binary)
+    };
+    let license = if installed_matches(sums, ENCODER_LICENSE_NAME, &installed_license)? {
+        None
+    } else {
+        let license = dest_dir.join(ENCODER_LICENSE_NAME);
+        download_to(
+            &format!("{base_url}/cli/v{version}/{ENCODER_LICENSE_NAME}"),
+            &license,
+        )
+        .await?;
+        verify_checksum(sums, ENCODER_LICENSE_NAME, &license)?;
+        Some(license)
+    };
+    if binary.is_none() && license.is_none() {
+        return Ok(None);
+    }
     Ok(Some(EncoderArtifacts { binary, license }))
+}
+
+/// Whether `installed` exists with the sha256 `sums` lists for `name`. A
+/// release that lists the encoder but not `name` fails: it can't be verified.
+fn installed_matches(sums: &str, name: &str, installed: &Path) -> Result<bool, UpdateError> {
+    let expected = expected_sha256(sums, name)?;
+    if !installed.is_file() {
+        return Ok(false);
+    }
+    Ok(sha256_file(installed)?.eq_ignore_ascii_case(&expected))
 }
 
 pub(crate) async fn download_to(url: &str, path: &Path) -> Result<(), UpdateError> {
     let part = path.with_extension("part");
-    let response = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
+    // No overall deadline: the Linux encoder is ~0.9 GB. A stalled connection
+    // still fails, on connect or when a read waits too long.
+    let mut response = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(30))
+        .read_timeout(Duration::from_secs(60))
         .build()
         .map_err(|error| UpdateError::Network(format!("download failed for {url}: {error}")))?
         .get(url)
@@ -520,11 +677,17 @@ pub(crate) async fn download_to(url: &str, path: &Path) -> Result<(), UpdateErro
             response.status().as_u16()
         )));
     }
-    let bytes = response
-        .bytes()
+    // Streamed to disk, so a large file is never held in memory.
+    let mut file = fs::File::create(&part).map_err(io_failed("write", &part))?;
+    while let Some(chunk) = response
+        .chunk()
         .await
-        .map_err(|error| UpdateError::Network(format!("download failed for {url}: {error}")))?;
-    fs::write(&part, bytes).map_err(io_failed("write", &part))?;
+        .map_err(|error| UpdateError::Network(format!("download failed for {url}: {error}")))?
+    {
+        file.write_all(&chunk).map_err(io_failed("write", &part))?;
+    }
+    file.sync_all().map_err(io_failed("write", &part))?;
+    drop(file);
     fs::rename(&part, path).map_err(io_failed_between("move", &part, path))?;
     Ok(())
 }
@@ -1838,11 +2001,12 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn the_encoder_is_downloaded_only_when_the_release_lists_it() -> TestResult {
-        const ENCODER: &[u8] = b"fixture encoder\n";
-        const ENCODER_LICENSE: &[u8] = b"fixture encoder license\n";
-        let platform = "macosx_11_0_arm64";
+    const ENCODER: &[u8] = b"fixture encoder\n";
+    const ENCODER_LICENSE: &[u8] = b"fixture encoder license\n";
+
+    /// A fake release serving the encoder and its license for `platform`, and
+    /// the SHA256SUMS lines for both.
+    fn encoder_release(platform: &str) -> (FakeReleaseServer, String) {
         let release = format!("/cli/v{TEST_RELEASE}");
         let server = FakeReleaseServer::start(Files::from([
             (
@@ -1859,25 +2023,133 @@ mod tests {
             Sha256::digest(ENCODER),
             Sha256::digest(ENCODER_LICENSE)
         );
+        (server, sums)
+    }
+
+    #[tokio::test]
+    async fn the_encoder_is_downloaded_only_when_the_release_lists_it() -> TestResult {
+        let platform = "macosx_11_0_arm64";
+        let (server, sums) = encoder_release(platform);
+        let (install, _) = install_from(&server)?;
+        let rayline = exe(&install, crate::CLI_BIN);
         let dir = temp_update_dir()?;
 
-        let unlisted = download_encoder(&server.base_url, TEST_RELEASE, platform, "", &dir).await?;
+        let unlisted =
+            download_encoder(&server.base_url, TEST_RELEASE, platform, "", &dir, &rayline).await?;
         assert!(unlisted.is_none());
         assert!(server.requests().is_empty(), "{:?}", server.requests());
 
-        let listed = download_encoder(&server.base_url, TEST_RELEASE, platform, &sums, &dir)
-            .await?
-            .expect("a listed encoder");
-        assert_eq!(fs::read(&listed.binary)?, ENCODER);
-        assert_eq!(fs::read(&listed.license)?, ENCODER_LICENSE);
+        let listed = download_encoder(
+            &server.base_url,
+            TEST_RELEASE,
+            platform,
+            &sums,
+            &dir,
+            &rayline,
+        )
+        .await?
+        .expect("a listed encoder");
+        assert_eq!(fs::read(listed.binary.expect("the binary"))?, ENCODER);
+        assert_eq!(
+            fs::read(listed.license.expect("the license"))?,
+            ENCODER_LICENSE
+        );
 
         let tampered = sums.replace(&format!("{:x}", Sha256::digest(ENCODER)), &"0".repeat(64));
-        let result =
-            download_encoder(&server.base_url, TEST_RELEASE, platform, &tampered, &dir).await;
+        let result = download_encoder(
+            &server.base_url,
+            TEST_RELEASE,
+            platform,
+            &tampered,
+            &dir,
+            &rayline,
+        )
+        .await;
         assert!(
             matches!(result, Err(UpdateError::Checksum(_))),
             "{result:?}"
         );
+        fs::remove_dir_all(dir)?;
+        fs::remove_dir_all(install)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn an_installed_encoder_is_downloaded_again_only_when_missing_or_changed() -> TestResult {
+        let platform = "linux_x86_64";
+        let (server, sums) = encoder_release(platform);
+        let (install, _) = install_from(&server)?;
+        let rayline = exe(&install, crate::CLI_BIN);
+        let installed = exe(&install, ENCODER_NAME);
+        let dir = temp_update_dir()?;
+
+        // Missing: both files are fetched and installed.
+        let encoder = download_encoder(
+            &server.base_url,
+            TEST_RELEASE,
+            platform,
+            &sums,
+            &dir,
+            &rayline,
+        )
+        .await?
+        .expect("a missing encoder is fetched");
+        install_encoder(&encoder, &rayline)?;
+        assert_eq!(fs::read(&installed)?, ENCODER);
+        assert_eq!(
+            fs::read(install.join(ENCODER_LICENSE_NAME))?,
+            ENCODER_LICENSE
+        );
+        assert_eq!(server.requests().len(), 2);
+
+        // Unchanged: nothing is fetched.
+        let unchanged = download_encoder(
+            &server.base_url,
+            TEST_RELEASE,
+            platform,
+            &sums,
+            &dir,
+            &rayline,
+        )
+        .await?;
+        assert!(unchanged.is_none());
+        assert_eq!(server.requests().len(), 2, "{:?}", server.requests());
+
+        // Changed binary: only the binary is fetched, then replaced.
+        fs::write(&installed, b"an older encoder")?;
+        let changed = download_encoder(
+            &server.base_url,
+            TEST_RELEASE,
+            platform,
+            &sums,
+            &dir,
+            &rayline,
+        )
+        .await?
+        .expect("a changed encoder is fetched");
+        assert!(changed.license.is_none());
+        assert_eq!(
+            server.requests().last().map(String::as_str),
+            Some(format!("/cli/v{TEST_RELEASE}/{ENCODER_NAME}-{platform}").as_str())
+        );
+        install_encoder(&changed, &rayline)?;
+        assert_eq!(fs::read(&installed)?, ENCODER);
+        assert_eq!(server.requests().len(), 3);
+
+        fs::remove_dir_all(dir)?;
+        fs::remove_dir_all(install)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn downloads_stream_a_large_file_to_disk() -> TestResult {
+        let body: Vec<u8> = (0..8 * 1024 * 1024).map(|i: u32| (i % 251) as u8).collect();
+        let server = FakeReleaseServer::start(Files::from([("/big".to_owned(), body.clone())]));
+        let dir = temp_update_dir()?;
+        let path = dir.join("big");
+        download_to(&format!("{}/big", server.base_url), &path).await?;
+        assert_eq!(fs::read(&path)?, body);
+        assert!(!path.with_extension("part").exists());
         fs::remove_dir_all(dir)?;
         Ok(())
     }
