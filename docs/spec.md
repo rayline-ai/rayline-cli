@@ -137,7 +137,7 @@ When the binary is not inside a `.app` bundle and `brew` is on `PATH` but `brew 
 
 ### 3.6 Installers
 
-`scripts/install-rayline.sh` (macOS and Linux) and `scripts/install-rayline.ps1` (Windows) install `rayline`, `rayline-core` and `rayline-core-LICENSE`. Their public options:
+`scripts/install-rayline.sh` (macOS and Linux) and `scripts/install-rayline.ps1` (Windows) install `rayline`, `rayline-core` and `rayline-core-LICENSE`, and on macOS arm64 also `rayline-arc-encoder` and `rayline-arc-encoder-LICENSE`. Their public options:
 
 1. `install-rayline.sh`:
    - `--version <version>`: the release to install, a bare version such as `0.5.0`. A version with a leading `v` is rejected. Without it, the installer takes the latest GitHub release.
@@ -262,13 +262,13 @@ Required for local mode. Its presence in a `--config` file selects local mode.
 | `arc_release.dir` | relative path of plain names joined by `/` | no, default the repo root | The repo directory that holds the release. |
 
 1. With `decisions` `local`, starting the local process loads the ARC runtime release at a pinned commit, before it reports ready:
-   - The pin is `arc_release`, else the built-in release (`rayline-ai/ARC-1.0` at a commit, directory and manifest sha256 compiled into Rayline). The built-in release isn't published yet: until it is, start fails with an error naming `routing.arc_release`.
+   - The pin is `arc_release`, else the built-in release (`rayline-ai/ARC-1.0` at a commit, directory and manifest sha256 compiled into Rayline).
    - `manifest.json` must match the pinned sha256 (and be at most 1 MiB), and every file it lists the size and sha256 it lists. A cached file that matches is not downloaded again; one that doesn't is downloaded again. A download that doesn't match is removed from the cache, and start fails naming the file; so does a file that can't be downloaded. A `prices.json` the manifest doesn't list fails start naming it.
    - A private repo needs a Hugging Face token (section 7.1 item 6); without one, start fails saying to set `HF_TOKEN`.
-   - The encoder weights (about 1 GB) come from `rayline-ai/ARC-1.0` at a commit and sha256 compiled into Rayline, whatever `arc_release` says, without a token, by the same rules. A release in `arc_release` must be built for those weights; Rayline can't check that.
+   - The encoder weights (about 1 GB) come from `rayline-ai/ARC-1.0` at the built-in release's commit and a sha256 compiled into Rayline, whatever `arc_release` says, without a token, by the same rules. A release in `arc_release` must be built for those weights; Rayline can't check that.
    - When neither the release nor the `models` prices it takes price any model, start fails saying so.
    - Start still contacts the environment's Rayline router and checks each `models` entry's `tokenizer` (section 5.3), as with `hosted`.
-2. With `decisions` `local`, the local process runs the ARC encoder, `rayline-arc-encoder`, installed beside `rayline`. Rayline releases don't ship it yet; without it, start fails with an error that says so and to use `hosted`.
+2. With `decisions` `local`, the local process runs the ARC encoder, `rayline-arc-encoder`, installed beside `rayline`. Only macOS arm64 releases ship it; without it, start fails with an error that says so and to use `hosted`.
 3. With `decisions` `local`, a `models` entry the ARC release doesn't know, or that neither its `price` nor the release prices, is skipped: the local process doesn't route to it, and `rayline local start` prints one warning per skipped entry, naming it and why. Turns route among the remaining models. When every `models` entry is skipped, start fails with an error naming them. Item 5 is checked first.
 4. With `decisions` `local`, every turn routes by a local ARC decision; there is no fallback. A turn the decider can't decide fails with the decider's error code: one whose request holds more than the decider reads (over a million JSON values; over 16 bytes of text, images not counted, per token of the encoder's largest context of 270,336 tokens; over 1,024 tools; or over 64 working directories), or holds content the decider can't encode yet (images and documents), and any turn while the encoder is down. `rayline run codex`, `hermes` and `openclaw` (harnesses that don't send Anthropic Messages) fail before anything starts, with an error saying to use `hosted`.
 5. With `decisions` `local`, a `models` entry's `price` needs a release that takes caller prices; with one that doesn't, start fails naming each `models.<id>.price` to remove.
@@ -450,7 +450,9 @@ Only two files:
 
 ```
 ~/.rayline/
-  bin/                          rayline, rayline-core, rayline-core-LICENSE
+  bin/                          rayline, rayline-core, rayline-core-LICENSE;
+                                on macOS arm64 also rayline-arc-encoder,
+                                rayline-arc-encoder-LICENSE
   local/                        local process state
     core-config.json            config handed to the core
     core-config.counted.json    the same config with Rayline's token counter added

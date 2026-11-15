@@ -12,22 +12,15 @@ const MANIFEST_FILE: &str = "manifest.json";
 const MAX_MANIFEST_BYTES: u64 = 1 << 20;
 
 /// The built-in release: the public ARC repo at a pinned commit.
-///
-/// PLACEHOLDER: the runtime release is not public on Hugging Face yet.
-/// Until it is, `revision` and `manifest_sha256` are all zeros and local
-/// decisions refuse to start without `routing.arc_release`. Fill in the
-/// commit, the sha256 of its `manifest.json`, and the directory it is in.
 pub fn built_in() -> ArcRelease {
     ArcRelease {
         repo: "rayline-ai/ARC-1.0".to_owned(),
-        revision: PLACEHOLDER_REVISION.to_owned(),
-        manifest_sha256: PLACEHOLDER_MANIFEST_SHA256.to_owned(),
+        revision: crate::hybrid::ARC_COMMIT.to_owned(),
+        manifest_sha256: "9664c9cd81535acfa7c1418db202ee13c653fa988731f9baca04cbeab539dfbe"
+            .to_owned(),
         dir: Some("runtime".to_owned()),
     }
 }
-const PLACEHOLDER_REVISION: &str = "0000000000000000000000000000000000000000";
-const PLACEHOLDER_MANIFEST_SHA256: &str =
-    "0000000000000000000000000000000000000000000000000000000000000000";
 
 /// The release's directory in the cache at `hub`, with every file its
 /// manifest lists present and matching. Files already cached at the pinned
@@ -41,12 +34,6 @@ pub fn fetch(
     token: Option<&str>,
     release: &ArcRelease,
 ) -> Result<PathBuf, String> {
-    if release.revision == PLACEHOLDER_REVISION {
-        return Err(format!(
-            "the ARC runtime release is not published on {} yet: set `routing.arc_release`",
-            release.repo
-        ));
-    }
     let in_release = |name: &str| match &release.dir {
         Some(dir) => format!("{dir}/{name}"),
         None => name.to_owned(),
@@ -469,17 +456,5 @@ mod tests {
         assert!(error.contains("has no access"), "{error}");
         assert!(!error.contains("hf_other"), "{error}");
         let _ = fs::remove_dir_all(hub);
-    }
-
-    #[test]
-    fn the_placeholder_pin_is_refused_by_name() {
-        let error = fetch(
-            Path::new("/nonexistent"),
-            "http://127.0.0.1:9",
-            None,
-            &built_in(),
-        )
-        .expect_err("placeholder");
-        assert!(error.contains("routing.arc_release"), "{error}");
     }
 }

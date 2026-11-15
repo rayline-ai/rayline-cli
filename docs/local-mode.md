@@ -132,11 +132,11 @@ Every entry works the same way. No setting marks a model as local.
 | `policy.preset` | non-empty string | yes | The id of an ARC preset: `arc-policy.package-default.v1`, `arc-policy.hybrid-default.v1` or `arc-policy.prefer-local.v1`. It is sent to ARC unchanged. |
 | `policy.overrides` | object | no | Overrides in ARC's own `routing.policy.overrides` shape, sent to ARC unchanged. ARC validates them. |
 | `decisions` | `local` or `hosted` | no, default `hosted` | `hosted`: Rayline cloud's ARC decides. Set `local` to decide on this machine: ARC runs inside the local process, and no routing decision goes to Rayline cloud. |
-| `arc_release` | object with `repo`, `revision`, `manifest_sha256`, and optionally `dir` | no | A different ARC release for `local` decisions: a Hugging Face repo, a full commit id, the sha256 of the release's `manifest.json`, and the repo directory it is in (default the repo root). For a private repo, set `HF_TOKEN` or sign in with `huggingface-cli login`. |
+| `arc_release` | object with `repo`, `revision`, `manifest_sha256`, and optionally `dir` | no | Overrides the built-in ARC release for `local` decisions with a Hugging Face repo, a full commit id, the sha256 of the release's `manifest.json`, and the repo directory it is in (default the repo root). For a private repo, set `HF_TOKEN` or sign in with `huggingface-cli login`. |
 
-`local` decisions are a preview. They need `arc_release` and the ARC
-encoder binary `rayline-arc-encoder` beside `rayline`; neither the built-in
-release nor the encoder is published yet. On first use, start downloads the
+`local` decisions are a preview. They need the ARC encoder binary
+`rayline-arc-encoder` beside `rayline`, which only macOS arm64 releases
+ship. On first use, start downloads the
 release and about 1 GB of encoder weights into the Hugging Face cache and
 checks them against their pins. With `routing.decisions: "local"`, every
 turn routes by a local ARC decision, with no fallback: a turn ARC can't

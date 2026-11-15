@@ -760,7 +760,7 @@ struct LocalArc {
 /// The ARC encoder weights `rayline` downloads: the public release's text
 /// encoder in GGUF, pinned by commit and checked by its SHA-256.
 const ARC_REPO: &str = "rayline-ai/ARC-1.0";
-const ARC_COMMIT: &str = "9e69b28174c07adc6ba76c1258e21526e2f3e7af";
+pub(crate) const ARC_COMMIT: &str = "f16e93f2581b3690938e47206881c7926e1ff341";
 const ARC_ENCODER_FILE: &str = "gguf/arc-1.0-20261111-encoder-bf16.gguf";
 /// The size of [`ARC_ENCODER_FILE`].
 const ARC_ENCODER_BYTES: u64 = 1_018_125_184;
@@ -825,7 +825,7 @@ fn local_arc(home: &Path, routing: &crate::config::Routing) -> io::Result<Option
                 error.kind(),
                 format!(
                     "`local` decisions need the ARC encoder `rayline-arc-encoder` beside `rayline`, \
-                     and Rayline releases don't ship it yet; set `routing.decisions` to `hosted` \
+                     which only macOS arm64 releases ship; set `routing.decisions` to `hosted` \
                      ({error})"
                 ),
             )
