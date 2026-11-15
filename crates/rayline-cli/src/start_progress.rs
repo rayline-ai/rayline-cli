@@ -30,7 +30,7 @@ struct Transfer {
     total: u64,
     done: u64,
     current: u64,
-    /// The file now downloading's bytes on disk when it began.
+    /// The file now downloading has reported its bytes on disk.
     base: Option<u64>,
     fresh: u64,
     started: Option<Instant>,
@@ -112,8 +112,11 @@ impl Progress {
     pub fn on_bytes(&self, bytes: u64) {
         let line = {
             let mut state = self.state.borrow_mut();
-            let base = *state.base.get_or_insert(bytes);
-            state.fresh += bytes.saturating_sub(base.max(state.current));
+            // The file's first report is what it already had; after that,
+            // each rise is new bytes, and a drop is a restart from zero.
+            if state.base.replace(bytes).is_some() {
+                state.fresh += bytes.checked_sub(state.current).unwrap_or(bytes);
+            }
             state.current = bytes;
             let now = Instant::now();
             let started = *state.started.get_or_insert(now);
@@ -303,6 +306,14 @@ pub(crate) mod tests {
         progress.on_bytes(95);
         progress.on_bytes(100);
         assert_eq!(progress.fresh(), 10);
+
+        // A retry that restarts from zero counts every byte it downloads.
+        let progress = Progress::new(Box::new(io::sink()), false);
+        progress.expect(100);
+        for bytes in [90, 95, 0, 100] {
+            progress.on_bytes(bytes);
+        }
+        assert_eq!(progress.fresh(), 105);
     }
 
     #[test]
