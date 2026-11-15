@@ -12,8 +12,8 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   decides each turn's route on your Mac with the public ARC 1.0 release
   (`rayline-ai/ARC-1.0`) instead of calling the Rayline Routes API. It uses
   `arc-swift-1.0` or `arc-sage-1.0`. On first use it downloads the release and
-  about 1 GB of encoder weights, anonymously, and checks them against their
-  pins. Turns still run on the models you route to. See
+  about 1 GB of encoder weights, with no Hugging Face login needed, and checks
+  them against their pins. Turns still run on the models you route to. See
   [Local mode](docs/local-mode.md).
 - **The local ARC encoder ships with Rayline on macOS arm64.** The installers,
   `rayline update` and Homebrew install `rayline-arc-encoder` beside `rayline`,
@@ -50,12 +50,13 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 - **An unreachable Rayline cloud fails a turn once**, with a message that names
   Rayline cloud and says to check the network and `HTTPS_PROXY`, instead of
   the harness retrying for minutes.
-- **Refusals are logged.** Every non-success response is logged in
-  `runtime.log` with its status, path, error type and route id (never the
-  body).
-- **`rayline top` counts cloud turns as remote**, and no longer shows output
-  rates above 20,000 tok/s for turns whose output arrives in one burst at the
-  end (such as a tool call).
+- **Refusals are logged.** The execution core's refusals are logged in
+  `runtime.log` with their status, path, error type and route id (never the
+  body), and so is the gateway's own 413.
+- **`rayline top` counts cloud turns as remote**, and times output that
+  arrives in one burst at the end of a response (such as a tool call) from the
+  response's start, instead of showing rates of tens of thousands of tokens per
+  second.
 - **Claude Code's default thinking display (`updates`) is accepted.** Before,
   each Claude Code start got two refusals and resent without it. The bundled
   execution core (`rayline-core`) is now pinned to `af9b0050`.

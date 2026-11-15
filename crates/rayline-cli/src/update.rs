@@ -13,7 +13,8 @@ use url::Url;
 use crate::config::UpdateChannel;
 
 const CORE_LICENSE_NAME: &str = "rayline-core-LICENSE";
-/// The local ARC encoder; releases ship it for macOS arm64 and Linux (NVIDIA CUDA).
+/// The local ARC encoder. Releases ship it for macOS arm64; the updater also
+/// installs it on Linux when a release's `SHA256SUMS` lists it.
 const ENCODER_NAME: &str = "rayline-arc-encoder";
 const ENCODER_LICENSE_NAME: &str = "rayline-arc-encoder-LICENSE";
 /// The platforms whose releases ship the encoder.
@@ -688,7 +689,7 @@ fn installed_matches(sums: &str, name: &str, installed: &Path) -> Result<bool, U
 
 pub(crate) async fn download_to(url: &str, path: &Path) -> Result<(), UpdateError> {
     let part = path.with_extension("part");
-    // No overall deadline: the Linux encoder is ~0.9 GB. A stalled connection
+    // No overall deadline: the encoder is large and a link may be slow. A stalled connection
     // still fails, on connect or when a read waits too long.
     let mut response = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(30))
@@ -758,7 +759,7 @@ pub(crate) fn verify_checksum(
     Ok(())
 }
 
-/// Hashed in chunks, so a large file (the ~0.9 GB Linux encoder) is never
+/// Hashed in chunks, so a large file (such as the encoder) is never
 /// held in memory.
 fn sha256_file(path: &Path) -> Result<String, UpdateError> {
     let mut file = fs::File::open(path).map_err(io_failed("read", path))?;
