@@ -137,10 +137,11 @@ impl Progress {
                 let due = state
                     .shown
                     .is_some_and(|shown| now - shown >= if self.tty { REDRAW } else { EVERY });
-                // The last bytes are always drawn, so a terminal's line ends
-                // at 100%.
-                let complete = got >= total;
-                if due || complete || (!self.tty && tenths > state.tenths) {
+                // A terminal draws the report that first completes the
+                // download, so its line ends at 100%; elsewhere the last
+                // tenth's line does.
+                let completes = self.tty && !state.verifying && got >= total;
+                if due || completes || (!self.tty && tenths > state.tenths) {
                     state.shown = Some(now);
                     state.tenths = tenths;
                     Some(format!(
@@ -292,6 +293,9 @@ pub(crate) mod tests {
             "{text}"
         );
         assert_eq!(frames[frames.len() - 1], "Verifying the ARC release...");
+        // A repeated report of the last bytes doesn't draw over verifying.
+        progress.on_bytes(total);
+        assert_eq!(out.text(), text);
         let started = Instant::now();
         assert!(fraction(total - 100_000, total, 0, started).ends_with("(99%)"));
     }
@@ -321,6 +325,15 @@ pub(crate) mod tests {
         assert!(lines[10].starts_with("Downloading ARC release: 100 / 100 MB (100%)"));
         assert_eq!(lines[11], "Verifying the ARC release...");
         assert!(lines[12].starts_with("ARC release downloaded: 100 MB in "));
+
+        // A repeated report of the last bytes prints nothing more.
+        let out = Captured::default();
+        let progress = Progress::new(Box::new(out.clone()), false);
+        progress.expect(100);
+        for bytes in [0, 100, 100] {
+            progress.on_bytes(bytes);
+        }
+        assert_eq!(out.text().lines().count(), 3, "{}", out.text());
     }
 
     #[test]
