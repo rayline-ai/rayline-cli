@@ -426,6 +426,7 @@ pub async fn serve_routes(
     encoder: &Encoder,
     upstream: &str,
     access: RoutesAccess,
+    on_decision: rayline_arc_routes::DecisionHook,
 ) -> Result<(String, tokio::task::JoinHandle<Result<()>>)> {
     let catalog = match &release.runtime_catalog {
         Some(runtime) => {
@@ -458,6 +459,7 @@ pub async fn serve_routes(
     config.access_token = Some(access.token);
     config.decide_token = Some(access.decide_token);
     config.upstream_authorization = access.upstream_authorization;
+    config.on_decision = Some(on_decision);
     let decider = Arc::new(LocalDecider {
         release,
         encoder: encoder.client(),

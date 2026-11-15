@@ -207,6 +207,38 @@ async fn routes_is_answered_here_with_its_route_id_and_cell() {
 }
 
 #[tokio::test]
+async fn each_answered_decision_is_reported_with_its_route_id() {
+    let (sender, mut reported) = mpsc::unbounded_channel();
+    let harness = harness_with(FakeDecider::default(), catalog(), |config| {
+        config.on_decision = Some(Arc::new(move |route_id: &str, ms: u64| {
+            let _ = sender.send((route_id.to_owned(), ms));
+        }));
+    })
+    .await;
+    let body: Value = harness
+        .routes("conversation")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let (route_id, ms) = reported.try_recv().expect("reported");
+    assert_eq!(body["route_id"], json!(route_id));
+    assert!(ms < 60_000);
+    // A refused request is no decision.
+    let refused = harness
+        .client
+        .post(format!("{}/v1/routes", harness.base))
+        .body("[]")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), 400);
+    assert!(reported.try_recv().is_err());
+}
+
+#[tokio::test]
 async fn the_decider_gets_the_request_members_as_the_harness_sent_them() {
     let harness = harness(FakeDecider::default()).await;
     let mut sent = request();

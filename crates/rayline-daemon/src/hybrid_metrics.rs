@@ -1,6 +1,6 @@
 //! Read-only attribution of execution-core receipts; this module never chooses a route.
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex};
 
 use hyper::HeaderMap;
 use rayline_metrics::{MetricsSink, MetricsUpdate, RouterMetrics, new_request_id};
@@ -22,12 +22,46 @@ enum DeploymentKind {
     Cloud,
 }
 
+/// How long each recent local decision took, by route id, until its
+/// receipt reads it. Holds the last [`DecisionTimes::CAPACITY`] only.
+#[derive(Default)]
+pub(super) struct DecisionTimes(Mutex<(HashMap<String, u64>, VecDeque<String>)>);
+
+impl DecisionTimes {
+    const CAPACITY: usize = 256;
+
+    pub(super) fn record(&self, route_id: &str, ms: u64) {
+        let mut times = self.0.lock().expect("decision times lock poisoned");
+        let (by_route, order) = &mut *times;
+        if by_route.insert(route_id.to_owned(), ms).is_none() {
+            order.push_back(route_id.to_owned());
+        }
+        while order.len() > Self::CAPACITY {
+            if let Some(oldest) = order.pop_front() {
+                by_route.remove(&oldest);
+            }
+        }
+    }
+
+    fn take(&self, route_id: &str) -> Option<u64> {
+        let mut times = self.0.lock().expect("decision times lock poisoned");
+        let (by_route, order) = &mut *times;
+        let ms = by_route.remove(route_id)?;
+        order.retain(|id| id != route_id);
+        Some(ms)
+    }
+}
+
 #[derive(Default)]
 pub(super) struct RoutingMetadata {
     deployments: HashMap<String, Deployment>,
     actions: HashMap<String, Vec<(Option<String>, String)>>,
     derived: HashMap<(String, String), Vec<String>>,
     policy: Option<String>,
+    /// `decisions.model` of the core config.
+    decisions_model: Option<String>,
+    /// With local decisions, how long each took.
+    local_decisions: Option<Arc<DecisionTimes>>,
 }
 
 impl RoutingMetadata {
@@ -86,7 +120,29 @@ impl RoutingMetadata {
             .pointer("/decisions/routing/policy/preset")
             .and_then(Value::as_str)
             .map(str::to_owned);
+        metadata.decisions_model = config
+            .pointer("/decisions/model")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
         Ok(metadata)
+    }
+
+    /// Decisions are made on this machine, timed by `times`.
+    pub(super) fn decide_locally(&mut self, times: Arc<DecisionTimes>) {
+        self.local_decisions = Some(times);
+    }
+
+    fn decision(&self) -> &'static str {
+        if self.local_decisions.is_some() {
+            "local"
+        } else {
+            "hosted"
+        }
+    }
+
+    /// Where decisions are made and by which model, for `top`.
+    pub(super) fn decisions_summary(&self) -> Value {
+        serde_json::json!({"made": self.decision(), "model": self.decisions_model})
     }
 
     /// Whether every deployment is Rayline Platform.
@@ -182,14 +238,28 @@ impl RoutingMetadata {
             DeploymentKind::Local => "local",
             DeploymentKind::Cloud => "remote",
         });
+        let route_id = header(headers, "x-rayline-route-id");
+        let event = header(headers, "x-rayline-event");
+        let decision_ms = self
+            .local_decisions
+            .as_ref()
+            .zip(route_id.as_deref())
+            .and_then(|(times, route_id)| times.take(route_id));
         observation.metrics.record(MetricsUpdate::RouteDecided {
             request_id: observation.id.clone(),
-            route_id: header(headers, "x-rayline-route-id"),
+            route_id,
             target: target.map(str::to_owned),
             endpoint_id: deployment.map(|deployment| deployment.id.clone()),
             requested_model: None,
             policy: self.policy.clone(),
-            task_class: header(headers, "x-rayline-event"),
+            // `kind/basis`: the decision's event is its kind.
+            decision_event: event
+                .as_deref()
+                .and_then(|event| event.split('/').next())
+                .map(str::to_owned),
+            task_class: event,
+            decision: Some(self.decision().to_owned()),
+            decision_ms,
         });
     }
 }
@@ -266,6 +336,9 @@ impl RequestObservation {
             requested_model: None,
             policy: Some("classifier cloud pin".to_owned()),
             task_class: Some("sidecall".to_owned()),
+            decision: None,
+            decision_ms: None,
+            decision_event: None,
         });
     }
 
@@ -307,6 +380,62 @@ impl Drop for RequestObservation {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn receipt(route_id: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        for (key, value) in [
+            ("x-rayline-instance-id", "instance"),
+            ("x-rayline-route-id", route_id),
+            ("x-rayline-event", "tool_result/explicit"),
+            ("x-rayline-executed-model", "glm"),
+        ] {
+            headers.insert(key, value.parse().unwrap());
+        }
+        headers
+    }
+
+    #[test]
+    fn a_receipt_says_where_its_decision_was_made_how_long_it_took_and_its_event() {
+        let config = json!({"decisions": {"model": "arc-swift-1.0"}});
+        let mut metadata = RoutingMetadata::from_config(&config).unwrap();
+        assert_eq!(
+            metadata.decisions_summary(),
+            json!({"made": "hosted", "model": "arc-swift-1.0"})
+        );
+        let metrics = RouterMetrics::new("hybrid");
+        let hosted = RequestObservation::start(metrics.clone(), b"{}");
+        metadata.record(&hosted, &receipt("rt_1"), "instance");
+        let row = &metrics.snapshot().active[0];
+        assert_eq!(row.decision.as_deref(), Some("hosted"));
+        assert_eq!(row.decision_ms, None);
+        assert_eq!(row.decision_event.as_deref(), Some("tool_result"));
+        assert_eq!(row.task_class.as_deref(), Some("tool_result/explicit"));
+        drop(hosted);
+
+        let times = Arc::new(DecisionTimes::default());
+        metadata.decide_locally(times.clone());
+        assert_eq!(metadata.decisions_summary()["made"], "local");
+        times.record("rt_2", 38);
+        let local = RequestObservation::start(metrics.clone(), b"{}");
+        metadata.record(&local, &receipt("rt_2"), "instance");
+        let row = &metrics.snapshot().active[0];
+        assert_eq!(row.decision.as_deref(), Some("local"));
+        assert_eq!(row.decision_ms, Some(38));
+        // Read once: the time is gone with its receipt.
+        assert_eq!(times.take("rt_2"), None);
+    }
+
+    #[test]
+    fn decision_times_keep_only_the_most_recent() {
+        let times = DecisionTimes::default();
+        for index in 0..=DecisionTimes::CAPACITY {
+            times.record(&format!("rt_{index}"), index as u64);
+        }
+        assert_eq!(times.take("rt_0"), None);
+        assert_eq!(times.take("rt_1"), Some(1));
+        let last = DecisionTimes::CAPACITY;
+        assert_eq!(times.take(&format!("rt_{last}")), Some(last as u64));
+    }
 
     #[test]
     fn receipts_attribute_execution_not_selection_and_disconnect_closes_the_row() {

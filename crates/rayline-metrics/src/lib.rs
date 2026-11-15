@@ -67,6 +67,13 @@ pub struct RequestSnapshot {
     pub wire_model: Option<String>,
     pub policy: Option<String>,
     pub task_class: Option<String>,
+    /// Where the routing decision was made: `local` or `hosted`. `None`
+    /// for a request no decision routed (a classifier call).
+    pub decision: Option<String>,
+    /// How long a local decision took.
+    pub decision_ms: Option<u64>,
+    /// The event the decision was made for, such as `task_start`.
+    pub decision_event: Option<String>,
     pub started_at_unix_ms: u64,
     pub first_token_at_unix_ms: Option<u64>,
     pub completed_at_unix_ms: Option<u64>,
@@ -102,6 +109,9 @@ pub enum MetricsUpdate {
         requested_model: Option<String>,
         policy: Option<String>,
         task_class: Option<String>,
+        decision: Option<String>,
+        decision_ms: Option<u64>,
+        decision_event: Option<String>,
     },
     /// The models a request was routed to and served by, the only update that
     /// carries them. Metadata strings are capped at 1 KiB.
@@ -228,12 +238,18 @@ impl RouterMetrics {
                 requested_model,
                 policy,
                 task_class,
+                decision,
+                decision_ms,
+                decision_event,
             } => {
                 let mut active = self.active.lock().expect("metrics active lock poisoned");
                 let record = active
                     .entry(request_id.clone())
                     .or_insert_with(|| RequestRecord::new(request_id.clone(), now));
                 record.state = "routed".to_owned();
+                merge_option(&mut record.decision, decision.clone());
+                merge_option(&mut record.decision_ms, *decision_ms);
+                merge_option(&mut record.decision_event, decision_event.clone());
                 record.target = target.clone();
                 merge_option(&mut record.route_id, route_id.clone());
                 merge_option(&mut record.endpoint_id, endpoint_id.clone());
@@ -463,6 +479,9 @@ struct RequestRecord {
     wire_model: Option<String>,
     policy: Option<String>,
     task_class: Option<String>,
+    decision: Option<String>,
+    decision_ms: Option<u64>,
+    decision_event: Option<String>,
     started_at_unix_ms: u64,
     response_started_at_unix_ms: Option<u64>,
     first_token_at_unix_ms: Option<u64>,
@@ -540,6 +559,9 @@ impl RequestRecord {
             wire_model: None,
             policy: None,
             task_class: None,
+            decision: None,
+            decision_ms: None,
+            decision_event: None,
             started_at_unix_ms: now,
             response_started_at_unix_ms: None,
             first_token_at_unix_ms: None,
@@ -601,6 +623,9 @@ impl RequestRecord {
             wire_model: self.wire_model.clone(),
             policy: self.policy.clone(),
             task_class: self.task_class.clone(),
+            decision: self.decision.clone(),
+            decision_ms: self.decision_ms,
+            decision_event: self.decision_event.clone(),
             started_at_unix_ms: self.started_at_unix_ms,
             first_token_at_unix_ms: self.first_token_at_unix_ms,
             completed_at_unix_ms: self.completed_at_unix_ms,
@@ -785,11 +810,20 @@ mod tests {
             requested_model: Some("rayline-auto".to_owned()),
             policy: Some("subagent:Explore".to_owned()),
             task_class: Some("subagent".to_owned()),
+            decision: Some("local".to_owned()),
+            decision_ms: Some(38),
+            decision_event: Some("task_start".to_owned()),
         });
 
         let active = metrics.snapshot();
         assert_eq!(active.active.len(), 1);
         assert_eq!(active.active[0].route_id.as_deref(), Some("local-1"));
+        assert_eq!(active.active[0].decision.as_deref(), Some("local"));
+        assert_eq!(active.active[0].decision_ms, Some(38));
+        assert_eq!(
+            active.active[0].decision_event.as_deref(),
+            Some("task_start")
+        );
 
         metrics.record(MetricsUpdate::FirstToken {
             request_id: "req-1".to_owned(),

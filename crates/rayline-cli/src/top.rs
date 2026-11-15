@@ -275,6 +275,9 @@ fn draw_top(
 
     let mut y = 0;
     y = draw_title(stdout, y, width, "Rayline CLI Top")?;
+    if let Some(decisions) = decisions_line(snapshot) {
+        y = draw_colored_line(stdout, y, width, Color::DarkCyan, &decisions)?;
+    }
     y = draw_top_summary(stdout, y, width, snapshot, paused, sort)?;
     if let Some(error) = last_error {
         y = draw_colored_line(
@@ -486,16 +489,54 @@ fn top_sort_value(row: &Value, sort: TopSort) -> f64 {
     }
 }
 
+/// Where decisions are made, from the snapshot's `decisions`: `None` from a
+/// local process that doesn't say.
+fn decisions_line(snapshot: &Value) -> Option<String> {
+    let decisions = snapshot.get("decisions")?;
+    let model = decisions
+        .get("model")
+        .and_then(Value::as_str)
+        .map(|model| format!(" ({model})"))
+        .unwrap_or_default();
+    match decisions.get("made").and_then(Value::as_str)? {
+        "local" => Some(format!("Decisions: local ARC{model} on this machine")),
+        "hosted" => Some(format!("Decisions: hosted ARC{model} in Rayline cloud")),
+        _ => None,
+    }
+}
+
+/// Where a row's decision was made, with how long it took when known.
+fn decision_cell(row: &Value) -> String {
+    match (
+        value_str(row, "decision"),
+        row.get("decision_ms").and_then(Value::as_u64),
+    ) {
+        (made, Some(ms)) => format!("{made} {}", format_ms(ms)),
+        (made, None) => made.to_owned(),
+    }
+}
+
 fn top_table_header(width: u16) -> String {
     if width < 120 {
         format!(
-            "{:<14} {:<7} {:<10} {:>7} {:>7} {:>7} {:>6} {:>6} MODEL",
-            "REQ", "TARGET", "STATE", "OUT", "CACHE %", "TTFT", "PF", "TG"
+            "{:<14} {:<7} {:<10} {:>7} {:>7} {:>7} {:>6} {:>6} {:<12} {:<11} MODEL",
+            "REQ", "TARGET", "STATE", "OUT", "CACHE %", "TTFT", "PF", "TG", "DECISION", "EVENT"
         )
     } else {
         format!(
-            "{:<18} {:<8} {:<10} {:>7} {:>7} {:>7} {:>8} {:>8} {:>6} {:>6} MODEL / POLICY",
-            "REQ", "TARGET", "STATE", "IN", "OUT", "CACHE %", "AGE", "TTFT", "PF", "TG"
+            "{:<18} {:<8} {:<10} {:>7} {:>7} {:>7} {:>8} {:>8} {:>6} {:>6} {:<12} {:<12} MODEL / POLICY",
+            "REQ",
+            "TARGET",
+            "STATE",
+            "IN",
+            "OUT",
+            "CACHE %",
+            "AGE",
+            "TTFT",
+            "PF",
+            "TG",
+            "DECISION",
+            "EVENT"
         )
     }
 }
@@ -512,18 +553,21 @@ fn top_table_row(row: &Value, width: u16) -> String {
     let prefill_tps = rate_cell(row, "prefill_tps");
     let generation_tps = rate_cell(row, "output_tps");
     let cache_hit = percent_cell(row, "cache_hit_ratio");
+    let decision = truncate_cell(&decision_cell(row), 12);
     let model = top_model_cell(row);
 
     if width < 120 {
+        let event = truncate_cell(value_str(row, "decision_event"), 11);
         return format!(
-            "{request_id:<14} {target:<7} {state:<10} {output_tokens:>7} {cache_hit:>7} {ttft:>7} {prefill_tps:>6} {generation_tps:>6} {model}"
+            "{request_id:<14} {target:<7} {state:<10} {output_tokens:>7} {cache_hit:>7} {ttft:>7} {prefill_tps:>6} {generation_tps:>6} {decision:<12} {event:<11} {model}"
         );
     }
 
+    let event = truncate_cell(value_str(row, "decision_event"), 12);
     let input_tokens = count_cell(row, "input_tokens");
     let age = ms_cell(row, "duration_ms");
     format!(
-        "{request_id:<18} {target:<8} {state:<10} {input_tokens:>7} {output_tokens:>7} {cache_hit:>7} {age:>8} {ttft:>8} {prefill_tps:>6} {generation_tps:>6} {model}"
+        "{request_id:<18} {target:<8} {state:<10} {input_tokens:>7} {output_tokens:>7} {cache_hit:>7} {age:>8} {ttft:>8} {prefill_tps:>6} {generation_tps:>6} {decision:<12} {event:<12} {model}"
     )
 }
 
@@ -531,11 +575,16 @@ fn format_top_snapshot(snapshot: &Value) -> String {
     let active = row_count(snapshot, "active");
     let recent = row_count(snapshot, "recent");
     let totals = &snapshot["totals"];
-    let mut output = format!(
-        "Rayline CLI top snapshot\nactive: {active}  recent: {recent}  completed: {}  errors: {}\n",
+    let mut output = "Rayline CLI top snapshot\n".to_owned();
+    if let Some(decisions) = decisions_line(snapshot) {
+        output.push_str(&decisions);
+        output.push('\n');
+    }
+    output.push_str(&format!(
+        "active: {active}  recent: {recent}  completed: {}  errors: {}\n",
         totals_u64(totals, "completed_requests"),
         totals_u64(totals, "errored_requests"),
-    );
+    ));
     for row in rows(snapshot, "active") {
         output.push_str(&format_top_row(row));
     }
@@ -555,8 +604,10 @@ fn format_top_row(row: &Value) -> String {
     let prefill_tps = rate_cell(row, "prefill_tps");
     let generation_tps = rate_cell(row, "output_tps");
     let cache_hit = percent_cell(row, "cache_hit_ratio");
+    let decision = decision_cell(row);
+    let event = value_str(row, "decision_event");
     format!(
-        "{request_id:<22} {target:<10} {state:<10} out={output_tokens:<7} cache%={cache_hit:<7} ttft={ttft:<8} pf={prefill_tps:<6} tg={generation_tps:<6} {model}\n"
+        "{request_id:<22} {target:<10} {state:<10} out={output_tokens:<7} cache%={cache_hit:<7} ttft={ttft:<8} pf={prefill_tps:<6} tg={generation_tps:<6} decision={decision:<12} event={event:<11} {model}\n"
     )
 }
 
@@ -946,6 +997,9 @@ mod tests {
             "request_id": "req",
             "target": "local",
             "state": "done",
+            "decision": "local",
+            "decision_ms": 38,
+            "decision_event": "task_start",
             "executed_model": "model",
             "input_tokens": 10_200,
             "output_tokens": 1_200_000,
@@ -963,9 +1017,57 @@ mod tests {
         assert_eq!(
             cells,
             [
-                "req", "local", "done", "10.2k", "1.2M", "88%", "10.2s", "999ms", "12.0k", "1.2M",
+                "req",
+                "local",
+                "done",
+                "10.2k",
+                "1.2M",
+                "88%",
+                "10.2s",
+                "999ms",
+                "12.0k",
+                "1.2M",
+                "local",
+                "38ms",
+                "task_start",
                 "model"
             ]
+        );
+        let header = top_table_header(80);
+        assert!(header.find("DECISION") < header.find("EVENT"));
+        assert!(header.find("EVENT") < header.find("MODEL"));
+        assert!(top_table_row(&row, 80).contains("local 38ms   task_start"));
+    }
+
+    #[test]
+    fn top_says_where_decisions_are_made() {
+        let snapshot = |decisions: Value| serde_json::json!({ "decisions": decisions });
+        assert_eq!(
+            decisions_line(&snapshot(
+                serde_json::json!({"made": "local", "model": "arc-swift-1.0"})
+            )),
+            Some("Decisions: local ARC (arc-swift-1.0) on this machine".to_owned())
+        );
+        assert_eq!(
+            decisions_line(&snapshot(
+                serde_json::json!({"made": "hosted", "model": "arc-sage-1.0"})
+            )),
+            Some("Decisions: hosted ARC (arc-sage-1.0) in Rayline cloud".to_owned())
+        );
+        assert_eq!(
+            decisions_line(&snapshot(
+                serde_json::json!({"made": "hosted", "model": null})
+            )),
+            Some("Decisions: hosted ARC in Rayline cloud".to_owned())
+        );
+        assert_eq!(decisions_line(&serde_json::json!({})), None);
+
+        let row = serde_json::json!({"decision": "hosted", "decision_event": "tool_result"});
+        assert_eq!(decision_cell(&row), "hosted");
+        assert_eq!(decision_cell(&serde_json::json!({})), "-");
+        assert_eq!(
+            decision_cell(&serde_json::json!({"decision": "local", "decision_ms": 1_250})),
+            "local 1.2s"
         );
     }
 

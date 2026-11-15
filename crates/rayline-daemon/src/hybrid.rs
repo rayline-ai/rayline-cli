@@ -151,7 +151,7 @@ type Body = http_body_util::combinators::BoxBody<Bytes, io::Error>;
 pub async fn run(args: Args) -> Result<()> {
     check_decisions_url(&args.config, &args.router_url)?;
     let config = serde_json::from_slice(&std::fs::read(&args.config)?)?;
-    let routing_metadata = RoutingMetadata::from_config(&config).map_err(anyhow::Error::msg)?;
+    let mut routing_metadata = RoutingMetadata::from_config(&config).map_err(anyhow::Error::msg)?;
     let classifier = args
         .classifier_model
         .as_deref()
@@ -231,6 +231,8 @@ pub async fn run(args: Args) -> Result<()> {
         let access = crate::hybrid_arc::RoutesAccess::for_core(&core_config)?;
         arc_routes_token = Some(access.token.clone());
         cleanup.publish_routes_token(&args.ready_file, &access.decide_token)?;
+        let times = Arc::new(crate::hybrid_metrics::DecisionTimes::default());
+        routing_metadata.decide_locally(times.clone());
         let (routes_url, task) = crate::hybrid_arc::serve_routes(
             release_dir,
             &args.arc_alias,
@@ -238,6 +240,7 @@ pub async fn run(args: Args) -> Result<()> {
             &encoder,
             &args.router_url,
             access,
+            Arc::new(move |route_id: &str, ms: u64| times.record(route_id, ms)),
         )
         .await?;
         arc_routes = Some(task);
@@ -468,6 +471,7 @@ async fn handle(state: Arc<Gateway>, request: Request<Incoming>) -> Response<Bod
         snapshot["instance_id"] = json!(state.instance_id);
         snapshot["pid"] = json!(std::process::id());
         snapshot["core_pid"] = json!(state.core_pid);
+        snapshot["decisions"] = state.routing_metadata.decisions_summary();
         return json_response(StatusCode::OK, snapshot);
     }
     if request.method() == Method::GET && request.uri().path() == "/healthz" {
