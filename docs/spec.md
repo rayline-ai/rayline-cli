@@ -262,10 +262,10 @@ Required for local mode. Its presence in a `--config` file selects local mode.
 | `arc_release.dir` | relative path of plain names joined by `/` | no, default the repo root | The repo directory that holds the release. |
 
 1. With `decisions` `local`, starting the local process loads the ARC runtime release at a pinned commit, before it reports ready:
-   - The pin is `arc_release`, else the built-in release (`rayline-ai/ARC-1.0` at a commit, directory and manifest sha256 compiled into Rayline). The built-in release isn't published yet: until it is, start fails with an error naming `routing.arc_release`.
+   - The pin is `arc_release`, else the built-in release (`rayline-ai/ARC-1.0` at a commit, directory and manifest sha256 compiled into Rayline).
    - `manifest.json` must match the pinned sha256 (and be at most 1 MiB), and every file it lists the size and sha256 it lists. A cached file that matches is not downloaded again; one that doesn't is downloaded again. A download that doesn't match is removed from the cache, and start fails naming the file; so does a file that can't be downloaded. A `prices.json` the manifest doesn't list fails start naming it.
    - A private repo needs a Hugging Face token (section 7.1 item 6); without one, start fails saying to set `HF_TOKEN`.
-   - The encoder weights (about 1 GB) come from `rayline-ai/ARC-1.0` at a commit and sha256 compiled into Rayline, whatever `arc_release` says, without a token, by the same rules. A release in `arc_release` must be built for those weights; Rayline can't check that.
+   - The encoder weights (about 1 GB) come from `rayline-ai/ARC-1.0` at the built-in release's commit and a sha256 compiled into Rayline, whatever `arc_release` says, without a token, by the same rules. A release in `arc_release` must be built for those weights; Rayline can't check that.
    - When neither the release nor the `models` prices it takes price any model, start fails saying so.
    - Start still contacts the environment's Rayline router and checks each `models` entry's `tokenizer` (section 5.3), as with `hosted`.
 2. With `decisions` `local`, the local process runs the ARC encoder, `rayline-arc-encoder`, installed beside `rayline`. Rayline releases don't ship it yet; without it, start fails with an error that says so and to use `hosted`.
