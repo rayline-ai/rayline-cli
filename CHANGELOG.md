@@ -7,8 +7,8 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 
 ### Added
 
-- **Routing decisions can run locally (preview).** With `routing.decisions:
-  "local"` (or `rayline local start --decisions local`), the local process
+- **Routing decisions can run locally (preview).** With `routing.router:
+  "local"` (or `rayline local start --router local`), the local process
   decides each turn's route on your Mac with the public ARC 1.0 release
   (`rayline-ai/ARC-1.0`) instead of calling the Rayline Routes API. It uses
   `arc-swift-1.0` or `arc-sage-1.0`. On first use it downloads the release and
@@ -26,7 +26,7 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   URL and its decisions. With local decisions it also names a token file
   (mode 0600, removed on stop) that admits only route decisions, so another
   program on the same machine can ask the local process for decisions.
-- **`rayline local start --decisions local` works without a settings file**,
+- **`rayline local start --router local` works without a settings file**,
   with `arc-swift-1.0` and the prefer-local policy. `routing.classifier_model`
   is needed only to run Claude Code, and a Claude Code run without it fails
   before starting, naming the key.

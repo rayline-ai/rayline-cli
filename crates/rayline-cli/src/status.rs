@@ -1465,7 +1465,7 @@ mod tests {
                 mode: config::Mode::Cloud,
                 env,
                 harness_protocol: None,
-                decisions: None,
+                router: None,
             },
         )
         .map(|settings| hosted_environment(&settings))

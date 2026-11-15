@@ -5,7 +5,7 @@ instead of to Rayline cloud. For every request, ARC picks the model, and the
 local process sends the request to one of your own inference servers listed in
 `settings.json`, or to Rayline cloud for any other model.
 
-Local mode controls where inference runs; `routing.decisions` controls
+Local mode controls where inference runs; `routing.router` controls
 where routing decisions are made (default `hosted`: the request is sent to
 the Rayline Routes API).
 
@@ -131,14 +131,14 @@ Every entry works the same way. No setting marks a model as local.
 | `classifier_model` | string | to run Claude Code | The model that serves Claude Code's auto-mode safety classifier calls. These calls go to Rayline cloud. |
 | `policy.preset` | non-empty string | yes | The id of an ARC preset: `arc-policy.package-default.v1`, `arc-policy.hybrid-default.v1` or `arc-policy.prefer-local.v1`. It is sent to ARC unchanged. |
 | `policy.overrides` | object | no | Overrides in ARC's own `routing.policy.overrides` shape, sent to ARC unchanged. ARC validates them. |
-| `decisions` | `local` or `hosted` | no, default `hosted` | `hosted`: Rayline cloud's ARC decides. Set `local` to decide on this machine: ARC runs inside the local process, and no routing decision goes to Rayline cloud. |
+| `router` | `local` or `hosted` | no, default `hosted` | `hosted`: Rayline cloud's ARC decides. Set `local` to decide on this machine: ARC runs inside the local process, and no routing decision goes to Rayline cloud. |
 | `arc_release` | object with `repo`, `revision`, `manifest_sha256`, and optionally `dir` | no | Overrides the built-in ARC release for `local` decisions with a Hugging Face repo, a full commit id, the sha256 of the release's `manifest.json`, and the repo directory it is in (default the repo root). For a private repo, set `HF_TOKEN` or sign in with `huggingface-cli login`. |
 
 `local` decisions are a preview. They need the ARC encoder binary
 `rayline-arc-encoder` beside `rayline`, which only macOS arm64 releases
 ship. On first use, start downloads the
 release and about 1 GB of encoder weights into the Hugging Face cache and
-checks them against their pins. With `routing.decisions: "local"`, every
+checks them against their pins. With `routing.router: "local"`, every
 turn routes by a local ARC decision, with no fallback: a turn ARC can't
 decide fails. Only Anthropic Messages harnesses (Claude Code, OpenCode, Pi,
 omp) are decided locally, so `rayline run` refuses Codex, Hermes and
@@ -158,7 +158,7 @@ Four `routing` keys can be set from the environment:
 | `routing.decisions_model` | `RAYLINE_ROUTING_DECISIONS_MODEL` |
 | `routing.classifier_model` | `RAYLINE_ROUTING_CLASSIFIER_MODEL` |
 | `routing.policy.preset` | `RAYLINE_ROUTING_POLICY_PRESET` |
-| `routing.decisions` | `RAYLINE_ROUTING_DECISIONS` |
+| `routing.router` | `RAYLINE_ROUTING_ROUTER` |
 
 - From lowest to highest precedence: built-in defaults, the config file, env
   overrides, then flags.
@@ -180,7 +180,7 @@ rayline local stop
 
 | Command | Does |
 |---|---|
-| `rayline local start [--config <file>] [--decisions <local\|hosted>]` | Starts the local process from the default config file, or from `<file>`. The config must have a `routing` section, except with `--decisions local`. `--decisions` overrides `routing.decisions`. |
+| `rayline local start [--config <file>] [--router <local\|hosted>]` | Starts the local process from the default config file, or from `<file>`. The config must have a `routing` section, except with `--router local`. `--router` overrides `routing.router`. |
 | `rayline local status [--json]` | Shows whether the local process is running, its address, and the config file and environment it was started from. `--json` prints it as JSON (see [Local decisions for your own Pi](#local-decisions-for-your-own-pi)). |
 | `rayline local stop` | Stops the local process. Your inference servers keep running. |
 | `rayline run <HARNESS> --local` | Runs the harness in local mode with `~/.config/rayline/settings.json`. Starts the local process if it isn't running. |
@@ -203,10 +203,10 @@ as `local` decisions: macOS on Apple Silicon only.
 
 ```bash
 rayline auth login
-rayline local start --decisions local
+rayline local start --router local
 ```
 
-`--decisions local` needs no `settings.json`. Without a `routing` section it
+`--router local` needs no `settings.json`. Without a `routing` section it
 uses `arc-swift-1.0` and the `arc-policy.prefer-local.v1` preset.
 `routing.classifier_model` is needed only to run Claude Code.
 
@@ -219,7 +219,7 @@ pi-arc finds the local Routes API with `rayline local status --json`:
   "url": "http://127.0.0.1:57693",
   "config": "/Users/you/.config/rayline/settings.json",
   "environment": "prod",
-  "decisions": "local",
+  "router": "local",
   "decisions_model": "arc-swift-1.0",
   "routes": {
     "url": "http://127.0.0.1:57696/v1/routes",
@@ -263,7 +263,10 @@ says so and exits with an error.
 Rayline checks the config once, when it loads, and refuses to run with an
 error that names the key. It refuses:
 
-1. An unknown key, at any level Rayline defines.
+1. An unknown key, at any level Rayline defines. `routing.decisions`,
+   `RAYLINE_ROUTING_DECISIONS` and `--decisions`, the earlier names of
+   `routing.router`, its env override and its flag, are refused with an error
+   that names the new name.
 2. A wrong type, an empty string, or a value out of range.
 3. In a local-mode run, an endpoint that doesn't list the protocol of the
    harness being run. Cloud mode doesn't use endpoints, and

@@ -1298,10 +1298,10 @@ fn explain_decisions_failure(
             }
         ),
         (Decider::Local, DecisionsFailure::Refused) => format!(
-            "{message}: local ARC (`routing.decisions` `local`) refused this turn on this machine, and sending it again will not change that. If it names a model or price, check `routing.decisions_model` and `models` in settings.json and run `rayline local stop`: the next run starts the local process from the changed file."
+            "{message}: local ARC (`routing.router` `local`) refused this turn on this machine, and sending it again will not change that. If it names a model or price, check `routing.decisions_model` and `models` in settings.json and run `rayline local stop`: the next run starts the local process from the changed file."
         ),
         (Decider::Local, DecisionsFailure::Unavailable) => format!(
-            "{message}: local ARC (`routing.decisions` `local`) could not decide this turn right now; its encoder may be restarting. This is retryable: send the turn again after the retry-after interval."
+            "{message}: local ARC (`routing.router` `local`) could not decide this turn right now; its encoder may be restarting. This is retryable: send the turn again after the retry-after interval."
         ),
         (Decider::Local, DecisionsFailure::Auth) => format!(
             "{message}: local ARC refused the local process's own token. Run `rayline local stop`: the next run starts the local process with a new one."

@@ -92,23 +92,23 @@ pub struct Policy {
     pub overrides: Option<Map<String, Value>>,
 }
 
-/// `routing.decisions`: where the local process gets its routing decisions.
+/// `routing.router`: where the local process gets its routing decisions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Decisions {
+pub enum Router {
     /// ARC runs in the local process, from the release it downloads.
     Local,
     /// The environment's Rayline router decides.
     Hosted,
 }
 
-impl Decisions {
-    pub const ALL: [Decisions; 2] = [Decisions::Local, Decisions::Hosted];
+impl Router {
+    pub const ALL: [Router; 2] = [Router::Local, Router::Hosted];
 
-    /// The name used in `settings.json` and `RAYLINE_ROUTING_DECISIONS`.
+    /// The name used in `settings.json` and `RAYLINE_ROUTING_ROUTER`.
     pub fn as_str(self) -> &'static str {
         match self {
-            Decisions::Local => "local",
-            Decisions::Hosted => "hosted",
+            Router::Local => "local",
+            Router::Hosted => "hosted",
         }
     }
 
@@ -139,7 +139,7 @@ pub struct Routing {
     /// Required only when a Claude Code harness runs.
     pub classifier_model: Option<String>,
     pub policy: Policy,
-    pub decisions: Decisions,
+    pub router: Router,
     pub arc_release: Option<ArcRelease>,
 }
 
@@ -228,12 +228,12 @@ pub struct LoadOptions<'a> {
     pub env: Option<&'a str>,
     /// The protocol of the harness being run. `None` when no harness is.
     pub harness_protocol: Option<Protocol>,
-    /// `rayline local start --decisions`: `routing.decisions`, over the
+    /// `rayline local start --router`: `routing.router`, over the
     /// file's and the env's.
-    pub decisions: Option<Decisions>,
+    pub router: Option<Router>,
 }
 
-/// `rayline local start --decisions local` with no `routing` in the file:
+/// `rayline local start --router local` with no `routing` in the file:
 /// the routing it starts with.
 pub const LOCAL_DECISIONS_MODEL: &str = "arc-swift-1.0";
 pub const LOCAL_POLICY_PRESET: &str = "arc-policy.prefer-local.v1";
@@ -290,7 +290,10 @@ const ROUTING_CLASSIFIER_MODEL: (&str, &str) = (
 );
 const ROUTING_POLICY_PRESET: (&str, &str) =
     ("RAYLINE_ROUTING_POLICY_PRESET", "routing.policy.preset");
-const ROUTING_DECISIONS: (&str, &str) = ("RAYLINE_ROUTING_DECISIONS", "routing.decisions");
+const ROUTING_ROUTER: (&str, &str) = ("RAYLINE_ROUTING_ROUTER", "routing.router");
+/// `RAYLINE_ROUTING_ROUTER`'s name before it was renamed: refused, naming
+/// the new one.
+const RENAMED_ROUTING_DECISIONS: &str = "RAYLINE_ROUTING_DECISIONS";
 const UPDATE_CHANNEL: (&str, &str) = ("RAYLINE_UPDATE_CHANNEL", "update.channel");
 
 /// Loads the config. Precedence, lowest to highest: built-in defaults, the
@@ -360,10 +363,10 @@ fn load_from(
 
     let doc = Doc { file: &file };
     let raw = doc.root(&root)?;
-    // `--decisions local` without `routing` starts from its defaults, which
+    // `--router local` without `routing` starts from its defaults, which
     // env overrides refine like a file's; the flag itself wins over both.
-    let raw_routing = match (raw.routing, options.decisions) {
-        (None, Some(Decisions::Local)) => Some(RawRouting {
+    let raw_routing = match (raw.routing, options.router) {
+        (None, Some(Router::Local)) => Some(RawRouting {
             decisions_model: Some(LOCAL_DECISIONS_MODEL.to_owned()),
             preset: Some(LOCAL_POLICY_PRESET.to_owned()),
             ..RawRouting::default()
@@ -377,8 +380,8 @@ fn load_from(
     } else {
         apply_routing_overrides(raw_routing, env)?
     };
-    if let (Some(decisions), Some(routing)) = (options.decisions, &mut routing) {
-        routing.decisions = Some(decisions);
+    if let (Some(router), Some(routing)) = (options.router, &mut routing) {
+        routing.router = Some(router);
     }
     let update = apply_update_override(raw.update, env)?;
     let routing = doc.finish_routing(routing)?;
@@ -487,7 +490,7 @@ struct RawRouting {
     classifier_model: Option<String>,
     preset: Option<String>,
     overrides: Option<Map<String, Value>>,
-    decisions: Option<Decisions>,
+    router: Option<Router>,
     arc_release: Option<ArcRelease>,
 }
 
@@ -495,16 +498,23 @@ fn apply_routing_overrides(
     routing: Option<RawRouting>,
     env: &EnvLookup<'_>,
 ) -> Result<Option<RawRouting>, ConfigError> {
+    if env(RENAMED_ROUTING_DECISIONS).is_some() {
+        return Err(ConfigError::Env {
+            var: RENAMED_ROUTING_DECISIONS,
+            key: ROUTING_ROUTER.1,
+            problem: format!("was renamed `{}`", ROUTING_ROUTER.0),
+        });
+    }
     let decisions_model = env_string(env, ROUTING_DECISIONS_MODEL)?;
     let classifier_model = env_string(env, ROUTING_CLASSIFIER_MODEL)?;
     let preset = env_string(env, ROUTING_POLICY_PRESET)?;
-    let decisions = env_string(env, ROUTING_DECISIONS)?;
+    let router = env_string(env, ROUTING_ROUTER)?;
     let Some(mut routing) = routing else {
         let set = [
             (ROUTING_DECISIONS_MODEL, &decisions_model),
             (ROUTING_CLASSIFIER_MODEL, &classifier_model),
             (ROUTING_POLICY_PRESET, &preset),
-            (ROUTING_DECISIONS, &decisions),
+            (ROUTING_ROUTER, &router),
         ]
         .into_iter()
         .find(|(_, value)| value.is_some());
@@ -526,12 +536,12 @@ fn apply_routing_overrides(
     if let Some(value) = preset {
         routing.preset = Some(value);
     }
-    if let Some(value) = decisions {
-        let (var, key) = ROUTING_DECISIONS;
-        routing.decisions = Some(Decisions::parse(&value).ok_or_else(|| ConfigError::Env {
+    if let Some(value) = router {
+        let (var, key) = ROUTING_ROUTER;
+        routing.router = Some(Router::parse(&value).ok_or_else(|| ConfigError::Env {
             var,
             key,
-            problem: one_of(Decisions::ALL.map(Decisions::as_str)),
+            problem: one_of(Router::ALL.map(Router::as_str)),
         })?);
     }
     Ok(Some(routing))
@@ -735,6 +745,9 @@ impl<'a> Doc<'a> {
     fn routing(&self, value: &Value) -> Result<RawRouting, ConfigError> {
         let key = "routing";
         let routing = self.object(value, key)?;
+        if routing.contains_key("decisions") {
+            return Err(self.err("routing.decisions", "was renamed `routing.router`"));
+        }
         self.known_keys(
             routing,
             key,
@@ -742,21 +755,18 @@ impl<'a> Doc<'a> {
                 "decisions_model",
                 "classifier_model",
                 "policy",
-                "decisions",
+                "router",
                 "arc_release",
             ],
         )?;
         let mut raw = RawRouting {
             decisions_model: self.optional_string(routing, key, "decisions_model")?,
             classifier_model: self.optional_string(routing, key, "classifier_model")?,
-            decisions: routing
-                .get("decisions")
+            router: routing
+                .get("router")
                 .map(|value| {
-                    value.as_str().and_then(Decisions::parse).ok_or_else(|| {
-                        self.err(
-                            "routing.decisions",
-                            one_of(Decisions::ALL.map(Decisions::as_str)),
-                        )
+                    value.as_str().and_then(Router::parse).ok_or_else(|| {
+                        self.err("routing.router", one_of(Router::ALL.map(Router::as_str)))
                     })
                 })
                 .transpose()?,
@@ -852,15 +862,15 @@ impl<'a> Doc<'a> {
         };
         let required =
             |value: Option<String>, key: &str| value.ok_or_else(|| self.err(key, "is required"));
-        let decisions = routing.decisions.unwrap_or(Decisions::Hosted);
+        let router = routing.router.unwrap_or(Router::Hosted);
         let decisions_model = required(routing.decisions_model, "routing.decisions_model")?;
-        if decisions == Decisions::Local && !rayline_arc_routes::serves_model(&decisions_model) {
+        if router == Router::Local && !rayline_arc_routes::serves_model(&decisions_model) {
             return Err(self.err(
                 "routing.decisions_model",
                 format!(
                     "is `{decisions_model}`, which local decisions don't make: they make \
                      `arc-swift-1.0` and `arc-sage-1.0`. Use one of those, or set \
-                     `routing.decisions` to `hosted`"
+                     `routing.router` to `hosted`"
                 ),
             ));
         }
@@ -871,7 +881,7 @@ impl<'a> Doc<'a> {
                 preset: required(routing.preset, "routing.policy.preset")?,
                 overrides: routing.overrides,
             },
-            decisions,
+            router,
             arc_release: routing.arc_release,
         }))
     }
@@ -1254,7 +1264,7 @@ mod tests {
             mode,
             env: None,
             harness_protocol: None,
-            decisions: None,
+            router: None,
         }
     }
 
@@ -1990,37 +2000,34 @@ mod tests {
 
     #[test]
     fn decisions_local_starts_without_a_routing_section() {
-        let with = |decisions| LoadOptions {
-            decisions: Some(decisions),
+        let with = |router| LoadOptions {
+            router: Some(router),
             ..opts(Mode::Local)
         };
         // No settings.json at all: the local decisions defaults.
         let empty = temp_home();
-        let routing = load(&empty, with(Decisions::Local))
+        let routing = load(&empty, with(Router::Local))
             .expect("no file")
             .routing
             .expect("routing");
-        assert_eq!(routing.decisions, Decisions::Local);
+        assert_eq!(routing.router, Router::Local);
         assert_eq!(routing.decisions_model, LOCAL_DECISIONS_MODEL);
         assert_eq!(routing.policy.preset, LOCAL_POLICY_PRESET);
         assert_eq!(routing.classifier_model, None);
         // `hosted` has no defaults: it still needs `routing`.
-        assert_eq!(
-            key_error(load(&empty, with(Decisions::Hosted))).0,
-            "routing"
-        );
-        // Over a file's `routing`, only `decisions` changes.
+        assert_eq!(key_error(load(&empty, with(Router::Hosted))).0, "routing");
+        // Over a file's `routing`, only `router` changes.
         let home = temp_home();
         write_default(&home, &example());
         let file = load(&home, opts(Mode::Local))
             .expect("file")
             .routing
             .expect("routing");
-        let flagged = load(&home, with(Decisions::Local))
+        let flagged = load(&home, with(Router::Local))
             .expect("flagged")
             .routing
             .expect("routing");
-        assert_eq!(flagged.decisions, Decisions::Local);
+        assert_eq!(flagged.router, Router::Local);
         assert_eq!(flagged.decisions_model, file.decisions_model);
         assert_eq!(flagged.policy, file.policy);
         assert_eq!(flagged.classifier_model, file.classifier_model);
@@ -2046,19 +2053,19 @@ mod tests {
                 .is_none()
         );
         // Env overrides refine the defaults; the flag still wins over
-        // `RAYLINE_ROUTING_DECISIONS`.
+        // `RAYLINE_ROUTING_ROUTER`.
         let routing = load_env(
             &empty,
-            with(Decisions::Local),
+            with(Router::Local),
             &[
-                ("RAYLINE_ROUTING_DECISIONS", "hosted"),
+                ("RAYLINE_ROUTING_ROUTER", "hosted"),
                 ("RAYLINE_ROUTING_CLASSIFIER_MODEL", "c"),
             ],
         )
         .expect("env")
         .routing
         .expect("routing");
-        assert_eq!(routing.decisions, Decisions::Local);
+        assert_eq!(routing.router, Router::Local);
         assert_eq!(routing.classifier_model.as_deref(), Some("c"));
         assert_eq!(routing.decisions_model, LOCAL_DECISIONS_MODEL);
     }
@@ -2127,7 +2134,7 @@ mod tests {
                     mode,
                     env: None,
                     harness_protocol: protocol,
-                    decisions: None,
+                    router: None,
                 },
             )
         };
@@ -2161,7 +2168,7 @@ mod tests {
                     mode: Mode::Cloud,
                     env: Some(env),
                     harness_protocol: None,
-                    decisions: None,
+                    router: None,
                 },
             )
         };
@@ -2187,15 +2194,15 @@ mod tests {
             load_doc(&doc).map(|settings| settings.routing.expect("routing"))
         };
         let plain = routing(json!({})).expect("load");
-        assert_eq!(plain.decisions, Decisions::Hosted);
+        assert_eq!(plain.router, Router::Hosted);
         assert_eq!(plain.arc_release, None);
-        let local = routing(json!({"decisions": "local"})).expect("load");
-        assert_eq!(local.decisions, Decisions::Local);
+        let local = routing(json!({"router": "local"})).expect("load");
+        assert_eq!(local.router, Router::Local);
         for model in ["arc-swift-1.0", "arc-sage-1.0"] {
-            routing(json!({"decisions": "local", "decisions_model": model})).expect(model);
+            routing(json!({"router": "local", "decisions_model": model})).expect(model);
         }
         let (key, problem) = key_error(routing(
-            json!({"decisions": "local", "decisions_model": "arc-1.0"}),
+            json!({"router": "local", "decisions_model": "arc-1.0"}),
         ));
         assert_eq!(key, "routing.decisions_model");
         assert!(
@@ -2204,10 +2211,18 @@ mod tests {
         );
         routing(json!({"decisions_model": "arc-1.0"})).expect("hosted decides arc-1.0");
         assert_eq!(
-            key_error(routing(json!({"decisions": "router"}))),
+            key_error(routing(json!({"router": "cloud"}))),
+            (
+                "routing.router".to_owned(),
+                "must be one of `local`, `hosted`".to_owned()
+            )
+        );
+        // Its name before the rename is refused, naming the new one.
+        assert_eq!(
+            key_error(routing(json!({"decisions": "local"}))),
             (
                 "routing.decisions".to_owned(),
-                "must be one of `local`, `hosted`".to_owned()
+                "was renamed `routing.router`".to_owned()
             )
         );
 
@@ -2271,24 +2286,37 @@ mod tests {
     }
 
     #[test]
-    fn the_decisions_override_is_validated_like_the_file() {
+    fn the_router_override_is_validated_like_the_file() {
         let home = temp_home();
         write_default(&home, &example());
-        let decisions = |value| {
+        let router = |value| {
             load_env(
                 &home,
                 opts(Mode::Cloud),
-                &[("RAYLINE_ROUTING_DECISIONS", value)],
+                &[("RAYLINE_ROUTING_ROUTER", value)],
             )
         };
-        let routing = decisions("local").expect("load").routing.expect("routing");
-        assert_eq!(routing.decisions, Decisions::Local);
+        let routing = router("local").expect("load").routing.expect("routing");
+        assert_eq!(routing.router, Router::Local);
         assert_eq!(
-            env_error(decisions("cloud")),
+            env_error(router("cloud")),
             (
-                "RAYLINE_ROUTING_DECISIONS",
+                "RAYLINE_ROUTING_ROUTER",
                 "must be one of `local`, `hosted`".to_owned()
             )
+        );
+        // Its name before the rename is refused, naming the new one.
+        let renamed = load_env(
+            &home,
+            opts(Mode::Cloud),
+            &[("RAYLINE_ROUTING_DECISIONS", "local")],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            renamed.contains("`RAYLINE_ROUTING_DECISIONS`")
+                && renamed.contains("was renamed `RAYLINE_ROUTING_ROUTER`"),
+            "{renamed}"
         );
     }
 
@@ -2443,7 +2471,7 @@ mod tests {
         ROUTING_DECISIONS_MODEL,
         ROUTING_CLASSIFIER_MODEL,
         ROUTING_POLICY_PRESET,
-        ROUTING_DECISIONS,
+        ROUTING_ROUTER,
         UPDATE_CHANNEL,
     ];
 
@@ -2458,7 +2486,7 @@ mod tests {
                     "routing.classifier_model"
                 ),
                 ("RAYLINE_ROUTING_POLICY_PRESET", "routing.policy.preset"),
-                ("RAYLINE_ROUTING_DECISIONS", "routing.decisions"),
+                ("RAYLINE_ROUTING_ROUTER", "routing.router"),
                 ("RAYLINE_UPDATE_CHANNEL", "update.channel"),
             ]
         );
@@ -2473,7 +2501,10 @@ mod tests {
         let home = temp_home();
         write_default(&home, &example());
         let file = write_file(&home, "other.json", &example());
-        let table: Vec<&str> = OVERRIDES.iter().map(|(var, _)| *var).collect();
+        // The override table, and the one renamed var it refuses.
+        let table: Vec<&str> = std::iter::once(RENAMED_ROUTING_DECISIONS)
+            .chain(OVERRIDES.iter().map(|(var, _)| *var))
+            .collect();
         for mode in [
             Mode::Cloud,
             Mode::Local,
@@ -2486,7 +2517,7 @@ mod tests {
                         mode,
                         env,
                         harness_protocol,
-                        decisions: None,
+                        router: None,
                     };
                     let read = RefCell::new(Vec::new());
                     // Any other var the loader asked for would be set.
@@ -2517,7 +2548,7 @@ mod tests {
             "RAYLINE_ROUTING_DECISIONS_MODEL",
             "RAYLINE_ROUTING_CLASSIFIER_MODEL",
             "RAYLINE_ROUTING_POLICY_PRESET",
-            "RAYLINE_ROUTING_DECISIONS",
+            "RAYLINE_ROUTING_ROUTER",
         ] {
             for mode in [Mode::Cloud, Mode::File(&file)] {
                 assert_eq!(
