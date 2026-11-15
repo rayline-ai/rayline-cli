@@ -17,7 +17,7 @@ const CORE_LICENSE_NAME: &str = "rayline-core-LICENSE";
 /// installs it on Linux when a release's `SHA256SUMS` lists it.
 const ENCODER_NAME: &str = "rayline-arc-encoder";
 const ENCODER_LICENSE_NAME: &str = "rayline-arc-encoder-LICENSE";
-/// The platforms whose releases ship the encoder.
+/// The platforms on which the encoder is installed when a release's `SHA256SUMS` lists it.
 const ENCODER_PLATFORMS: &[&str] = &["macosx_11_0_arm64", "linux_x86_64", "linux_aarch64"];
 
 #[derive(Clone, Debug, Eq, PartialEq)]

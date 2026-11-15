@@ -50,9 +50,8 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 - **An unreachable Rayline cloud fails a turn once**, with a message that names
   Rayline cloud and says to check the network and `HTTPS_PROXY`, instead of
   the harness retrying for minutes.
-- **Refusals are logged.** The execution core's refusals are logged in
-  `runtime.log` with their status, path, error type and route id (never the
-  body), and so is the gateway's own 413.
+- **Refusals are logged.** The execution core's refusals, and the gateway's
+  own 413, are now logged in `runtime.log` (never the request body).
 - **`rayline top` counts cloud turns as remote**, and times output that
   arrives in one burst at the end of a response (such as a tool call) from the
   response's start, instead of showing rates of tens of thousands of tokens per
