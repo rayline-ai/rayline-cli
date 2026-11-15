@@ -32,6 +32,10 @@ impl Paths {
     fn ready(&self) -> PathBuf {
         self.dir.join("ready.json")
     }
+    /// The token other local callers present to the local Routes API.
+    fn routes_token(&self) -> PathBuf {
+        self.dir.join(rayline_daemon::ROUTES_TOKEN_FILE)
+    }
     fn log(&self) -> PathBuf {
         self.dir.join("runtime.log")
     }
@@ -71,6 +75,10 @@ struct Supervisor {
     /// stop` still stops it.
     #[serde(default)]
     decisions: Option<DecisionsSource>,
+    /// `routing.decisions_model`. Absent in a record from a Rayline that
+    /// didn't record it.
+    #[serde(default)]
+    decisions_model: Option<String>,
 }
 
 /// `routing.decisions`, and for `local` the ARC release with the built-in
@@ -173,13 +181,19 @@ fn env_words(env: Option<&str>) -> String {
     }
 }
 
+/// The config file, canonical. The default file may not exist (an absent
+/// default file is an empty config): its path is then used as it is.
 fn canonical_config(settings: &Settings) -> io::Result<PathBuf> {
-    fs::canonicalize(&settings.file).map_err(|error| {
-        io::Error::new(
+    match fs::canonicalize(&settings.file) {
+        Ok(path) => Ok(path),
+        Err(error) if error.kind() == io::ErrorKind::NotFound && !settings.file.exists() => {
+            Ok(settings.file.clone())
+        }
+        Err(error) => Err(io::Error::new(
             error.kind(),
             format!("{}: {error}", settings.file.display()),
-        )
-    })
+        )),
+    }
 }
 
 /// `rayline local start`: start the local process from `settings`.
@@ -206,17 +220,25 @@ pub(crate) async fn start(settings: &Settings) -> ExitCode {
     )
 }
 
-/// `rayline local status`.
-pub(crate) async fn status() -> ExitCode {
+/// `rayline local status [--json]`.
+pub(crate) async fn status(json: bool) -> ExitCode {
     exit_code(
         async {
             let (_, paths) = local_paths()?;
             let Some(running) = running(&paths)? else {
-                println!("Local process: not running");
+                if json {
+                    println!("{}", json!({"running": false}));
+                } else {
+                    println!("Local process: not running");
+                }
                 return Ok(());
             };
             let state = ready(&paths)?;
             health(&gateway_client()?, &paths, &state).await?;
+            if json {
+                println!("{}", status_json(&running, &state, &paths)?);
+                return Ok(());
+            }
             println!(
                 "Local process: running (pid {})\nAddress: {}\nConfig: {}\nEnvironment: {}",
                 running.pid,
@@ -228,6 +250,29 @@ pub(crate) async fn status() -> ExitCode {
         }
         .await,
     )
+}
+
+/// `rayline local status --json` of a running process (spec 3.3).
+fn status_json(running: &Supervisor, state: &Value, paths: &Paths) -> io::Result<Value> {
+    let mut status = json!({
+        "running": true,
+        "pid": running.pid,
+        "url": url(state)?,
+        "config": running.config,
+        "environment": running.env.as_deref().unwrap_or("prod"),
+        "decisions": match running.decisions {
+            Some(DecisionsSource::Local { .. }) => "local",
+            Some(DecisionsSource::Hosted) | None => "hosted",
+        },
+        "decisions_model": running.decisions_model,
+    });
+    if let Some(routes_url) = state.get("routes_url").and_then(Value::as_str) {
+        status["routes"] = json!({
+            "url": routes_url,
+            "token_file": paths.routes_token(),
+        });
+    }
+    Ok(status)
 }
 
 /// `rayline local stop`: stop the gateway and the execution core. External
@@ -327,6 +372,18 @@ async fn run_harness(
         return Err(io::Error::other(format!(
             "local ARC decisions read only Claude Code, OpenCode, Pi and omp turns, not \
              {harness}'s; set `routing.decisions` to `hosted` to run {harness}"
+        )));
+    }
+    if harness == "claude"
+        && settings
+            .routing
+            .as_ref()
+            .is_some_and(|routing| routing.classifier_model.is_none())
+    {
+        return Err(io::Error::other(format!(
+            "{}: `routing.classifier_model` is required to run Claude Code in local mode: \
+             it serves Claude Code's auto-mode safety checks",
+            settings.file.display()
         )));
     }
     let (home, paths) = local_paths()?;
@@ -500,10 +557,11 @@ async fn launch(
             model.model, settings.endpoints[&model.endpoint].base_url
         ));
     }
-    say(format!(
-        "Auto-mode classifier: {} (Claude Code's safety checks)",
-        routing.classifier_model
-    ));
+    if let Some(classifier) = &routing.classifier_model {
+        say(format!(
+            "Auto-mode classifier: {classifier} (Claude Code's safety checks)"
+        ));
+    }
     say(format!("Rayline key: the saved key for {}", hosted.name()));
     // One router call before reporting ready: a refused key or an
     // unreachable router fails here, not on the harness's first turn. Local
@@ -527,13 +585,14 @@ async fn launch(
         .arg(paths.ready())
         .arg("--router-url")
         .arg(&hosted.base_url)
-        .arg("--classifier-model")
-        .arg(&routing.classifier_model)
         .stdin(Stdio::null())
         .stdout(Stdio::from(log.try_clone()?))
         .stderr(Stdio::from(log));
     if let Some(env_name) = &settings.env {
         command.arg("--env-name").arg(env_name);
+    }
+    if let Some(classifier) = &routing.classifier_model {
+        command.arg("--classifier-model").arg(classifier);
     }
     if let Some(arc) = &local_arc {
         command
@@ -561,6 +620,10 @@ async fn launch(
             config: config_file,
             env: settings.env.clone(),
             decisions: Some(DecisionsSource::of(settings)),
+            decisions_model: settings
+                .routing
+                .as_ref()
+                .map(|routing| routing.decisions_model.clone()),
         };
         write_private_json(
             &paths.supervisor(),
@@ -1275,7 +1338,12 @@ fn running(paths: &Paths) -> io::Result<Option<Supervisor>> {
 
 /// Remove what a local process that is no longer running left behind.
 fn clear_state(paths: &Paths) -> io::Result<()> {
-    for path in [paths.ready(), paths.token(), paths.supervisor()] {
+    for path in [
+        paths.ready(),
+        paths.token(),
+        paths.routes_token(),
+        paths.supervisor(),
+    ] {
         match fs::remove_file(path) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -1951,6 +2019,7 @@ mod tests {
             mode: crate::config::Mode::LocalFile(&file),
             env: None,
             harness_protocol: None,
+            decisions: None,
         })
         .unwrap();
         let withheld = [
@@ -2259,8 +2328,69 @@ mod tests {
             mode: crate::config::Mode::LocalFile(&file),
             env,
             harness_protocol: None,
+            decisions: None,
         })
         .unwrap()
+    }
+
+    #[test]
+    fn status_json_names_the_routes_url_and_token_file_with_local_decisions_only() {
+        let paths = Paths {
+            dir: PathBuf::from("/home/u/.rayline/local"),
+        };
+        let mut running = Supervisor {
+            pid: 7,
+            config: PathBuf::from("/home/u/.config/rayline/settings.json"),
+            env: None,
+            decisions: Some(DecisionsSource::Local {
+                repo: "rayline-ai/ARC-1.0".to_owned(),
+                revision: "0".repeat(40),
+                manifest_sha256: "0".repeat(64),
+                dir: None,
+            }),
+            decisions_model: Some("arc-swift-1.0".to_owned()),
+        };
+        let state = json!({"listen_url": "http://127.0.0.1:5000",
+                           "routes_url": "http://127.0.0.1:5001/v1/routes"});
+        assert_eq!(
+            status_json(&running, &state, &paths).unwrap(),
+            json!({
+                "running": true,
+                "pid": 7,
+                "url": "http://127.0.0.1:5000",
+                "config": "/home/u/.config/rayline/settings.json",
+                "environment": "prod",
+                "decisions": "local",
+                "decisions_model": "arc-swift-1.0",
+                "routes": {
+                    "url": "http://127.0.0.1:5001/v1/routes",
+                    "token_file": "/home/u/.rayline/local/routes-token",
+                },
+            })
+        );
+        running.decisions = Some(DecisionsSource::Hosted);
+        let hosted = status_json(
+            &running,
+            &json!({"listen_url": "http://127.0.0.1:5000"}),
+            &paths,
+        )
+        .unwrap();
+        assert_eq!(hosted["decisions"], "hosted");
+        assert!(hosted.get("routes").is_none());
+    }
+
+    #[tokio::test]
+    async fn claude_code_needs_a_classifier_model_before_anything_starts() {
+        let dir = temp_dir("no-classifier");
+        let mut settings = local_settings(&dir, "a.json", None);
+        if let Some(routing) = settings.routing.as_mut() {
+            routing.classifier_model = None;
+        }
+        let error = run_harness(&settings, "claude", &[])
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("routing.classifier_model"), "{error}");
     }
 
     #[cfg(windows)]
@@ -2337,6 +2467,7 @@ mod tests {
             config: fs::canonicalize(&started.file).unwrap(),
             env: None,
             decisions: Some(DecisionsSource::of(&started)),
+            decisions_model: None,
         };
         supervisor.check_serves(&started).unwrap();
         assert_eq!(supervisor.decisions, Some(DecisionsSource::Hosted));
@@ -2428,6 +2559,7 @@ mod tests {
                 config: PathBuf::from("/c.json"),
                 env: Some("dev".to_owned()),
                 decisions: Some(DecisionsSource::Hosted),
+                decisions_model: None,
             })
         );
         let error = record(u64::from(u32::MAX)).unwrap_err().to_string();

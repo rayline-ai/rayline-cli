@@ -401,3 +401,48 @@ async fn only_loopback_callers_with_the_access_token_are_answered() {
     let seen = harness.seen.recv().await.unwrap();
     assert_eq!(seen.authorization.as_deref(), Some("Bearer upstream-key"));
 }
+
+#[tokio::test]
+async fn the_decide_token_asks_for_routes_and_health_only() {
+    let harness = harness_with(FakeDecider::default(), catalog(), |config| {
+        config.access_token = Some("local-secret".to_owned());
+        config.decide_token = Some("decide-secret".to_owned());
+        config.upstream_authorization = Some("Bearer upstream-key".to_owned());
+    })
+    .await;
+    let status = |request: reqwest::RequestBuilder| async move {
+        request
+            .bearer_auth("decide-secret")
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .as_u16()
+    };
+    let base = &harness.base;
+    // Nothing is forwarded upstream with the router's credential.
+    assert_eq!(
+        status(
+            harness
+                .client
+                .post(format!("{base}/v1/messages"))
+                .body("{}")
+        )
+        .await,
+        403
+    );
+    assert_eq!(
+        status(harness.client.get(format!("{base}/v1/models"))).await,
+        403
+    );
+    assert_eq!(
+        status(harness.client.get(format!("{base}/health"))).await,
+        200
+    );
+    // Admitted to decide: a body it can't read is refused for that, not
+    // for the token.
+    assert_eq!(
+        status(harness.client.post(format!("{base}/v1/routes")).body("[]")).await,
+        400
+    );
+}

@@ -222,6 +222,7 @@ mod tests {
             mode: crate::config::Mode::LocalFile(&file),
             env: None,
             harness_protocol: None,
+            decisions: None,
         })
         .unwrap();
         let _ = std::fs::remove_dir_all(&dir);

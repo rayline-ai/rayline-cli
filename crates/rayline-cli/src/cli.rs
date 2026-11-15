@@ -114,21 +114,29 @@ Commands:
 ";
 
 const LOCAL_START_HELP: &str = "\
-Usage: rayline local start [--config <file>]
+Usage: rayline local start [--config <file>] [--decisions <local|hosted>]
 
 Start the local process from ~/.config/rayline/settings.json, or from <file>.
-The config must have a `routing` section.
+The config must have a `routing` section, except with `--decisions local`.
 
 Options:
-  --config <file>  Read the config from <file> instead of the default file
-  --help           Show this message and exit
+  --config <file>                Read the config from <file> instead of the default file
+  --decisions <local|hosted>     Where decisions are made, over `routing.decisions`;
+                                 `local` with no `routing` uses arc-swift-1.0 and
+                                 arc-policy.prefer-local.v1
+  --help                         Show this message and exit
 ";
 
 const LOCAL_STATUS_HELP: &str = "\
-Usage: rayline local status
+Usage: rayline local status [--json]
 
 Show whether the local process is running, its address, the config file and
 the environment it was started from.
+
+Options:
+  --json  Print it as JSON, with where decisions are made and, with local
+          decisions, the local Routes API URL and its token file
+  --help  Show this message and exit
 ";
 
 const LOCAL_STOP_HELP: &str = "\
@@ -204,8 +212,12 @@ pub(crate) enum Local {
     /// `--config <file>`, or `None` for the default file.
     Start {
         config: Option<PathBuf>,
+        /// `--decisions`, over `routing.decisions`.
+        decisions: Option<crate::config::Decisions>,
     },
-    Status,
+    Status {
+        json: bool,
+    },
     Stop,
 }
 
@@ -547,7 +559,7 @@ pub(crate) fn parse(argv: &[OsString]) -> Result<Parsed, UsageError> {
                         Err(help) => return Ok(Parsed::Help(help)),
                     },
                     "local" => match parse_local(&mut args)? {
-                        Ok(Local::Status) if env.is_some() => {
+                        Ok(Local::Status { .. }) if env.is_some() => {
                             return Err(env_not_read(LOCAL_STATUS));
                         }
                         Ok(Local::Stop) if env.is_some() => return Err(env_not_read(LOCAL_STOP)),
@@ -617,7 +629,7 @@ fn parse_local(args: &mut Args<'_>) -> Result<OrHelp<Local>, UsageError> {
     let (local, help) = match args.next_str(LOCAL)? {
         None | Some("--help") => return Ok(Err(LOCAL_HELP)),
         Some("start") => return parse_local_start(args),
-        Some("status") => (Local::Status, LOCAL_STATUS),
+        Some("status") => return parse_local_status(args),
         Some("stop") => (Local::Stop, LOCAL_STOP),
         Some(arg) if arg.starts_with('-') => return Err(unexpected(LOCAL, arg)),
         Some(arg) => return Err(LOCAL.error(unknown("local command", arg))),
@@ -627,6 +639,7 @@ fn parse_local(args: &mut Args<'_>) -> Result<OrHelp<Local>, UsageError> {
 
 fn parse_local_start(args: &mut Args<'_>) -> Result<OrHelp<Local>, UsageError> {
     let mut config = None;
+    let mut decisions = None;
     while let Some(arg) = args.next_str(LOCAL_START)? {
         let (name, inline) = split_option(arg);
         match name {
@@ -634,11 +647,32 @@ fn parse_local_start(args: &mut Args<'_>) -> Result<OrHelp<Local>, UsageError> {
                 let file = args.value(name, inline, LOCAL_START)?;
                 set_once(&mut config, PathBuf::from(file), name, LOCAL_START)?;
             }
+            "--decisions" => {
+                let value = args.value(name, inline, LOCAL_START)?;
+                let parsed = crate::config::Decisions::parse(value).ok_or_else(|| {
+                    LOCAL_START.error(format!(
+                        "--decisions must be `local` or `hosted`, not `{value}`"
+                    ))
+                })?;
+                set_once(&mut decisions, parsed, name, LOCAL_START)?;
+            }
             "--help" if inline.is_none() => return Ok(Err(LOCAL_START_HELP)),
             _ => return Err(unexpected(LOCAL_START, arg)),
         }
     }
-    Ok(Ok(Local::Start { config }))
+    Ok(Ok(Local::Start { config, decisions }))
+}
+
+fn parse_local_status(args: &mut Args<'_>) -> Result<OrHelp<Local>, UsageError> {
+    let mut json = false;
+    while let Some(arg) = args.next_str(LOCAL_STATUS)? {
+        match arg {
+            "--json" if !json => json = true,
+            "--help" => return Ok(Err(LOCAL_STATUS_HELP)),
+            _ => return Err(unexpected(LOCAL_STATUS, arg)),
+        }
+    }
+    Ok(Ok(Local::Status { json }))
 }
 
 /// `top [--json]`: `None` asks for its help.
@@ -1706,20 +1740,49 @@ mod tests {
     #[test]
     fn local_starts_from_the_default_file_or_one_given() {
         for (args, local) in [
-            (&["local", "start"][..], Local::Start { config: None }),
+            (
+                &["local", "start"][..],
+                Local::Start {
+                    config: None,
+                    decisions: None,
+                },
+            ),
             (
                 &["local", "start", "--config", "/tmp/hybrid.json"],
                 Local::Start {
                     config: Some(PathBuf::from("/tmp/hybrid.json")),
+                    decisions: None,
                 },
             ),
             (
                 &["local", "start", "--config=/tmp/hybrid.json"],
                 Local::Start {
                     config: Some(PathBuf::from("/tmp/hybrid.json")),
+                    decisions: None,
                 },
             ),
-            (&["local", "status"], Local::Status),
+            (&["local", "status"], Local::Status { json: false }),
+            (&["local", "status", "--json"], Local::Status { json: true }),
+            (
+                &["local", "start", "--decisions", "local"],
+                Local::Start {
+                    config: None,
+                    decisions: Some(crate::config::Decisions::Local),
+                },
+            ),
+            (
+                &[
+                    "local",
+                    "start",
+                    "--decisions=hosted",
+                    "--config",
+                    "/tmp/h.json",
+                ],
+                Local::Start {
+                    config: Some(PathBuf::from("/tmp/h.json")),
+                    decisions: Some(crate::config::Decisions::Hosted),
+                },
+            ),
             (&["local", "stop"], Local::Stop),
         ] {
             assert_eq!(command(args).1, Command::Local(local), "{args:?}");
@@ -1728,7 +1791,10 @@ mod tests {
             command(&["--env", "dev", "local", "start"]),
             (
                 Some("dev".to_owned()),
-                Command::Local(Local::Start { config: None })
+                Command::Local(Local::Start {
+                    config: None,
+                    decisions: None,
+                })
             )
         );
         assert_error(
