@@ -418,9 +418,19 @@ async fn handle(state: Arc<Gateway>, request: Request<Incoming>) -> Response<Bod
         request.uri(),
         request.headers(),
     ) {
+        tracing::warn!(
+            status = response.status().as_u16(),
+            path = request.uri().path(),
+            "the gateway refused an untrusted request"
+        );
         return response;
     }
     if let Err(error) = state.inbound.check(&Method::POST, "/", request.headers()) {
+        tracing::warn!(
+            status = error.status.as_u16(),
+            path = request.uri().path(),
+            "the gateway refused a request without its token"
+        );
         return error_response(error.status, error.message);
     }
     if request.method() == Method::GET && request.uri().path() == "/v1/router/top/snapshot" {
@@ -569,7 +579,7 @@ async fn forward(state: &Gateway, request: Request<Incoming>) -> Result<Response
                     .get("x-rayline-route-id")
                     .and_then(|value| value.to_str().ok())
                     .unwrap_or("-"),
-                "the core refused the request"
+                "the core answered with an error before any output"
             );
             let response = buffered_response(
                 state,
