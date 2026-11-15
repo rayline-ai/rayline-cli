@@ -246,6 +246,14 @@ pub struct Parsed {
     pub restate: Restate,
 }
 
+/// Whether this local router decides for `model`, as a request names it.
+pub fn serves_model(model: &str) -> bool {
+    matches!(
+        resolve_model(Some(&Value::String(model.to_owned()))),
+        Ok(Some(_))
+    )
+}
+
 fn resolve_model(requested: Option<&Value>) -> Result<Option<Tier>, Refusal> {
     let Some(requested) = requested.and_then(Value::as_str).filter(|m| !m.is_empty()) else {
         return Err(Refusal::new(

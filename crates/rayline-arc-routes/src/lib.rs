@@ -33,7 +33,7 @@ pub use execution::{
 };
 pub use parse::{
     CacheContext, DecideInput, Legs, OperatingPoint, PackageRef, ParseContext, Parsed,
-    RequestHeaders, RequestText, Restate, RoutingPrices, Selection, Tier, parse,
+    RequestHeaders, RequestText, Restate, RoutingPrices, Selection, Tier, parse, serves_model,
 };
 pub use policy::{Overrides, Policy, Schedule, Selection as SelectionThresholds};
 pub use server::{DecideFuture, Decider, Router, RouterConfig, RouterError};

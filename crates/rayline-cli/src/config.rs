@@ -820,14 +820,26 @@ impl<'a> Doc<'a> {
         };
         let required =
             |value: Option<String>, key: &str| value.ok_or_else(|| self.err(key, "is required"));
+        let decisions = routing.decisions.unwrap_or(Decisions::Hosted);
+        let decisions_model = required(routing.decisions_model, "routing.decisions_model")?;
+        if decisions == Decisions::Local && !rayline_arc_routes::serves_model(&decisions_model) {
+            return Err(self.err(
+                "routing.decisions_model",
+                format!(
+                    "is `{decisions_model}`, which local decisions don't make: they make \
+                     `arc-swift-1.0` and `arc-sage-1.0`. Use one of those, or set \
+                     `routing.decisions` to `hosted`"
+                ),
+            ));
+        }
         Ok(Some(Routing {
-            decisions_model: required(routing.decisions_model, "routing.decisions_model")?,
+            decisions_model,
             classifier_model: required(routing.classifier_model, "routing.classifier_model")?,
             policy: Policy {
                 preset: required(routing.preset, "routing.policy.preset")?,
                 overrides: routing.overrides,
             },
-            decisions: routing.decisions.unwrap_or(Decisions::Hosted),
+            decisions,
             arc_release: routing.arc_release,
         }))
     }
@@ -2070,6 +2082,18 @@ mod tests {
         assert_eq!(plain.arc_release, None);
         let local = routing(json!({"decisions": "local"})).expect("load");
         assert_eq!(local.decisions, Decisions::Local);
+        for model in ["arc-swift-1.0", "arc-sage-1.0"] {
+            routing(json!({"decisions": "local", "decisions_model": model})).expect(model);
+        }
+        let (key, problem) = key_error(routing(
+            json!({"decisions": "local", "decisions_model": "arc-1.0"}),
+        ));
+        assert_eq!(key, "routing.decisions_model");
+        assert!(
+            problem.contains("`arc-1.0`") && problem.contains("`hosted`"),
+            "{problem}"
+        );
+        routing(json!({"decisions_model": "arc-1.0"})).expect("hosted decides arc-1.0");
         assert_eq!(
             key_error(routing(json!({"decisions": "router"}))),
             (

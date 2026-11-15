@@ -112,6 +112,10 @@ Harness-specific options and subcommands are **kept for review** (section 9).
 
    The core passes on the service's two headers separately: `Retry-After` only as delta-seconds, and `X-Should-Retry` only as exactly `true` or `false`. A refusal can carry one without the other, and the local process uses the one it gets. A missing header takes its own default, and only for an unavailable or busy service. Without `retry-after`, the local process waits about 5 seconds for its resend and tells the harness `retry-after: 30`. Without `x-should-retry`, the turn may be resent. When the service doesn't answer, the core passes on neither.
 
+   With `decisions` `local`, the error says local ARC refused or couldn't decide the turn on this machine, and a refusal points at `routing.decisions_model` and `models`.
+9. When the core fails a turn before any output because it couldn't reach the endpoint the decision selected, the local process doesn't resend it, and the harness gets 502 with `x-should-retry: false`. The error names Rayline cloud when every model is Rayline cloud's, else "Rayline cloud, or an inference server in `endpoints`", and says to check the network and any `HTTPS_PROXY` the local process was started with.
+10. Every request the core or the local process refuses is logged in `runtime.log` with its status, path and error type, never its content.
+
 ### 3.4 `rayline top`
 
 ```
@@ -251,7 +255,7 @@ Required for local mode. Its presence in a `--config` file selects local mode.
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
-| `decisions_model` | string | yes | Which ARC product makes decisions (for example `arc-swift-1.0`). No default in code. |
+| `decisions_model` | string | yes | Which ARC product makes decisions (for example `arc-swift-1.0`). No default in code. With `decisions` `local`, it must be `arc-swift-1.0` or `arc-sage-1.0` (or their short spellings); any other value fails load naming the key. |
 | `classifier_model` | string | yes | The model that serves Claude Code's auto-mode safety classifier calls, sent to Rayline cloud. No default in code. |
 | `policy.preset` | non-empty string | yes | ARC's preset id (`arc-policy.package-default.v1`, `arc-policy.hybrid-default.v1` or `arc-policy.prefer-local.v1`). Sent to ARC unchanged; no short names. |
 | `policy.overrides` | object | no | ARC's own `routing.policy.overrides` shape, sent to ARC unchanged. ARC validates it. |
