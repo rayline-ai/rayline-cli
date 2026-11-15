@@ -115,6 +115,12 @@ pub enum MetricsUpdate {
         executed_control_id: Option<String>,
         wire_model: Option<String>,
     },
+    /// A streamed response's first event: the provider has begun its
+    /// answer, though it may hold back the output (a tool call's input,
+    /// say) and send it in one burst at the end.
+    ResponseStarted {
+        request_id: String,
+    },
     FirstToken {
         request_id: String,
     },
@@ -250,6 +256,13 @@ impl RouterMetrics {
                         record.merge_execution_identity(&update);
                     }
                 }
+            }
+            MetricsUpdate::ResponseStarted { request_id } => {
+                let mut active = self.active.lock().expect("metrics active lock poisoned");
+                let record = active
+                    .entry(request_id.clone())
+                    .or_insert_with(|| RequestRecord::new(request_id.clone(), now));
+                record.response_started_at_unix_ms.get_or_insert(now);
             }
             MetricsUpdate::FirstToken { request_id } => {
                 let mut active = self.active.lock().expect("metrics active lock poisoned");
@@ -451,6 +464,7 @@ struct RequestRecord {
     policy: Option<String>,
     task_class: Option<String>,
     started_at_unix_ms: u64,
+    response_started_at_unix_ms: Option<u64>,
     first_token_at_unix_ms: Option<u64>,
     completed_at_unix_ms: Option<u64>,
     input_tokens: Option<u64>,
@@ -462,6 +476,22 @@ struct RequestRecord {
     prompt_tps: Option<f64>,
     status_code: Option<u16>,
     error: Option<String>,
+}
+
+/// How long the output took: from the first output, unless it all came in
+/// a burst at the end. A provider that holds a tool call's input back sends
+/// it within milliseconds of the end, and timing from its first byte would
+/// rate hundreds of tokens over a few milliseconds; such output is timed
+/// from the response's first event. A burst is output whose first token came
+/// in the last quarter of the response.
+fn generation_ms(response_started: Option<u64>, first: u64, end: u64) -> u64 {
+    let from_first = end.saturating_sub(first);
+    match response_started {
+        Some(started) if from_first.saturating_mul(4) < end.saturating_sub(started) => {
+            end.saturating_sub(started)
+        }
+        _ => from_first,
+    }
 }
 
 impl RequestRecord {
@@ -507,6 +537,7 @@ impl RequestRecord {
             policy: None,
             task_class: None,
             started_at_unix_ms: now,
+            response_started_at_unix_ms: None,
             first_token_at_unix_ms: None,
             completed_at_unix_ms: None,
             input_tokens: None,
@@ -544,7 +575,8 @@ impl RequestRecord {
             .output_tokens
             .zip(self.first_token_at_unix_ms)
             .and_then(|(tokens, first)| {
-                let generation_ms = completed_or_now.saturating_sub(first);
+                let generation_ms =
+                    generation_ms(self.response_started_at_unix_ms, first, completed_or_now);
                 (generation_ms > 0).then(|| tokens as f64 / (generation_ms as f64 / 1000.0))
             });
         RequestSnapshot {
@@ -859,6 +891,35 @@ mod tests {
         let snapshot = record.snapshot(5_000);
         assert_eq!(snapshot.prefill_tps, Some(500.0));
         assert_eq!(snapshot.output_tps, Some(100.0));
+    }
+
+    #[test]
+    fn output_held_back_to_the_end_is_timed_from_the_response_start() {
+        let mut record = RequestRecord::new("req-1".to_owned(), 1_000);
+        record.target = Some("remote".to_owned());
+        record.response_started_at_unix_ms = Some(1_600);
+        record.first_token_at_unix_ms = Some(5_390);
+        record.completed_at_unix_ms = Some(5_400);
+        record.output_tokens = Some(760);
+
+        let snapshot = record.snapshot(6_000);
+        assert_eq!(snapshot.ttft_ms, Some(4_390));
+        assert_eq!(snapshot.output_tps, Some(200.0));
+
+        // Output that streamed is timed from its first token, even when the
+        // response began well before it.
+        record.response_started_at_unix_ms = Some(2_000);
+        record.first_token_at_unix_ms = Some(3_400);
+        record.output_tokens = Some(500);
+        assert_eq!(record.snapshot(6_000).output_tps, Some(250.0));
+        // A response start after the first token never widens the window.
+        record.response_started_at_unix_ms = Some(4_000);
+        assert_eq!(record.snapshot(6_000).output_tps, Some(250.0));
+        // Exactly a quarter of the response is not a burst.
+        record.response_started_at_unix_ms = Some(1_400);
+        record.first_token_at_unix_ms = Some(4_400);
+        record.output_tokens = Some(1_000);
+        assert_eq!(record.snapshot(6_000).output_tps, Some(1_000.0));
     }
 
     #[test]

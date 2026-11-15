@@ -114,6 +114,7 @@ fn each_protocol_reports_usage_and_cache_across_chunk_splits() {
                         got_cache = cache_tokens.or(got_cache)
                     }
                     MetricsUpdate::FirstToken { .. } => first += 1,
+                    MetricsUpdate::ResponseStarted { .. } => {}
                     _ => panic!("observer emitted lifecycle/identity update"),
                 }
             }
@@ -130,10 +131,20 @@ fn only_generated_deltas_mark_first_token_once() {
     let sink = Arc::new(Capture::default());
     let mut observer = ResponseObserver::new(sink.clone(), "r".into(), true);
     observer.observe(b": heartbeat\n\ndata: {\"type\":\"message_start\",\"message\":{}}\n\ndata: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\ndata: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\ndata: {\"type\":\"response.output_item.added\"}\n\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"signature_delta\",\"signature\":\"metadata\"}}\n\n");
-    assert!(sink.0.lock().expect("capture lock").is_empty());
+    // The first event starts the response; nothing before output is a token.
+    assert!(matches!(
+        sink.0.lock().expect("capture lock").as_slice(),
+        [MetricsUpdate::ResponseStarted { .. }]
+    ));
     observer.observe(b"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{}\"}}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n");
     assert!(!observer.finish());
-    assert_eq!(sink.0.lock().expect("capture lock").len(), 1);
+    assert!(matches!(
+        sink.0.lock().expect("capture lock").as_slice(),
+        [
+            MetricsUpdate::ResponseStarted { .. },
+            MetricsUpdate::FirstToken { .. }
+        ]
+    ));
 }
 
 #[test]
@@ -156,7 +167,11 @@ fn failures_and_truncation_do_not_leak_error_content() {
         let (failed, updates, validity) = observe(body.as_bytes(), sse, 1);
         assert!(failed, "{body}");
         assert_eq!(validity, ResponseValidity::Invalid);
-        assert!(updates.is_empty());
+        assert!(
+            updates
+                .iter()
+                .all(|update| matches!(update, MetricsUpdate::ResponseStarted { .. }))
+        );
     }
     for (body, expected) in [
         (
@@ -185,7 +200,10 @@ fn failures_and_truncation_do_not_leak_error_content() {
         let (failed, updates, validity) = observe(body, true, 1);
         assert!(!failed);
         assert_eq!(validity, ResponseValidity::Valid);
-        assert!(updates.is_empty());
+        assert!(matches!(
+            updates.as_slice(),
+            [MetricsUpdate::ResponseStarted { .. }]
+        ));
     }
 }
 
