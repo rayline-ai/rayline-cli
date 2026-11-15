@@ -190,6 +190,20 @@ pub struct Download<'a> {
     /// The commit is a pin, not the repo's `main`: `refs/main` is left as
     /// it is.
     pub pinned: bool,
+    /// Told the file's bytes on disk so far: once before the first new
+    /// byte (a resumed download's bytes already there), then as they
+    /// arrive.
+    pub on_bytes: Option<OnBytes<'a>>,
+}
+
+/// A download's progress callback: the file's bytes on disk so far.
+#[derive(Clone, Copy)]
+pub struct OnBytes<'a>(pub &'a dyn Fn(u64));
+
+impl std::fmt::Debug for OnBytes<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("OnBytes")
+    }
 }
 
 /// Whether a bearer token may go to `base_url`: https, or http to a
@@ -361,7 +375,13 @@ pub fn download_to_hf_cache_at(
         download_url, tmp_path
     );
 
-    download_file_to_path(&download_url, token, download.max_bytes, &tmp_path)?;
+    download_file_to_path(
+        &download_url,
+        token,
+        download.max_bytes,
+        download.on_bytes,
+        &tmp_path,
+    )?;
 
     info!("[HfCache] Computing SHA256 for {:?}", tmp_path);
     let sha256 = compute_sha256(&tmp_path)?;
@@ -492,6 +512,7 @@ fn download_file_to_path(
     url: &str,
     token: Option<&str>,
     max_bytes: Option<u64>,
+    on_bytes: Option<OnBytes<'_>>,
     dest_path: &Path,
 ) -> Result<u64, String> {
     info!("[HfCache] Downloading {} -> {:?}", url, dest_path);
@@ -528,7 +549,7 @@ fn download_file_to_path(
     let mut attempt: u32 = 0;
     loop {
         attempt += 1;
-        match attempt_download(url, token, max_bytes, dest_path, &client) {
+        match attempt_download(url, token, max_bytes, on_bytes, dest_path, &client) {
             Ok(bytes) => return Ok(bytes),
             Err(DownloadAttemptError::Fatal(msg)) => {
                 let _ = fs::remove_file(dest_path);
@@ -554,6 +575,7 @@ fn attempt_download(
     url: &str,
     token: Option<&str>,
     max_bytes: Option<u64>,
+    on_bytes: Option<OnBytes<'_>>,
     dest_path: &Path,
     client: &reqwest::blocking::Client,
 ) -> Result<u64, DownloadAttemptError> {
@@ -643,6 +665,10 @@ fn attempt_download(
         (file, 0u64)
     };
 
+    // Before any new bytes: what a resumed download already has.
+    if let Some(OnBytes(on_bytes)) = on_bytes {
+        on_bytes(bytes_downloaded);
+    }
     let mut reader = response;
     let mut buf = [0u8; 65536];
 
@@ -678,6 +704,9 @@ fn attempt_download(
                 "the download is larger than the {} bytes expected",
                 max_bytes.unwrap_or_default()
             )));
+        }
+        if let Some(OnBytes(on_bytes)) = on_bytes {
+            on_bytes(bytes_downloaded);
         }
     }
 
@@ -837,7 +866,7 @@ mod tests {
             }
         });
 
-        let downloaded = download_file_to_path(&url, None, None, &dest_path).unwrap();
+        let downloaded = download_file_to_path(&url, None, None, None, &dest_path).unwrap();
 
         server.join().unwrap();
         let recorded = requests.lock().unwrap();
