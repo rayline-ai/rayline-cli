@@ -207,8 +207,8 @@ pub enum Mode<'a> {
     /// `rayline run` with neither flag: the default file, cloud mode.
     Cloud,
     /// A command that uses no `routing` (`auth`, `top`, `update`, `local
-    /// status`, `local stop`): the default file, cloud mode, and the
-    /// `RAYLINE_ROUTING_*` overrides aren't read.
+    /// status`, `local stop`): the default file, cloud mode, and neither
+    /// `routing` nor its `RAYLINE_ROUTING_*` overrides are read.
     NoRouting,
     /// `rayline run --local` and `rayline local start`: the default file,
     /// local mode.
@@ -370,8 +370,10 @@ fn load_from(
         }),
         (routing, _) => routing,
     };
+    // A command that uses no `routing` neither reads nor checks it: its
+    // required keys may come from env overrides only a run reads.
     let mut routing = if options.mode == Mode::NoRouting {
-        raw_routing
+        None
     } else {
         apply_routing_overrides(raw_routing, env)?
     };
@@ -2031,6 +2033,18 @@ mod tests {
             &[("RAYLINE_ROUTING_CLASSIFIER_MODEL", "c")],
         )
         .expect("status and stop load");
+        // Nor a file `routing` whose required keys only env gives.
+        let partial = temp_home();
+        let mut doc = example();
+        remove(&mut doc, &["routing", "classifier_model"]);
+        remove(&mut doc, &["routing", "decisions_model"]);
+        write_default(&partial, &doc);
+        assert!(
+            load(&partial, opts(Mode::NoRouting))
+                .expect("partial routing")
+                .routing
+                .is_none()
+        );
         // Env overrides refine the defaults; the flag still wins over
         // `RAYLINE_ROUTING_DECISIONS`.
         let routing = load_env(
