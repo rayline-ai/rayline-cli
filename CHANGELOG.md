@@ -13,8 +13,8 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   API. On first use it downloads the release and about 1 GB of encoder weights
   and checks them against their pins. See [Local mode](docs/local-mode.md).
 - **The local ARC encoder ships with Rayline on macOS arm64.** The installers,
-  `rayline update` and Homebrew install `rayline-arc-encoder` and its license
-  beside `rayline`, verified against the release's `SHA256SUMS`.
+  `rayline update` and Homebrew install `rayline-arc-encoder` beside `rayline`,
+  with its license, verified against the release's `SHA256SUMS`.
 
 ### Changed
 
