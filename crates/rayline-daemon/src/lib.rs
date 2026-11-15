@@ -13,6 +13,8 @@ mod hybrid_classifier;
 mod hybrid_counter;
 mod hybrid_metrics;
 
+pub use hybrid::ROUTES_TOKEN_FILE;
+
 /// Run the local process with `args`, the options `rayline` passes after its
 /// internal entry point, until it is told to stop.
 pub async fn run(args: Vec<OsString>) -> Result<()> {

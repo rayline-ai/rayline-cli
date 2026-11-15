@@ -128,7 +128,7 @@ Every entry works the same way. No setting marks a model as local.
 | Key | Type | Required | Meaning |
 |---|---|---|---|
 | `decisions_model` | string | yes | The ARC product that makes the decisions, for example `arc-swift-1.0`. |
-| `classifier_model` | string | yes | The model that serves Claude Code's auto-mode safety classifier calls. These calls go to Rayline cloud. |
+| `classifier_model` | string | to run Claude Code | The model that serves Claude Code's auto-mode safety classifier calls. These calls go to Rayline cloud. |
 | `policy.preset` | non-empty string | yes | The id of an ARC preset: `arc-policy.package-default.v1`, `arc-policy.hybrid-default.v1` or `arc-policy.prefer-local.v1`. It is sent to ARC unchanged. |
 | `policy.overrides` | object | no | Overrides in ARC's own `routing.policy.overrides` shape, sent to ARC unchanged. ARC validates them. |
 | `decisions` | `local` or `hosted` | no, default `hosted` | `hosted`: Rayline cloud's ARC decides. Set `local` to decide on this machine: ARC runs inside the local process, and no routing decision goes to Rayline cloud. |
@@ -180,8 +180,8 @@ rayline local stop
 
 | Command | Does |
 |---|---|
-| `rayline local start [--config <file>]` | Starts the local process from the default config file, or from `<file>`. The config must have a `routing` section. |
-| `rayline local status` | Shows whether the local process is running, its address, and the config file and environment it was started from. |
+| `rayline local start [--config <file>] [--decisions <local\|hosted>]` | Starts the local process from the default config file, or from `<file>`. The config must have a `routing` section, except with `--decisions local`. `--decisions` overrides `routing.decisions`. |
+| `rayline local status [--json]` | Shows whether the local process is running, its address, and the config file and environment it was started from. `--json` prints it as JSON (see [Local decisions for your own Pi](#local-decisions-for-your-own-pi)). |
 | `rayline local stop` | Stops the local process. Your inference servers keep running. |
 | `rayline run <HARNESS> --local` | Runs the harness in local mode with `~/.config/rayline/settings.json`. Starts the local process if it isn't running. |
 | `rayline run <HARNESS> --config <file>` | Uses `<file>` instead of the default config, never merged with it. The run is in local mode if `<file>` has a `routing` section, and in cloud mode if it doesn't. |
@@ -193,6 +193,59 @@ rayline local stop
 - A local-mode run whose config file differs from the running process's file
   is an error. To use another file, run `rayline local stop`, then start again
   with that file.
+
+## Local decisions for your own Pi
+
+The [pi-arc](https://github.com/rayline-ai/pi-arc) extension can ask the
+local process for each turn's model while you keep using your own Pi, with
+its own extensions, keys and models. This is a preview with the same limits
+as `local` decisions: macOS on Apple Silicon only.
+
+```bash
+rayline auth login
+rayline local start --decisions local
+```
+
+`--decisions local` needs no `settings.json`. Without a `routing` section it
+uses `arc-swift-1.0` and the `arc-policy.prefer-local.v1` preset.
+`routing.classifier_model` is needed only to run Claude Code.
+
+pi-arc finds the local Routes API with `rayline local status --json`:
+
+```json
+{
+  "running": true,
+  "pid": 40049,
+  "url": "http://127.0.0.1:57693",
+  "config": "/Users/you/.config/rayline/settings.json",
+  "environment": "prod",
+  "decisions": "local",
+  "decisions_model": "arc-swift-1.0",
+  "routes": {
+    "url": "http://127.0.0.1:57696/v1/routes",
+    "token_file": "/Users/you/.rayline/local/routes-token"
+  }
+}
+```
+
+- `routes` appears only with `local` decisions. When nothing runs, the
+  output is `{"running": false}`.
+- The token is never printed. Read it from `token_file` (mode 0600) and send
+  `Authorization: Bearer <token>` to `routes.url`. It admits `POST /v1/routes`
+  only; it can't send anything to Rayline cloud.
+- The URL and token change on every start. Run `rayline local status --json`
+  again after a connection error or a 401.
+- The request is the Routes API request: `model` (`arc-swift-1.0` or
+  `arc-sage-1.0`), `routing.execution`, `routing.policy` and the prices of
+  the models you offer, plus the turn's `system`, `messages` and `tools`.
+  `X-Conversation-Id` and `X-Rayline-Branch-Id` group a conversation's turns;
+  `X-Rayline-Wire-Format` (`anthropic.messages.v1`) says how to read the
+  request.
+- You can offer any model the ARC release knows, including your own local
+  models such as `z-ai/glm-5.3-flash` priced at zero. A model it doesn't know
+  is refused.
+- There is no fallback: when the local process isn't running or can't
+  decide, the turn fails.
 
 ## Watch requests
 
@@ -245,6 +298,7 @@ The local process keeps its state in `~/.rayline/local/`:
 | `runtime.lock` | The lock that keeps it to one local process. |
 | `runtime.log` | The local process's log. |
 | `ready.arc-core.json` | With `local` decisions: the core config pointed at the local routes service. |
+| `routes-token` | With `local` decisions: the token other local programs, such as pi-arc, present to the local Routes API. |
 | `harness/<name>/` | The files Rayline generates for each harness in local mode: `pi`, `hermes`, `omp`, `opencode` and `openclaw`. Cloud mode uses `~/.rayline/harness/<name>/` instead. |
 
 If a local-mode run fails, check `rayline local status` and

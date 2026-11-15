@@ -125,19 +125,23 @@ pub async fn run_argv(original_argv: &[OsString]) -> ExitCode {
             },
             Some(run.launch.protocol()),
         ),
-        cli::Command::Local(cli::Local::Start { config: Some(file) }) => {
-            (config::Mode::LocalFile(file), None)
-        }
-        cli::Command::Local(cli::Local::Start { config: None }) => (config::Mode::Local, None),
+        cli::Command::Local(cli::Local::Start {
+            config: Some(file), ..
+        }) => (config::Mode::LocalFile(file), None),
+        cli::Command::Local(cli::Local::Start { config: None, .. }) => (config::Mode::Local, None),
         cli::Command::Auth(_)
-        | cli::Command::Local(cli::Local::Status | cli::Local::Stop)
+        | cli::Command::Local(cli::Local::Status { .. } | cli::Local::Stop)
         | cli::Command::Top { .. }
-        | cli::Command::Update(_) => (config::Mode::Cloud, None),
+        | cli::Command::Update(_) => (config::Mode::NoRouting, None),
     };
     let settings = match config::load(&config::LoadOptions {
         mode,
         env: env.as_deref(),
         harness_protocol,
+        decisions: match &command {
+            cli::Command::Local(cli::Local::Start { decisions, .. }) => *decisions,
+            _ => None,
+        },
     }) {
         Ok(settings) => settings,
         Err(error) => {
@@ -150,7 +154,7 @@ pub async fn run_argv(original_argv: &[OsString]) -> ExitCode {
         cli::Command::Auth(auth) => run_auth(auth, hosted).await,
         cli::Command::Run(run) if settings.local => run_local(run, &settings).await,
         cli::Command::Local(cli::Local::Start { .. }) => hybrid::start(&settings).await,
-        cli::Command::Local(cli::Local::Status) => hybrid::status().await,
+        cli::Command::Local(cli::Local::Status { json }) => hybrid::status(json).await,
         cli::Command::Local(cli::Local::Stop) => hybrid::stop().await,
         cli::Command::Run(run) => run_cloud(run.launch, hosted).await,
         cli::Command::Top { json } => {

@@ -326,7 +326,18 @@ pub const ROUTES_TOKEN_ENV: &str = "RAYLINE_ARC_ROUTES_TOKEN";
 /// it forwards upstream carry `upstream_authorization` instead.
 pub struct RoutesAccess {
     pub token: String,
+    /// Admits decisions only, for callers other than the core.
+    pub decide_token: String,
     pub upstream_authorization: Option<String>,
+}
+
+/// A fresh 256-bit token.
+fn fresh_token() -> String {
+    format!(
+        "{:032x}{:032x}",
+        rand::random::<u128>(),
+        rand::random::<u128>()
+    )
 }
 
 impl RoutesAccess {
@@ -340,11 +351,8 @@ impl RoutesAccess {
             .filter(|key| !key.is_empty())
             .map(|key| format!("Bearer {key}"));
         Ok(Self {
-            token: format!(
-                "{:032x}{:032x}",
-                rand::random::<u128>(),
-                rand::random::<u128>()
-            ),
+            token: fresh_token(),
+            decide_token: fresh_token(),
             upstream_authorization,
         })
     }
@@ -448,6 +456,7 @@ pub async fn serve_routes(
     let mut config = rayline_arc_routes::RouterConfig::new(catalog, upstream);
     config.salt = format!("{:032x}", rand::random::<u128>());
     config.access_token = Some(access.token);
+    config.decide_token = Some(access.decide_token);
     config.upstream_authorization = access.upstream_authorization;
     let decider = Arc::new(LocalDecider {
         release,

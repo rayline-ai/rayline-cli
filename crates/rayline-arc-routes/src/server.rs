@@ -86,6 +86,10 @@ pub struct RouterConfig {
     /// others are refused 401. Set it whenever anything else can reach the
     /// port (any loopback listener can be reached by every local process).
     pub access_token: Option<String>,
+    /// With [`RouterConfig::access_token`], a second token that admits
+    /// `POST /v1/routes` only: a caller holding it gets decisions but can't
+    /// send anything upstream.
+    pub decide_token: Option<String>,
     /// The `Authorization` value forwarded requests carry upstream in place
     /// of the caller's, when [`RouterConfig::access_token`] is set (the
     /// caller's header then holds the local token, not an upstream
@@ -101,6 +105,7 @@ impl RouterConfig {
             salt: String::new(),
             max_body_bytes: 64 << 20,
             access_token: None,
+            decide_token: None,
             upstream_authorization: None,
         }
     }
@@ -114,7 +119,17 @@ pub struct Router {
     salt: String,
     max_body_bytes: usize,
     access_token: Option<String>,
+    decide_token: Option<String>,
     upstream_authorization: Option<HeaderValue>,
+}
+
+/// What an admitted caller may ask.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Access {
+    /// Every path, forwarded ones included.
+    All,
+    /// `POST /v1/routes` only.
+    Decide,
 }
 
 fn json_response(status: StatusCode, value: &Value) -> Response<Body> {
@@ -188,6 +203,7 @@ impl Router {
             salt: config.salt,
             max_body_bytes: config.max_body_bytes,
             access_token: config.access_token.filter(|token| !token.is_empty()),
+            decide_token: config.decide_token.filter(|token| !token.is_empty()),
             upstream_authorization: match config.upstream_authorization {
                 Some(value) => Some(HeaderValue::from_str(&value).map_err(|_| {
                     RouterError("the upstream authorization is not a header value".to_owned())
@@ -373,11 +389,17 @@ impl Router {
     /// One request: `POST /v1/routes` decided here, `GET /health` answered
     /// here, anything else forwarded.
     pub async fn handle(&self, request: Request<Incoming>) -> Response<Body> {
-        if let Err(refusal) = self.admit(request.headers()) {
-            return refusal_response(&refusal);
-        }
+        let access = match self.admit(request.headers()) {
+            Ok(access) => access,
+            Err(refusal) => return refusal_response(&refusal),
+        };
         match (request.method(), request.uri().path()) {
             (&Method::POST, "/v1/routes") => self.routes(request).await,
+            _ if access == Access::Decide => refusal_response(&Refusal::with_status(
+                403,
+                "forbidden",
+                "This token asks for routes only.",
+            )),
             (&Method::GET, "/health") => json_response(
                 StatusCode::OK,
                 &json!({"status": "ok", "package": {
@@ -391,7 +413,7 @@ impl Router {
     /// naming any host but loopback (DNS rebinding) or carrying an `Origin`
     /// (cross-site fetch) is refused. With an access token, the caller must
     /// also present it.
-    fn admit(&self, headers: &HeaderMap) -> Result<(), Refusal> {
+    fn admit(&self, headers: &HeaderMap) -> Result<Access, Refusal> {
         let forbidden = |message: &str| Refusal::with_status(403, "forbidden", message);
         let host = headers
             .get(HOST)
@@ -409,15 +431,21 @@ impl Router {
                 .and_then(|value| value.to_str().ok())
                 .and_then(|value| value.strip_prefix("Bearer "))
                 .unwrap_or_default();
-            if !same_secret(presented.as_bytes(), token.as_bytes()) {
-                return Err(Refusal::with_status(
-                    401,
-                    "unauthorized",
-                    "A valid local access token is required.",
-                ));
+            if same_secret(presented.as_bytes(), token.as_bytes()) {
+                return Ok(Access::All);
             }
+            if let Some(decide) = &self.decide_token
+                && same_secret(presented.as_bytes(), decide.as_bytes())
+            {
+                return Ok(Access::Decide);
+            }
+            return Err(Refusal::with_status(
+                401,
+                "unauthorized",
+                "A valid local access token is required.",
+            ));
         }
-        Ok(())
+        Ok(Access::All)
     }
 
     /// Serves connections until the listener fails. Bind the listener to

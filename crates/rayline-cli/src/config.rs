@@ -112,7 +112,7 @@ impl Decisions {
         }
     }
 
-    fn parse(value: &str) -> Option<Self> {
+    pub fn parse(value: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|d| d.as_str() == value)
     }
 }
@@ -136,7 +136,8 @@ pub struct ArcRelease {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Routing {
     pub decisions_model: String,
-    pub classifier_model: String,
+    /// Required only when a Claude Code harness runs.
+    pub classifier_model: Option<String>,
     pub policy: Policy,
     pub decisions: Decisions,
     pub arc_release: Option<ArcRelease>,
@@ -205,6 +206,10 @@ pub struct Settings {
 pub enum Mode<'a> {
     /// `rayline run` with neither flag: the default file, cloud mode.
     Cloud,
+    /// A command that uses no `routing` (`auth`, `top`, `update`, `local
+    /// status`, `local stop`): the default file, cloud mode, and neither
+    /// `routing` nor its `RAYLINE_ROUTING_*` overrides are read.
+    NoRouting,
     /// `rayline run --local` and `rayline local start`: the default file,
     /// local mode.
     Local,
@@ -223,7 +228,15 @@ pub struct LoadOptions<'a> {
     pub env: Option<&'a str>,
     /// The protocol of the harness being run. `None` when no harness is.
     pub harness_protocol: Option<Protocol>,
+    /// `rayline local start --decisions`: `routing.decisions`, over the
+    /// file's and the env's.
+    pub decisions: Option<Decisions>,
 }
+
+/// `rayline local start --decisions local` with no `routing` in the file:
+/// the routing it starts with.
+pub const LOCAL_DECISIONS_MODEL: &str = "arc-swift-1.0";
+pub const LOCAL_POLICY_PRESET: &str = "arc-policy.prefer-local.v1";
 
 /// A config that Rayline refuses to run with.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -317,7 +330,7 @@ fn load_from(
     env: &EnvLookup<'_>,
 ) -> Result<Settings, ConfigError> {
     let (file, default_file) = match options.mode {
-        Mode::Cloud | Mode::Local => (settings_file(home), true),
+        Mode::Cloud | Mode::NoRouting | Mode::Local => (settings_file(home), true),
         Mode::LocalFile(path) | Mode::File(path) => (path.to_path_buf(), false),
     };
     let text = match std::fs::read_to_string(&file) {
@@ -347,12 +360,31 @@ fn load_from(
 
     let doc = Doc { file: &file };
     let raw = doc.root(&root)?;
-    let routing = apply_routing_overrides(raw.routing, env)?;
+    // `--decisions local` without `routing` starts from its defaults, which
+    // env overrides refine like a file's; the flag itself wins over both.
+    let raw_routing = match (raw.routing, options.decisions) {
+        (None, Some(Decisions::Local)) => Some(RawRouting {
+            decisions_model: Some(LOCAL_DECISIONS_MODEL.to_owned()),
+            preset: Some(LOCAL_POLICY_PRESET.to_owned()),
+            ..RawRouting::default()
+        }),
+        (routing, _) => routing,
+    };
+    // A command that uses no `routing` neither reads nor checks it: its
+    // required keys may come from env overrides only a run reads.
+    let mut routing = if options.mode == Mode::NoRouting {
+        None
+    } else {
+        apply_routing_overrides(raw_routing, env)?
+    };
+    if let (Some(decisions), Some(routing)) = (options.decisions, &mut routing) {
+        routing.decisions = Some(decisions);
+    }
     let update = apply_update_override(raw.update, env)?;
     let routing = doc.finish_routing(routing)?;
 
     let local = match options.mode {
-        Mode::Cloud => false,
+        Mode::Cloud | Mode::NoRouting => false,
         Mode::Local | Mode::LocalFile(_) => true,
         Mode::File(_) => routing.is_some(),
     };
@@ -834,7 +866,7 @@ impl<'a> Doc<'a> {
         }
         Ok(Some(Routing {
             decisions_model,
-            classifier_model: required(routing.classifier_model, "routing.classifier_model")?,
+            classifier_model: routing.classifier_model,
             policy: Policy {
                 preset: required(routing.preset, "routing.policy.preset")?,
                 overrides: routing.overrides,
@@ -1222,6 +1254,7 @@ mod tests {
             mode,
             env: None,
             harness_protocol: None,
+            decisions: None,
         }
     }
 
@@ -1238,7 +1271,7 @@ mod tests {
         if let Err(error) = &result {
             let file = match options.mode {
                 Mode::File(file) | Mode::LocalFile(file) => file.to_path_buf(),
-                Mode::Cloud | Mode::Local => settings_file(home),
+                Mode::Cloud | Mode::NoRouting | Mode::Local => settings_file(home),
             };
             assert_names_the_file(error, &file);
         }
@@ -1377,7 +1410,10 @@ mod tests {
         );
         let routing = settings.routing.as_ref().expect("routing");
         assert_eq!(routing.decisions_model, "arc-swift-1.0");
-        assert_eq!(routing.classifier_model, "anthropic/claude-haiku-5.5");
+        assert_eq!(
+            routing.classifier_model.as_deref(),
+            Some("anthropic/claude-haiku-5.5")
+        );
         assert_eq!(routing.policy.preset, "arc-policy.prefer-local.v1");
         assert_eq!(
             routing.policy.overrides.clone().map(Value::Object),
@@ -1927,10 +1963,6 @@ mod tests {
                 &["routing", "decisions_model"],
                 "routing.decisions_model".to_owned(),
             ),
-            (
-                &["routing", "classifier_model"],
-                "routing.classifier_model".to_owned(),
-            ),
             (&["routing", "policy"], "routing.policy.preset".to_owned()),
             (
                 &["routing", "policy", "preset"],
@@ -1954,6 +1986,81 @@ mod tests {
                 "{path:?}"
             );
         }
+    }
+
+    #[test]
+    fn decisions_local_starts_without_a_routing_section() {
+        let with = |decisions| LoadOptions {
+            decisions: Some(decisions),
+            ..opts(Mode::Local)
+        };
+        // No settings.json at all: the local decisions defaults.
+        let empty = temp_home();
+        let routing = load(&empty, with(Decisions::Local))
+            .expect("no file")
+            .routing
+            .expect("routing");
+        assert_eq!(routing.decisions, Decisions::Local);
+        assert_eq!(routing.decisions_model, LOCAL_DECISIONS_MODEL);
+        assert_eq!(routing.policy.preset, LOCAL_POLICY_PRESET);
+        assert_eq!(routing.classifier_model, None);
+        // `hosted` has no defaults: it still needs `routing`.
+        assert_eq!(
+            key_error(load(&empty, with(Decisions::Hosted))).0,
+            "routing"
+        );
+        // Over a file's `routing`, only `decisions` changes.
+        let home = temp_home();
+        write_default(&home, &example());
+        let file = load(&home, opts(Mode::Local))
+            .expect("file")
+            .routing
+            .expect("routing");
+        let flagged = load(&home, with(Decisions::Local))
+            .expect("flagged")
+            .routing
+            .expect("routing");
+        assert_eq!(flagged.decisions, Decisions::Local);
+        assert_eq!(flagged.decisions_model, file.decisions_model);
+        assert_eq!(flagged.policy, file.policy);
+        assert_eq!(flagged.classifier_model, file.classifier_model);
+
+        // Commands that use no `routing` don't read its overrides, so a
+        // process started this way can be checked and stopped.
+        load_env(
+            &empty,
+            opts(Mode::NoRouting),
+            &[("RAYLINE_ROUTING_CLASSIFIER_MODEL", "c")],
+        )
+        .expect("status and stop load");
+        // Nor a file `routing` whose required keys only env gives.
+        let partial = temp_home();
+        let mut doc = example();
+        remove(&mut doc, &["routing", "classifier_model"]);
+        remove(&mut doc, &["routing", "decisions_model"]);
+        write_default(&partial, &doc);
+        assert!(
+            load(&partial, opts(Mode::NoRouting))
+                .expect("partial routing")
+                .routing
+                .is_none()
+        );
+        // Env overrides refine the defaults; the flag still wins over
+        // `RAYLINE_ROUTING_DECISIONS`.
+        let routing = load_env(
+            &empty,
+            with(Decisions::Local),
+            &[
+                ("RAYLINE_ROUTING_DECISIONS", "hosted"),
+                ("RAYLINE_ROUTING_CLASSIFIER_MODEL", "c"),
+            ],
+        )
+        .expect("env")
+        .routing
+        .expect("routing");
+        assert_eq!(routing.decisions, Decisions::Local);
+        assert_eq!(routing.classifier_model.as_deref(), Some("c"));
+        assert_eq!(routing.decisions_model, LOCAL_DECISIONS_MODEL);
     }
 
     #[test]
@@ -2020,6 +2127,7 @@ mod tests {
                     mode,
                     env: None,
                     harness_protocol: protocol,
+                    decisions: None,
                 },
             )
         };
@@ -2053,6 +2161,7 @@ mod tests {
                     mode: Mode::Cloud,
                     env: Some(env),
                     harness_protocol: None,
+                    decisions: None,
                 },
             )
         };
@@ -2203,7 +2312,7 @@ mod tests {
         .expect("load");
         let routing = settings.routing.expect("routing");
         assert_eq!(routing.decisions_model, "arc-swift-2.0");
-        assert_eq!(routing.classifier_model, "classifier-x");
+        assert_eq!(routing.classifier_model.as_deref(), Some("classifier-x"));
         assert_eq!(routing.policy.preset, "arc-policy.hybrid-default.v1");
         assert!(
             routing.policy.overrides.is_some(),
@@ -2222,9 +2331,12 @@ mod tests {
             let routing = |settings: Settings| settings.routing.expect("routing");
             let settings = routing(with("RAYLINE_ROUTING_DECISIONS_MODEL", "d2"));
             assert_eq!(settings.decisions_model, "d2");
-            assert_eq!(settings.classifier_model, "anthropic/claude-haiku-5.5");
+            assert_eq!(
+                settings.classifier_model.as_deref(),
+                Some("anthropic/claude-haiku-5.5")
+            );
             let settings = routing(with("RAYLINE_ROUTING_CLASSIFIER_MODEL", "c2"));
-            assert_eq!(settings.classifier_model, "c2");
+            assert_eq!(settings.classifier_model.as_deref(), Some("c2"));
             assert_eq!(settings.decisions_model, "arc-swift-1.0");
             let settings = routing(with("RAYLINE_ROUTING_POLICY_PRESET", "p2"));
             assert_eq!(settings.policy.preset, "p2");
@@ -2374,6 +2486,7 @@ mod tests {
                         mode,
                         env,
                         harness_protocol,
+                        decisions: None,
                     };
                     let read = RefCell::new(Vec::new());
                     // Any other var the loader asked for would be set.

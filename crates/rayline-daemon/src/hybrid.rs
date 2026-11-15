@@ -30,6 +30,9 @@ use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 
 const CONTRACT_VERSION: u32 = 1;
+/// Beside the ready file: the token that admits other local callers to the
+/// local Routes API, for decisions only.
+pub const ROUTES_TOKEN_FILE: &str = "routes-token";
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 /// The execution core's own request body limit.
 const MAX_REQUEST_BYTES: usize = 64 << 20;
@@ -74,9 +77,10 @@ pub struct Args {
     #[arg(long)]
     env_name: Option<String>,
     /// Model that answers Claude Code's auto-mode classifier, through the
-    /// profile's cloud Messages router: `routing.classifier_model`.
+    /// profile's cloud Messages router: `routing.classifier_model`. Without
+    /// it, classifier requests are refused.
     #[arg(long)]
-    classifier_model: String,
+    classifier_model: Option<String>,
     /// A deployment and the snapshot directory of its model's tokenizer and
     /// chat template: the gateway counts that deployment's prompts with them for the
     /// core. Once per deployment with a `tokenizer`.
@@ -113,6 +117,10 @@ struct Ready {
     core_pid: u32,
     instance_id: String,
     capabilities: ModelCapabilities,
+    /// With local decisions, the Routes API URL other local callers may ask,
+    /// with the token in `routes-token` beside this file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    routes_url: Option<String>,
     /// `models` entries local ARC decisions don't route to.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     skipped_models: Vec<crate::hybrid_arc::SkippedModel>,
@@ -131,8 +139,9 @@ struct Gateway {
     /// Who makes the core's decisions, as the harness is told.
     decider: Decider,
     upstreams: Upstreams,
-    /// Where Claude Code's auto-mode classifier goes instead of the core.
-    classifier: crate::hybrid_classifier::Route,
+    /// Where Claude Code's auto-mode classifier goes instead of the core;
+    /// `None` refuses it.
+    classifier: Option<crate::hybrid_classifier::Route>,
     metrics: Arc<RouterMetrics>,
     routing_metadata: RoutingMetadata,
 }
@@ -143,9 +152,15 @@ pub async fn run(args: Args) -> Result<()> {
     check_decisions_url(&args.config, &args.router_url)?;
     let config = serde_json::from_slice(&std::fs::read(&args.config)?)?;
     let routing_metadata = RoutingMetadata::from_config(&config).map_err(anyhow::Error::msg)?;
-    let classifier = crate::hybrid_classifier::route(&config, &args.classifier_model)
+    let classifier = args
+        .classifier_model
+        .as_deref()
+        .map(|model| crate::hybrid_classifier::route(&config, model))
+        .transpose()
         .map_err(anyhow::Error::msg)?;
-    if std::env::var(&classifier.auth_env).map_or(true, |key| key.is_empty()) {
+    if let Some(classifier) = &classifier
+        && std::env::var(&classifier.auth_env).map_or(true, |key| key.is_empty())
+    {
         bail!(
             "`{}` is not set, so the auto-mode classifier cannot reach Rayline cloud",
             classifier.auth_env
@@ -163,6 +178,7 @@ pub async fn run(args: Args) -> Result<()> {
     let mut cleanup = StateFiles {
         token: args.token_file.clone(),
         ready: None,
+        routes_token: None,
     };
     let counter_token = token();
     let counters = args
@@ -192,6 +208,7 @@ pub async fn run(args: Args) -> Result<()> {
     let mut arc_encoder = None;
     let mut arc_routes = None;
     let mut arc_routes_token: Option<String> = None;
+    let mut arc_routes_url: Option<String> = None;
     let mut skipped_models = Vec::new();
     if let (Some(binary), Some(model), Some(release_dir)) =
         (&args.arc_encoder, &args.arc_model, &args.arc_release)
@@ -213,6 +230,9 @@ pub async fn run(args: Args) -> Result<()> {
         tracing::info!(url = %encoder.url, pid = ?encoder.pid(), "local ARC encoder ready");
         let access = crate::hybrid_arc::RoutesAccess::for_core(&core_config)?;
         arc_routes_token = Some(access.token.clone());
+        let decide_token_file = args.ready_file.with_file_name(ROUTES_TOKEN_FILE);
+        write_private_new(&decide_token_file, access.decide_token.as_bytes())?;
+        cleanup.routes_token = Some(decide_token_file);
         let (routes_url, task) = crate::hybrid_arc::serve_routes(
             release_dir,
             &args.arc_alias,
@@ -223,6 +243,7 @@ pub async fn run(args: Args) -> Result<()> {
         )
         .await?;
         arc_routes = Some(task);
+        arc_routes_url = Some(routes_url.clone());
         let local = args.ready_file.with_extension("arc-core.json");
         skipped_models = crate::hybrid_arc::with_local_decisions(
             &core_config,
@@ -308,6 +329,7 @@ pub async fn run(args: Args) -> Result<()> {
             core_pid: handshake.pid,
             instance_id,
             capabilities,
+            routes_url: arc_routes_url,
             skipped_models,
         };
         write_private_new(&args.ready_file, &serde_json::to_vec(&ready)?)?;
@@ -558,7 +580,15 @@ async fn forward(state: &Gateway, request: Request<Incoming>) -> Result<Response
     if parts.method == Method::POST
         && crate::hybrid_classifier::is_classifier(parts.uri.path(), &body)
     {
-        return send_classifier_to_cloud(state, &state.classifier, &parts, &body).await;
+        let Some(route) = &state.classifier else {
+            return Ok(error_response(
+                StatusCode::BAD_REQUEST,
+                "the local process was started without `routing.classifier_model`, so it \
+                 can't answer Claude Code's auto-mode classifier; set it and restart the \
+                 local process",
+            ));
+        };
+        return send_classifier_to_cloud(state, route, &parts, &body).await;
     }
     let mut observation = (parts.method == Method::POST
         && matches!(
@@ -1407,10 +1437,14 @@ pub(crate) fn write_private_new(path: &Path, bytes: &[u8]) -> Result<()> {
 struct StateFiles {
     token: PathBuf,
     ready: Option<PathBuf>,
+    routes_token: Option<PathBuf>,
 }
 impl Drop for StateFiles {
     fn drop(&mut self) {
         if let Some(path) = &self.ready {
+            let _ = std::fs::remove_file(path);
+        }
+        if let Some(path) = &self.routes_token {
             let _ = std::fs::remove_file(path);
         }
         let _ = std::fs::remove_file(&self.token);
