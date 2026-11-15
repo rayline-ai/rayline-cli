@@ -1471,6 +1471,7 @@ dependencies = [
  "opener",
  "rand 0.9.4",
  "rayline-arc-decide",
+ "rayline-arc-routes",
  "rayline-daemon",
  "rayline-hf",
  "rayline-local-router",

@@ -128,8 +128,9 @@ struct Gateway {
     instance_id: String,
     capabilities: ModelCapabilities,
     shutdown: mpsc::Sender<()>,
-    /// The command that renews the router key Decisions uses.
-    login_command: String,
+    /// Who makes the core's decisions, as the harness is told.
+    decider: Decider,
+    upstreams: Upstreams,
     /// Where Claude Code's auto-mode classifier goes instead of the core.
     classifier: crate::hybrid_classifier::Route,
     metrics: Arc<RouterMetrics>,
@@ -283,7 +284,18 @@ pub async fn run(args: Args) -> Result<()> {
             instance_id: instance_id.clone(),
             capabilities: capabilities.clone(),
             shutdown: shutdown_tx,
-            login_command: login_command(args.env_name.as_deref()),
+            upstreams: if routing_metadata.all_cloud() {
+                Upstreams::Cloud
+            } else {
+                Upstreams::Mixed
+            },
+            decider: if args.arc_encoder.is_some() {
+                Decider::Local
+            } else {
+                Decider::Router {
+                    login_command: login_command(args.env_name.as_deref()),
+                }
+            },
             classifier,
             metrics: RouterMetrics::new("rayline-local"),
             routing_metadata,
@@ -406,9 +418,28 @@ async fn handle(state: Arc<Gateway>, request: Request<Incoming>) -> Response<Bod
         request.uri(),
         request.headers(),
     ) {
+        tracing::warn!(
+            status = response.status().as_u16(),
+            path = request.uri().path(),
+            "the gateway refused an untrusted request"
+        );
         return response;
     }
     if let Err(error) = state.inbound.check(&Method::POST, "/", request.headers()) {
+        // Claude Code checks `/api/hello` without a key at every start.
+        if request.uri().path() == "/api/hello" {
+            tracing::debug!(
+                status = error.status.as_u16(),
+                path = "/api/hello",
+                "the gateway refused a request without its token"
+            );
+        } else {
+            tracing::warn!(
+                status = error.status.as_u16(),
+                path = request.uri().path(),
+                "the gateway refused a request without its token"
+            );
+        }
         return error_response(error.status, error.message);
     }
     if request.method() == Method::GET && request.uri().path() == "/v1/router/top/snapshot" {
@@ -512,6 +543,11 @@ async fn forward(state: &Gateway, request: Request<Incoming>) -> Result<Response
     {
         Ok(collected) => collected.to_bytes(),
         Err(error) if error.is::<http_body_util::LengthLimitError>() => {
+            tracing::warn!(
+                status = 413,
+                path = parts.uri.path(),
+                "the gateway refused the request: its body is over the core's limit"
+            );
             return Ok(error_response(
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "request body exceeds the execution core's 64 MiB limit",
@@ -537,6 +573,35 @@ async fn forward(state: &Gateway, request: Request<Incoming>) -> Result<Response
             state
                 .routing_metadata
                 .record(observation, upstream.headers(), &state.instance_id);
+        }
+        if !upstream.status().is_success() && upstream.status() != StatusCode::BAD_GATEWAY {
+            // An error is one small JSON body; its message may quote the
+            // request, so only the status, path and error type are logged.
+            let status = upstream.status();
+            let headers = upstream.headers().clone();
+            let error_body = upstream.bytes().await?;
+            tracing::warn!(
+                status = status.as_u16(),
+                path = parts.uri.path(),
+                error_type = %error_type(&error_body),
+                route_id = headers
+                    .get("x-rayline-route-id")
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or("-"),
+                "the core answered with an error before any output"
+            );
+            let response = buffered_response(
+                state,
+                status,
+                &headers,
+                error_body,
+                None,
+                RetryHint::default(),
+            )?;
+            if let Some(observation) = &mut observation {
+                observation.finish(status.as_u16(), Some("execution request refused"));
+            }
+            return Ok(response);
         }
         if upstream.status() != StatusCode::BAD_GATEWAY {
             return match observation {
@@ -903,9 +968,15 @@ fn stream_response(upstream: reqwest::Response) -> Result<Response<Body>> {
     Ok(response.body(BodyExt::boxed(StreamBody::new(stream)))?)
 }
 
-/// Why the core could not get a decision, from its error message.
+/// Why the core failed a turn before any output, from its error message:
+/// it could not get a decision, or could not reach the decided endpoint.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DecisionsFailure {
+    /// The core could not reach the endpoint the decision selected (the
+    /// core's `selected endpoint request failed`; a provider's own HTTP error
+    /// is passed on as that error instead). Not resent: a harness SDK's ten
+    /// resends would only take minutes to fail the same way.
+    Unreachable,
     /// Decisions refused the router key.
     Auth,
     /// Decisions was unreachable, timed out, or answered 408, 409 or 5xx
@@ -917,6 +988,30 @@ enum DecisionsFailure {
     /// `decide_refused`). Final: the same turn would be refused again.
     Refused,
 }
+
+/// An error body's `error.type` (either wire format), when it is a short
+/// identifier, else `"-"`.
+fn error_type(body: &[u8]) -> String {
+    serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| {
+            value
+                .pointer("/error/type")
+                .and_then(serde_json::Value::as_str)
+                .filter(|kind| {
+                    !kind.is_empty()
+                        && kind.len() <= 64
+                        && kind
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
+                })
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| "-".to_owned())
+}
+
+/// The core's message when it could not reach the decided endpoint.
+const ENDPOINT_FAILED: &str = "selected endpoint request failed";
 
 /// The core's `decision_failed` message (`error.message`, either wire
 /// format), cut to a log-sized length. The messages are the core's own
@@ -937,6 +1032,9 @@ fn decisions_detail(body: &[u8]) -> String {
     };
     if message == "Decisions request failed" {
         return "request failed".to_owned();
+    }
+    if message == ENDPOINT_FAILED {
+        return "endpoint request failed".to_owned();
     }
     let Some(rest) = message.strip_prefix("Decisions request refused (HTTP ") else {
         return other();
@@ -971,6 +1069,9 @@ fn decisions_failure(body: &[u8]) -> Option<DecisionsFailure> {
     let message = message.as_str();
     if message == "Decisions request failed" {
         return Some(DecisionsFailure::Unavailable);
+    }
+    if message == ENDPOINT_FAILED {
+        return Some(DecisionsFailure::Unreachable);
     }
     let status = message.strip_prefix("Decisions request refused (HTTP ")?;
     match status.get(..3)? {
@@ -1069,7 +1170,8 @@ fn buffered_response(
     hint: RetryHint,
 ) -> Result<Response<Body>> {
     let explained = failure.and_then(|failure| {
-        explain_decisions_failure(&body, failure, &state.login_command).map(|body| (failure, body))
+        explain_decisions_failure(&body, failure, &state.decider, state.upstreams)
+            .map(|body| (failure, body))
     });
     let mut response;
     let body = match explained {
@@ -1127,27 +1229,63 @@ fn harness_status(failure: DecisionsFailure) -> (StatusCode, bool) {
         DecisionsFailure::Auth => (StatusCode::FORBIDDEN, false),
         // A 4xx no SDK retries; the message says why the service refused.
         DecisionsFailure::Refused => (StatusCode::BAD_REQUEST, false),
+        DecisionsFailure::Unreachable => (StatusCode::BAD_GATEWAY, false),
     }
+}
+
+/// Where the core's endpoints are.
+#[derive(Clone, Copy)]
+enum Upstreams {
+    /// Every deployment is Rayline cloud.
+    Cloud,
+    /// Some deployments are inference servers from `endpoints`.
+    Mixed,
+}
+
+/// Who makes the core's decisions.
+enum Decider {
+    /// The environment's Rayline router; `login_command` renews its key.
+    Router { login_command: String },
+    /// Local ARC, in this process.
+    Local,
 }
 
 fn explain_decisions_failure(
     body: &[u8],
     failure: DecisionsFailure,
-    login_command: &str,
+    decider: &Decider,
+    upstreams: Upstreams,
 ) -> Option<Bytes> {
     let mut value: serde_json::Value = serde_json::from_slice(body).ok()?;
     let message = value.pointer("/error/message")?.as_str()?.to_owned();
-    let explained = match failure {
-        DecisionsFailure::Auth => format!(
+    let explained = match (decider, failure) {
+        (_, DecisionsFailure::Unreachable) => format!(
+            "{message}: the local process could not reach {}. Check this machine's network and any proxy (HTTPS_PROXY) the local process was started with, then run `rayline local stop`: the next run starts it again.",
+            match upstreams {
+                Upstreams::Cloud => "Rayline cloud",
+                Upstreams::Mixed =>
+                    "the model's endpoint (Rayline cloud, or an inference server in `endpoints`)",
+            }
+        ),
+        (Decider::Local, DecisionsFailure::Refused) => format!(
+            "{message}: local ARC (`routing.decisions` `local`) refused this turn on this machine, and sending it again will not change that. If it names a model or price, check `routing.decisions_model` and `models` in settings.json and run `rayline local stop`: the next run starts the local process from the changed file."
+        ),
+        (Decider::Local, DecisionsFailure::Unavailable) => format!(
+            "{message}: local ARC (`routing.decisions` `local`) could not decide this turn right now; its encoder may be restarting. This is retryable: send the turn again after the retry-after interval."
+        ),
+        (Decider::Local, DecisionsFailure::Auth) => format!(
+            "{message}: local ARC refused the local process's own token. Run `rayline local stop`: the next run starts the local process with a new one."
+        ),
+        (Decider::Router { login_command }, DecisionsFailure::Auth) => format!(
             "{message}: Decisions rejected the Rayline router key. Run `{login_command}`, then `rayline local stop`: the next run starts the local process with the new key."
         ),
-        DecisionsFailure::Unavailable => format!(
+        (_, DecisionsFailure::Unavailable) => format!(
             "{message}: the Rayline routing service could not decide this turn right now (it may be unavailable, or a development cell may still be starting, which takes about a minute). This is retryable: send the turn again after the retry-after interval."
         ),
-        DecisionsFailure::Throttled => format!(
+        (_, DecisionsFailure::Throttled) => format!(
             "{message}: the Rayline routing service is busy. Send the turn again after the retry-after interval."
         ),
-        DecisionsFailure::Refused => format!(
+        (_, DecisionsFailure::Refused) => format!(
             "{message}: the Rayline routing service refused this turn, and sending it again will not change that. If it names a model or price, check `models` in settings.json and run `rayline local stop`: the next run starts the local process from the changed file."
         ),
     };
@@ -1487,7 +1625,7 @@ mod tests {
             }
             for message in [
                 "Decisions request refused (HTTP 302)",
-                "selected endpoint request failed",
+                "a provider's own message",
             ] {
                 assert_eq!(decisions_failure(&encode(message)), None, "{message}");
             }
@@ -1500,7 +1638,10 @@ mod tests {
         let explained = explain_decisions_failure(
             &anthropic("Decisions request refused (HTTP 401)"),
             DecisionsFailure::Auth,
-            &login_command(Some("dev")),
+            &Decider::Router {
+                login_command: login_command(Some("dev")),
+            },
+            Upstreams::Cloud,
         )
         .unwrap();
         let value: serde_json::Value = serde_json::from_slice(&explained).unwrap();
@@ -1624,7 +1765,8 @@ mod tests {
         let explained = explain_decisions_failure(
             &anthropic("Decisions request refused (HTTP 400, unknown_price_model)"),
             DecisionsFailure::Refused,
-            "rayline auth login",
+            &router(),
+            Upstreams::Cloud,
         )
         .unwrap();
         let value: serde_json::Value = serde_json::from_slice(&explained).unwrap();
@@ -1634,11 +1776,80 @@ mod tests {
     }
 
     #[test]
+    fn a_local_refusal_says_it_was_local_and_names_the_decisions_model() {
+        let explained = explain_decisions_failure(
+            &anthropic("Decisions request refused (HTTP 400, unknown_model)"),
+            DecisionsFailure::Refused,
+            &Decider::Local,
+            Upstreams::Cloud,
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&explained).unwrap();
+        let message = value["error"]["message"].as_str().unwrap();
+        assert!(message.contains("local ARC"), "{message}");
+        assert!(message.contains("`routing.decisions_model`"), "{message}");
+        assert!(!message.contains("routing service"), "{message}");
+    }
+
+    #[test]
+    fn only_an_error_type_identifier_is_logged() {
+        assert_eq!(
+            error_type(&anthropic(
+                "hybrid execution requires a stable session identity"
+            )),
+            "invalid_request_error"
+        );
+        assert_eq!(error_type(br#"{"error":{"type":"has a space"}}"#), "-");
+        assert_eq!(error_type(b"not json"), "-");
+    }
+
+    #[test]
+    fn an_unreachable_endpoint_is_named_and_not_resent() {
+        let body = anthropic(ENDPOINT_FAILED);
+        assert_eq!(
+            decisions_failure(&body),
+            Some(DecisionsFailure::Unreachable)
+        );
+        assert_eq!(decisions_detail(&body), "endpoint request failed");
+        assert_eq!(
+            harness_status(DecisionsFailure::Unreachable),
+            (StatusCode::BAD_GATEWAY, false)
+        );
+        assert_eq!(
+            gateway_retry_delay(DecisionsFailure::Unreachable, RetryHint::default()),
+            None
+        );
+        for (upstreams, named) in [
+            (Upstreams::Cloud, "could not reach Rayline cloud."),
+            (Upstreams::Mixed, "an inference server in `endpoints`"),
+        ] {
+            let explained = explain_decisions_failure(
+                &body,
+                DecisionsFailure::Unreachable,
+                &Decider::Local,
+                upstreams,
+            )
+            .unwrap();
+            let value: serde_json::Value = serde_json::from_slice(&explained).unwrap();
+            let message = value["error"]["message"].as_str().unwrap();
+            assert!(message.contains(named), "{message}");
+            assert!(message.contains("HTTPS_PROXY"), "{message}");
+        }
+    }
+
+    fn router() -> Decider {
+        Decider::Router {
+            login_command: "rayline auth login".to_owned(),
+        }
+    }
+
+    #[test]
     fn unavailable_failure_says_retryable() {
         let explained = explain_decisions_failure(
             &openai("Decisions request refused (HTTP 502)"),
             DecisionsFailure::Unavailable,
-            "rayline auth login",
+            &router(),
+            Upstreams::Cloud,
         )
         .unwrap();
         let value: serde_json::Value = serde_json::from_slice(&explained).unwrap();

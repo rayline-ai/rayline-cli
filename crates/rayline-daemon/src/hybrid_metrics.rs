@@ -15,7 +15,7 @@ struct Deployment {
 }
 
 /// Where a deployment runs: this machine or Rayline cloud.
-#[derive(Clone, Copy, Deserialize)]
+#[derive(Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 enum DeploymentKind {
     Local,
@@ -89,32 +89,56 @@ impl RoutingMetadata {
         Ok(metadata)
     }
 
+    /// Whether every deployment is Rayline cloud.
+    pub(super) fn all_cloud(&self) -> bool {
+        self.deployments
+            .values()
+            .all(|deployment| deployment.kind == DeploymentKind::Cloud)
+    }
+
+    /// The deployment that executed a receipt, when exactly one did, and
+    /// where it ran, when every candidate runs in the same place.
     fn deployment(
         &self,
         worker: Option<&str>,
         action: Option<&str>,
         model: Option<&str>,
-    ) -> Option<&Deployment> {
+    ) -> (Option<&Deployment>, Option<DeploymentKind>) {
         if let Some(bindings) = action.and_then(|id| self.actions.get(id)) {
-            let (_, deployment) = bindings.first()?;
+            let Some((_, deployment)) = bindings.first() else {
+                return (None, None);
+            };
             // A known action must agree with every binding and the receipt's worker.
             // Never fall through to derived attribution after contradictory evidence.
             if bindings.iter().any(|(bound_worker, candidate)| {
                 candidate != deployment
                     || worker.is_some_and(|worker| bound_worker.as_deref() != Some(worker))
             }) {
-                return None;
+                return (None, None);
             }
-            return self.deployments.get(deployment);
+            return unique(self.deployments.get(deployment));
         }
-        let (worker, model) = worker.zip(model)?;
-        let candidates = self.derived.get(&(worker.to_owned(), model.to_owned()))?;
-        let first = candidates.first()?;
-        // Multiple controls on one deployment are fine; two deployments are ambiguous.
-        if candidates.iter().any(|candidate| candidate != first) {
-            return None;
+        let Some(candidates) = worker
+            .zip(model)
+            .and_then(|(worker, model)| self.derived.get(&(worker.to_owned(), model.to_owned())))
+        else {
+            return (None, None);
+        };
+        let Some(first) = candidates.first() else {
+            return (None, None);
+        };
+        // Multiple controls on one deployment are fine. Two deployments (one
+        // model served over several protocols) name no endpoint, but still
+        // name where it ran when they all run in the same place.
+        if candidates.iter().all(|candidate| candidate == first) {
+            return unique(self.deployments.get(first));
         }
-        self.deployments.get(first)
+        let mut kinds = candidates
+            .iter()
+            .map(|candidate| self.deployments.get(candidate).map(|d| d.kind));
+        let kind = kinds.next().flatten();
+        let same = kind.is_some() && kinds.all(|other| other == kind);
+        (None, if same { kind } else { None })
     }
 
     pub(super) fn record(
@@ -130,13 +154,14 @@ impl RoutingMetadata {
         let executed_model = header(headers, "x-rayline-executed-model");
         let worker = header(headers, "x-rayline-executed-worker");
         let action = header(headers, "x-rayline-executed-action-id");
-        let deployment = executed_model.as_ref().and_then(|_| {
-            self.deployment(
+        let (deployment, kind) = match executed_model {
+            Some(_) => self.deployment(
                 worker.as_deref(),
                 action.as_deref(),
                 executed_model.as_deref(),
-            )
-        });
+            ),
+            None => (None, None),
+        };
         if deployment.is_none() {
             tracing::debug!("hybrid routing receipt has no unambiguous deployment attribution");
         }
@@ -152,8 +177,8 @@ impl RoutingMetadata {
                 executed_control_id: header(headers, "x-rayline-executed-control-id"),
                 wire_model: deployment.map(|deployment| deployment.wire_model.clone()),
             });
-        // A receipt with no unambiguous deployment has no target.
-        let target = deployment.map(|deployment| match deployment.kind {
+        // A receipt whose candidates don't all run in one place has no target.
+        let target = kind.map(|kind| match kind {
             DeploymentKind::Local => "local",
             DeploymentKind::Cloud => "remote",
         });
@@ -167,6 +192,10 @@ impl RoutingMetadata {
             task_class: header(headers, "x-rayline-event"),
         });
     }
+}
+
+fn unique(deployment: Option<&Deployment>) -> (Option<&Deployment>, Option<DeploymentKind>) {
+    (deployment, deployment.map(|deployment| deployment.kind))
 }
 
 fn header(headers: &HeaderMap, name: &str) -> Option<String> {
@@ -371,13 +400,46 @@ mod tests {
     }
 
     #[test]
+    fn a_cloud_model_over_several_protocols_counts_as_remote_without_an_endpoint() {
+        let metadata = RoutingMetadata::from_config(&json!({
+            "deployments": [
+                {"id":"m-messages","kind":"cloud","wire_model":"m"},
+                {"id":"m-chat","kind":"cloud","wire_model":"m"}
+            ],
+            "derived_actions": [
+                {"worker":"w","model":"m","deployment_id":"m-messages"},
+                {"worker":"w","model":"m","deployment_id":"m-chat"}
+            ]
+        }))
+        .unwrap();
+        let metrics = RouterMetrics::new("hybrid");
+        let mut observation = RequestObservation::start(metrics.clone(), b"{}");
+        let mut headers = HeaderMap::new();
+        for (key, value) in [
+            ("x-rayline-instance-id", "instance"),
+            ("x-rayline-executed-worker", "w"),
+            ("x-rayline-executed-model", "m"),
+            ("x-rayline-executed-action-id", "dynamic-action"),
+        ] {
+            headers.insert(key, value.parse().unwrap());
+        }
+        metadata.record(&observation, &headers, "instance");
+        observation.finish(200, None);
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.recent[0].target.as_deref(), Some("remote"));
+        assert!(snapshot.recent[0].endpoint_id.is_none());
+        assert_eq!(snapshot.totals.remote_requests, 1);
+    }
+
+    #[test]
     fn ambiguous_worker_and_wrong_instance_never_guess_a_target() {
         let metadata = RoutingMetadata::from_config(&json!({
             "deployments": [{"id":"a","kind":"local","wire_model":"m"},{"id":"b","kind":"cloud","wire_model":"m"}],
             "derived_actions": [{"worker":"w","deployment_id":"a"},{"worker":"w","deployment_id":"b"}]
         }))
         .unwrap();
-        assert!(metadata.deployment(Some("w"), None, Some("m")).is_none());
+        let (deployment, kind) = metadata.deployment(Some("w"), None, Some("m"));
+        assert!(deployment.is_none() && kind.is_none());
         let metrics = RouterMetrics::new("hybrid");
         let observation = RequestObservation::start(metrics.clone(), b"{}");
         let mut headers = HeaderMap::new();

@@ -36,6 +36,7 @@ rayline-tokencount = { path = "../rayline-tokencount" }
 rayline-local-router = { path = "../rayline-local-router" }
 rayline-daemon = { path = "../rayline-daemon" }
 rayline-arc-decide = { path = "../rayline-arc-decide" }
+rayline-arc-routes = { path = "../rayline-arc-routes" }
 zstd = "0.14"
 toml_edit = "0.25.15"
 
