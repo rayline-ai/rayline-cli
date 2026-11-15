@@ -137,7 +137,7 @@ When the binary is not inside a `.app` bundle and `brew` is on `PATH` but `brew 
 
 ### 3.6 Installers
 
-`scripts/install-rayline.sh` (macOS and Linux) and `scripts/install-rayline.ps1` (Windows) install `rayline`, `rayline-core` and `rayline-core-LICENSE`. Their public options:
+`scripts/install-rayline.sh` (macOS and Linux) and `scripts/install-rayline.ps1` (Windows) install `rayline`, `rayline-core` and `rayline-core-LICENSE`, and on macOS arm64 also `rayline-arc-encoder` and `rayline-arc-encoder-LICENSE`. Their public options:
 
 1. `install-rayline.sh`:
    - `--version <version>`: the release to install, a bare version such as `0.5.0`. A version with a leading `v` is rejected. Without it, the installer takes the latest GitHub release.
@@ -450,7 +450,9 @@ Only two files:
 
 ```
 ~/.rayline/
-  bin/                          rayline, rayline-core, rayline-core-LICENSE
+  bin/                          rayline, rayline-core, rayline-core-LICENSE;
+                                on macOS arm64 also rayline-arc-encoder,
+                                rayline-arc-encoder-LICENSE
   local/                        local process state
     core-config.json            config handed to the core
     core-config.counted.json    the same config with Rayline's token counter added
