@@ -500,7 +500,7 @@ async fn launch(
         routing.classifier_model
     ));
     say(format!("Rayline key: the saved key for {}", hosted.name()));
-    // One Decisions call before reporting ready: a refused key or an
+    // One router call before reporting ready: a refused key or an
     // unreachable router fails here, not on the harness's first turn. Local
     // decisions never ask the router, so its outage must not stop them.
     if local_arc.is_none() {
@@ -630,9 +630,10 @@ async fn tokenizer_snapshot(
     }
 }
 
-/// Send one Decisions request with the key the core will use and classify
-/// the answer: an empty body is enough, as the router authenticates before it
-/// validates. Skipped for a loopback Decisions URL.
+/// `GET /v1/models` on the Decisions router with the key the core will use,
+/// before the local process starts: a refused key or an unreachable router
+/// fails at start, not on the harness's first turn. Skipped for a loopback
+/// Decisions URL.
 async fn probe_decisions(
     config: &Value,
     key: &str,
@@ -657,16 +658,11 @@ async fn probe_decisions(
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(io::Error::other)?;
+    let models = models_url(url);
     let deadline = Instant::now() + Duration::from_secs(STARTUP_TIMEOUT_SECS);
     let mut announced = false;
     loop {
-        let outcome = match client
-            .post(url)
-            .bearer_auth(key)
-            .json(&json!({}))
-            .send()
-            .await
-        {
+        let outcome = match probe_request(&client, &models, key).send().await {
             Ok(response) => Ok(response.status().as_u16()),
             Err(error) => Err(error),
         };
@@ -674,17 +670,17 @@ async fn probe_decisions(
             ProbeVerdict::Ready => return Ok(()),
             ProbeVerdict::KeyRefused(status) => {
                 return Err(io::Error::other(format!(
-                    "Decisions at {url} refused the Rayline key (HTTP {status}). Run `rayline {env_flag}auth login`, then try again."
+                    "The router at {models} refused the Rayline key (HTTP {status}). Run `rayline {env_flag}auth login`, then try again."
                 )));
             }
             ProbeVerdict::RateLimited => {
                 return Err(io::Error::other(format!(
-                    "Decisions at {url} refused the readiness check with HTTP 429: the Rayline key is rate limited or out of quota; check your account, then retry"
+                    "The router at {models} refused the readiness check with HTTP 429: the Rayline key is rate limited or out of quota; check your account, then retry"
                 )));
             }
             ProbeVerdict::Rejected(status) => {
                 return Err(io::Error::other(format!(
-                    "Decisions at {url} answered HTTP {status} to a readiness check; the local process cannot start"
+                    "The router at {models} answered HTTP {status} to a readiness check; the local process cannot start"
                 )));
             }
             ProbeVerdict::Unavailable => {
@@ -694,17 +690,30 @@ async fn probe_decisions(
                         Err(error) => error.to_string(),
                     };
                     return Err(io::Error::other(format!(
-                        "Decisions at {url} is unreachable or not ready ({detail}); check your network, then retry"
+                        "The router at {models} is unreachable or not ready ({detail}); check your network, then retry"
                     )));
                 }
                 if !announced {
                     announced = true;
-                    say(format!("Waiting for Decisions at {url}..."));
+                    say(format!("Waiting for the router at {models}..."));
                 }
                 tokio::time::sleep(Duration::from_secs(3)).await;
             }
         }
     }
+}
+
+/// The router's `GET /v1/models` for `decisions_url`, its `/v1/routes`.
+fn models_url(decisions_url: &str) -> String {
+    let router = decisions_url
+        .strip_suffix("/v1/routes")
+        .expect("core_config puts Decisions at the router's /v1/routes");
+    format!("{router}/v1/models")
+}
+
+/// The readiness request: a bodiless `GET` with the router key.
+fn probe_request(client: &reqwest::Client, url: &str, key: &str) -> reqwest::RequestBuilder {
+    client.get(url).bearer_auth(key)
 }
 
 /// The `--env` a command for `env` takes, with its trailing space: none for
@@ -730,10 +739,6 @@ fn probe_verdict(outcome: Result<u16, ()>) -> ProbeVerdict {
         Ok(status @ (401 | 403)) => ProbeVerdict::KeyRefused(status),
         Ok(429) => ProbeVerdict::RateLimited,
         Ok(500 | 502 | 503 | 504) => ProbeVerdict::Unavailable,
-        // Authenticated, then refused the empty readiness body: the key and
-        // router work.
-        // A 404/405 means the URL is not a Decisions route: rejected.
-        Ok(400 | 409 | 422) => ProbeVerdict::Ready,
         Ok(status) => ProbeVerdict::Rejected(status),
     }
 }
@@ -2127,14 +2132,77 @@ mod tests {
     #[test]
     fn decisions_probe_verdicts() {
         assert_eq!(probe_verdict(Ok(200)), ProbeVerdict::Ready);
-        assert_eq!(probe_verdict(Ok(400)), ProbeVerdict::Ready);
+        assert_eq!(probe_verdict(Ok(204)), ProbeVerdict::Ready);
+        assert_eq!(probe_verdict(Ok(400)), ProbeVerdict::Rejected(400));
+        assert_eq!(probe_verdict(Ok(409)), ProbeVerdict::Rejected(409));
+        assert_eq!(probe_verdict(Ok(422)), ProbeVerdict::Rejected(422));
         assert_eq!(probe_verdict(Ok(401)), ProbeVerdict::KeyRefused(401));
         assert_eq!(probe_verdict(Ok(403)), ProbeVerdict::KeyRefused(403));
-        assert_eq!(probe_verdict(Ok(502)), ProbeVerdict::Unavailable);
+        for status in [500, 502, 503, 504] {
+            assert_eq!(probe_verdict(Ok(status)), ProbeVerdict::Unavailable);
+        }
         assert_eq!(probe_verdict(Err(())), ProbeVerdict::Unavailable);
         assert_eq!(probe_verdict(Ok(402)), ProbeVerdict::Rejected(402));
         assert_eq!(probe_verdict(Ok(404)), ProbeVerdict::Rejected(404));
         assert_eq!(probe_verdict(Ok(429)), ProbeVerdict::RateLimited);
+    }
+
+    #[test]
+    fn the_probe_lists_models_on_the_decisions_router() {
+        assert_eq!(
+            models_url("https://api.rayline.ai/v1/routes"),
+            "https://api.rayline.ai/v1/models"
+        );
+        assert_eq!(
+            models_url("https://router.stage.example:8443/v1/routes"),
+            "https://router.stage.example:8443/v1/models"
+        );
+    }
+
+    /// The probe on the wire: a bodiless `GET /v1/models` with the key as a
+    /// bearer token.
+    #[tokio::test]
+    async fn the_probe_is_a_bodiless_get_with_the_router_key() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/v1/models", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buf = [0u8; 4096];
+            while !request.windows(4).any(|end| end == b"\r\n\r\n") {
+                let read = stream.read(&mut buf).await.unwrap();
+                assert!(read > 0, "the request ended before its headers");
+                request.extend_from_slice(&buf[..read]);
+            }
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")
+                .await
+                .unwrap();
+            String::from_utf8(request).unwrap()
+        });
+        let client = reqwest::Client::new();
+        let status = probe_request(&client, &url, "rlk-probe-test")
+            .send()
+            .await
+            .unwrap()
+            .status();
+        assert_eq!(status.as_u16(), 200);
+        let request = server.await.unwrap();
+        let (head, body) = request.split_once("\r\n\r\n").unwrap();
+        let mut lines = head.lines();
+        assert_eq!(lines.next(), Some("GET /v1/models HTTP/1.1"));
+        let headers: Vec<String> = lines.map(str::to_ascii_lowercase).collect();
+        assert!(headers.contains(&"authorization: bearer rlk-probe-test".to_owned()));
+        assert!(
+            !headers
+                .iter()
+                .any(|header| header.starts_with("content-length:")
+                    || header.starts_with("content-type:")
+                    || header.starts_with("transfer-encoding:")),
+            "{head}"
+        );
+        assert_eq!(body, "");
     }
 
     /// The config file `name` in `dir`, with `routing` and an `environments.dev`
