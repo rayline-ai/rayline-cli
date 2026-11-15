@@ -135,7 +135,12 @@ jobs:
           rustup toolchain install "$RUST_VERSION" --profile minimal --component clippy
           rustup default "$RUST_VERSION"
 
+      - name: Build release binaries (Linux, glibc 2.28 baseline)
+        if: runner.os == 'Linux'
+        run: scripts/build-linux-release.sh
+
       - name: Build release binaries
+        if: runner.os != 'Linux'
         shell: bash
         run: cargo build --release -p rayline-cli --locked
 
