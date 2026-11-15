@@ -403,7 +403,7 @@ async fn only_loopback_callers_with_the_access_token_are_answered() {
 }
 
 #[tokio::test]
-async fn the_decide_token_asks_for_routes_and_health_only() {
+async fn the_decide_token_asks_for_routes_only() {
     let harness = harness_with(FakeDecider::default(), catalog(), |config| {
         config.access_token = Some("local-secret".to_owned());
         config.decide_token = Some("decide-secret".to_owned());
@@ -435,10 +435,17 @@ async fn the_decide_token_asks_for_routes_and_health_only() {
         status(harness.client.get(format!("{base}/v1/models"))).await,
         403
     );
-    assert_eq!(
-        status(harness.client.get(format!("{base}/health"))).await,
-        200
-    );
+    for refused in [
+        harness.client.get(format!("{base}/health")),
+        harness.client.get(format!("{base}/v1/routes")),
+        harness.client.post(format!("{base}/v1/routes/")).body("[]"),
+        harness
+            .client
+            .post(format!("{base}/v1/messages?x=/v1/routes"))
+            .body("{}"),
+    ] {
+        assert_eq!(status(refused).await, 403);
+    }
     // Admitted to decide: a body it can't read is refused for that, not
     // for the token.
     assert_eq!(

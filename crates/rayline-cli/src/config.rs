@@ -356,18 +356,19 @@ fn load_from(
 
     let doc = Doc { file: &file };
     let raw = doc.root(&root)?;
-    let mut routing = apply_routing_overrides(raw.routing, env)?;
-    match (options.decisions, &mut routing) {
-        (Some(decisions), Some(routing)) => routing.decisions = Some(decisions),
-        (Some(Decisions::Local), None) => {
-            routing = Some(RawRouting {
-                decisions_model: Some(LOCAL_DECISIONS_MODEL.to_owned()),
-                preset: Some(LOCAL_POLICY_PRESET.to_owned()),
-                decisions: Some(Decisions::Local),
-                ..RawRouting::default()
-            });
-        }
-        (Some(Decisions::Hosted) | None, _) => {}
+    // `--decisions local` without `routing` starts from its defaults, which
+    // env overrides refine like a file's; the flag itself wins over both.
+    let raw_routing = match (raw.routing, options.decisions) {
+        (None, Some(Decisions::Local)) => Some(RawRouting {
+            decisions_model: Some(LOCAL_DECISIONS_MODEL.to_owned()),
+            preset: Some(LOCAL_POLICY_PRESET.to_owned()),
+            ..RawRouting::default()
+        }),
+        (routing, _) => routing,
+    };
+    let mut routing = apply_routing_overrides(raw_routing, env)?;
+    if let (Some(decisions), Some(routing)) = (options.decisions, &mut routing) {
+        routing.decisions = Some(decisions);
     }
     let update = apply_update_override(raw.update, env)?;
     let routing = doc.finish_routing(routing)?;
@@ -2013,6 +2014,23 @@ mod tests {
         assert_eq!(flagged.decisions_model, file.decisions_model);
         assert_eq!(flagged.policy, file.policy);
         assert_eq!(flagged.classifier_model, file.classifier_model);
+
+        // Env overrides refine the defaults; the flag still wins over
+        // `RAYLINE_ROUTING_DECISIONS`.
+        let routing = load_env(
+            &empty,
+            with(Decisions::Local),
+            &[
+                ("RAYLINE_ROUTING_DECISIONS", "hosted"),
+                ("RAYLINE_ROUTING_CLASSIFIER_MODEL", "c"),
+            ],
+        )
+        .expect("env")
+        .routing
+        .expect("routing");
+        assert_eq!(routing.decisions, Decisions::Local);
+        assert_eq!(routing.classifier_model.as_deref(), Some("c"));
+        assert_eq!(routing.decisions_model, LOCAL_DECISIONS_MODEL);
     }
 
     #[test]

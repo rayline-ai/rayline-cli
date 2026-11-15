@@ -79,6 +79,10 @@ struct Supervisor {
     /// didn't record it.
     #[serde(default)]
     decisions_model: Option<String>,
+    /// `routing.classifier_model`: Claude Code runs only on a process
+    /// started with one.
+    #[serde(default)]
+    classifier_model: Option<String>,
 }
 
 /// `routing.decisions`, and for `local` the ARC release with the built-in
@@ -138,6 +142,20 @@ impl std::fmt::Display for DecisionsSource {
 }
 
 impl Supervisor {
+    /// Refuses Claude Code on a process started without a classifier model,
+    /// which its auto-mode safety checks need.
+    fn check_runs(&self, harness: &str) -> io::Result<()> {
+        if harness == "claude" && self.classifier_model.is_none() {
+            return Err(io::Error::other(format!(
+                "the local process (pid {}) was started without \
+                 `routing.classifier_model`, which Claude Code needs; stop it with \
+                 `rayline local stop` and run again",
+                self.pid
+            )));
+        }
+        Ok(())
+    }
+
     /// Refuses a run whose config file or `--env` is not the running
     /// process's (spec 3.3 item 3): it never runs on another config.
     fn check_serves(&self, settings: &Settings) -> io::Result<()> {
@@ -182,17 +200,33 @@ fn env_words(env: Option<&str>) -> String {
 }
 
 /// The config file, canonical. The default file may not exist (an absent
-/// default file is an empty config): its path is then used as it is.
+/// default file is an empty config): its deepest existing directory is then
+/// canonical and the rest appended, so the path matches the file's once it
+/// is created.
 fn canonical_config(settings: &Settings) -> io::Result<PathBuf> {
-    match fs::canonicalize(&settings.file) {
-        Ok(path) => Ok(path),
-        Err(error) if error.kind() == io::ErrorKind::NotFound && !settings.file.exists() => {
-            Ok(settings.file.clone())
-        }
-        Err(error) => Err(io::Error::new(
+    let failed = |error: io::Error| {
+        io::Error::new(
             error.kind(),
             format!("{}: {error}", settings.file.display()),
-        )),
+        )
+    };
+    let mut missing = Vec::new();
+    let mut at = settings.file.as_path();
+    loop {
+        match fs::canonicalize(at) {
+            Ok(mut path) => {
+                path.extend(missing.iter().rev());
+                return Ok(path);
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                let (Some(parent), Some(name)) = (at.parent(), at.file_name()) else {
+                    return Err(failed(error));
+                };
+                missing.push(name);
+                at = parent;
+            }
+            Err(error) => return Err(failed(error)),
+        }
     }
 }
 
@@ -390,7 +424,10 @@ async fn run_harness(
     {
         let _lock = acquire_lock(&paths.lock())?;
         match running(&paths)? {
-            Some(running) => running.check_serves(settings)?,
+            Some(running) => {
+                running.check_serves(settings)?;
+                running.check_runs(harness)?;
+            }
             // Progress goes to stderr: the harness owns stdout.
             None => launch(&home, &paths, settings, &|line| eprintln!("{line}")).await?,
         }
@@ -624,6 +661,10 @@ async fn launch(
                 .routing
                 .as_ref()
                 .map(|routing| routing.decisions_model.clone()),
+            classifier_model: settings
+                .routing
+                .as_ref()
+                .and_then(|routing| routing.classifier_model.clone()),
         };
         write_private_json(
             &paths.supervisor(),
@@ -2349,6 +2390,7 @@ mod tests {
                 dir: None,
             }),
             decisions_model: Some("arc-swift-1.0".to_owned()),
+            classifier_model: None,
         };
         let state = json!({"listen_url": "http://127.0.0.1:5000",
                            "routes_url": "http://127.0.0.1:5001/v1/routes"});
@@ -2377,6 +2419,43 @@ mod tests {
         .unwrap();
         assert_eq!(hosted["decisions"], "hosted");
         assert!(hosted.get("routes").is_none());
+    }
+
+    #[test]
+    fn claude_code_runs_only_on_a_process_started_with_a_classifier_model() {
+        let mut running = Supervisor {
+            pid: 7,
+            config: PathBuf::from("/c.json"),
+            env: None,
+            decisions: Some(DecisionsSource::Hosted),
+            decisions_model: None,
+            classifier_model: None,
+        };
+        let error = running.check_runs("claude").unwrap_err().to_string();
+        assert!(error.contains("routing.classifier_model"), "{error}");
+        running.check_runs("pi").unwrap();
+        running.classifier_model = Some("anthropic/claude-haiku-5.5".to_owned());
+        running.check_runs("claude").unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_absent_default_file_has_the_path_it_gets_once_created() {
+        let dir = temp_dir("absent-config");
+        let real = dir.join("real");
+        fs::create_dir_all(&real).unwrap();
+        let home = dir.join("home");
+        std::os::unix::fs::symlink(&real, &home).unwrap();
+        let mut settings = local_settings(&dir, "a.json", None);
+        settings.file = home.join(".config/rayline/settings.json");
+        let before = canonical_config(&settings).unwrap();
+        fs::create_dir_all(home.join(".config/rayline")).unwrap();
+        fs::write(&settings.file, "{}").unwrap();
+        assert_eq!(canonical_config(&settings).unwrap(), before);
+        assert!(
+            before.starts_with(fs::canonicalize(&real).unwrap()),
+            "{before:?}"
+        );
     }
 
     #[tokio::test]
@@ -2468,6 +2547,7 @@ mod tests {
             env: None,
             decisions: Some(DecisionsSource::of(&started)),
             decisions_model: None,
+            classifier_model: None,
         };
         supervisor.check_serves(&started).unwrap();
         assert_eq!(supervisor.decisions, Some(DecisionsSource::Hosted));
@@ -2560,6 +2640,7 @@ mod tests {
                 env: Some("dev".to_owned()),
                 decisions: Some(DecisionsSource::Hosted),
                 decisions_model: None,
+                classifier_model: None,
             })
         );
         let error = record(u64::from(u32::MAX)).unwrap_err().to_string();

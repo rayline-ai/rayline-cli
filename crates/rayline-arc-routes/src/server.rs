@@ -87,8 +87,8 @@ pub struct RouterConfig {
     /// port (any loopback listener can be reached by every local process).
     pub access_token: Option<String>,
     /// With [`RouterConfig::access_token`], a second token that admits
-    /// `POST /v1/routes` and `GET /health` only: a caller holding it gets
-    /// decisions but can't send anything upstream.
+    /// `POST /v1/routes` only: a caller holding it gets decisions but can't
+    /// send anything upstream.
     pub decide_token: Option<String>,
     /// The `Authorization` value forwarded requests carry upstream in place
     /// of the caller's, when [`RouterConfig::access_token`] is set (the
@@ -128,7 +128,7 @@ pub struct Router {
 enum Access {
     /// Every path, forwarded ones included.
     All,
-    /// Decisions and health only.
+    /// `POST /v1/routes` only.
     Decide,
 }
 
@@ -395,16 +395,16 @@ impl Router {
         };
         match (request.method(), request.uri().path()) {
             (&Method::POST, "/v1/routes") => self.routes(request).await,
-            (&Method::GET, "/health") => json_response(
-                StatusCode::OK,
-                &json!({"status": "ok", "package": {
-                    "alias": self.catalog.alias, "package_sha256": self.catalog.package_sha256}}),
-            ),
             _ if access == Access::Decide => refusal_response(&Refusal::with_status(
                 403,
                 "forbidden",
                 "This token asks for routes only.",
             )),
+            (&Method::GET, "/health") => json_response(
+                StatusCode::OK,
+                &json!({"status": "ok", "package": {
+                    "alias": self.catalog.alias, "package_sha256": self.catalog.package_sha256}}),
+            ),
             _ => self.forward(request).await,
         }
     }
