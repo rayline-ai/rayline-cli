@@ -825,7 +825,7 @@ fn local_arc(home: &Path, routing: &crate::config::Routing) -> io::Result<Option
                 error.kind(),
                 format!(
                     "`local` decisions need the ARC encoder `rayline-arc-encoder` beside `rayline`, \
-                     and Rayline releases don't ship it yet; set `routing.decisions` to `hosted` \
+                     which only macOS arm64 releases ship; set `routing.decisions` to `hosted` \
                      ({error})"
                 ),
             )

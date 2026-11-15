@@ -1,7 +1,7 @@
 //! Local ARC: the encoder the local process runs when routing decisions are
 //! made on this machine instead of by a Rayline router.
 //!
-//! The encoder is a separate binary shipped beside `rayline-core`. It binds a
+//! The encoder is a separate binary shipped beside `rayline`. It binds a
 //! free loopback port, reports it as the first stdout line
 //! (`{"listening": PORT}`), and exits when its stdin closes, so it never
 //! outlives the local process.
