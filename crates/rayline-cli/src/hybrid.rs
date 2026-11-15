@@ -2417,7 +2417,7 @@ mod tests {
                 "decisions_model": "arc-swift-1.0",
                 "routes": {
                     "url": "http://127.0.0.1:5001/v1/routes",
-                    "token_file": "/home/u/.rayline/local/routes-token",
+                    "token_file": paths.routes_token(),
                 },
             })
         );
