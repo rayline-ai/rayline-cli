@@ -587,11 +587,11 @@ async fn launch(
     write_private_json(&paths.core_config(), &config, true)?;
     match &local_arc {
         Some(arc) => say(format!(
-            "Decisions: {} by local ARC, {}",
+            "Router: local ARC ({}), {}",
             routing.decisions_model, arc.source
         )),
         None => say(format!(
-            "Decisions: {} via {}",
+            "Router: hosted ARC ({}) via {}",
             routing.decisions_model,
             config["decisions"]["url"]
                 .as_str()
