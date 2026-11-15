@@ -1,6 +1,6 @@
-# Cloud router — Python
+# Rayline Platform router — Python
 
-Send Anthropic API traffic through Rayline's **hosted cloud router** using the
+Send Anthropic API traffic through the **Rayline Platform router** using the
 official [`anthropic`](https://pypi.org/project/anthropic/) Python SDK. The SDK
 points at `https://api.rayline.ai` and authenticates with a Rayline router key.
 

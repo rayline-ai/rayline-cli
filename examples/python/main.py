@@ -1,4 +1,4 @@
-"""Use Rayline's hosted cloud router from Python via the Anthropic SDK.
+"""Use the Rayline Platform router from Python via the Anthropic SDK.
 
 This points the official `anthropic` client at the hosted Rayline router instead
 of api.anthropic.com. The router decides where each request goes and forwards it

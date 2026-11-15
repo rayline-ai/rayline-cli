@@ -1,5 +1,5 @@
 /**
- * Use Rayline's hosted cloud router from TypeScript via the Anthropic SDK.
+ * Use the Rayline Platform router from TypeScript via the Anthropic SDK.
  *
  * This points the official `@anthropic-ai/sdk` client at the hosted Rayline
  * router instead of api.anthropic.com. The router decides where each request

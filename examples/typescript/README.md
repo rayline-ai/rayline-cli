@@ -1,6 +1,6 @@
-# Cloud router — TypeScript
+# Rayline Platform router — TypeScript
 
-Send Anthropic API traffic through Rayline's **hosted cloud router** using the
+Send Anthropic API traffic through the **Rayline Platform router** using the
 official [`@anthropic-ai/sdk`](https://www.npmjs.com/package/@anthropic-ai/sdk)
 package. The SDK points at `https://api.rayline.ai` and authenticates with a
 Rayline router key.
