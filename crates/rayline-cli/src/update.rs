@@ -324,9 +324,9 @@ async fn sync_encoder(
     dry_run: bool,
 ) -> Result<bool, UpdateError> {
     let sums = fetch_verified_sums(base_url, target, dest_dir, pubkeys).await?;
-    let Some(encoder) = download_encoder(
+    let Some(encoder) = encoder_for_installed_release(
         base_url,
-        &target.normalized,
+        target,
         platform_tag,
         &sums,
         dest_dir,
@@ -340,6 +340,34 @@ async fn sync_encoder(
         install_encoder(&encoder, install_path)?;
     }
     Ok(true)
+}
+
+/// The encoder files to install for the release already installed at
+/// `install_path`, given its verified `sums`. The manifest must list the
+/// installed `rayline` itself, which binds it to that release; otherwise (a
+/// replayed manifest of another release, or a local build) the encoder is
+/// left alone.
+async fn encoder_for_installed_release(
+    base_url: &str,
+    target: &Version,
+    platform_tag: &str,
+    sums: &str,
+    dest_dir: &Path,
+    install_path: &Path,
+) -> Result<Option<EncoderArtifacts>, UpdateError> {
+    let launcher_name = format!("{}-{platform_tag}", crate::CLI_ASSET);
+    if !installed_matches(sums, &launcher_name, install_path)? {
+        return Ok(None);
+    }
+    download_encoder(
+        base_url,
+        &target.normalized,
+        platform_tag,
+        sums,
+        dest_dir,
+        install_path,
+    )
+    .await
 }
 
 /// Releases are published under their full version, build label included
@@ -730,9 +758,13 @@ pub(crate) fn verify_checksum(
     Ok(())
 }
 
+/// Hashed in chunks, so a large file (the ~0.9 GB Linux encoder) is never
+/// held in memory.
 fn sha256_file(path: &Path) -> Result<String, UpdateError> {
-    let bytes = fs::read(path).map_err(io_failed("read", path))?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
+    let mut file = fs::File::open(path).map_err(io_failed("read", path))?;
+    let mut hasher = Sha256::new();
+    io::copy(&mut file, &mut hasher).map_err(io_failed("read", path))?;
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 /// The binary to replace: `--install-path` as given (the parser has checked
@@ -2138,6 +2170,79 @@ mod tests {
 
         fs::remove_dir_all(dir)?;
         fs::remove_dir_all(install)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_encoder_is_synced_only_for_the_installed_release() -> TestResult {
+        let platform = "linux_x86_64";
+        let (server, sums) = encoder_release(platform);
+        let (install, _) = install_from(&server)?;
+        let rayline = exe(&install, crate::CLI_BIN);
+        let launcher = format!("{}-{platform}", crate::CLI_ASSET);
+        let dir = temp_update_dir()?;
+
+        // A manifest that lists another `rayline` (a replayed older release):
+        // nothing is fetched or installed.
+        let other = format!(
+            "{}{:x}  {launcher}\n",
+            sums,
+            Sha256::digest(b"another release")
+        );
+        let target = version(TEST_RELEASE);
+        assert!(!sync_with_sums(&server, &other, &target, platform, &dir, &rayline).await?);
+        assert!(server.requests().is_empty(), "{:?}", server.requests());
+        assert!(!exe(&install, ENCODER_NAME).exists());
+
+        // The manifest of the installed `rayline`: the encoder is installed.
+        let same = format!("{}{:x}  {launcher}\n", sums, Sha256::digest(b"installed"));
+        assert!(sync_with_sums(&server, &same, &target, platform, &dir, &rayline).await?);
+        assert_eq!(fs::read(exe(&install, ENCODER_NAME))?, ENCODER);
+
+        fs::remove_dir_all(dir)?;
+        fs::remove_dir_all(install)?;
+        Ok(())
+    }
+
+    /// `sync_encoder` after its signature check, with `sums` as the verified
+    /// manifest.
+    async fn sync_with_sums(
+        server: &FakeReleaseServer,
+        sums: &str,
+        target: &Version,
+        platform: &str,
+        dir: &Path,
+        rayline: &Path,
+    ) -> Result<bool, UpdateError> {
+        let Some(encoder) =
+            encoder_for_installed_release(&server.base_url, target, platform, sums, dir, rayline)
+                .await?
+        else {
+            return Ok(false);
+        };
+        install_encoder(&encoder, rayline)?;
+        Ok(true)
+    }
+
+    #[tokio::test]
+    async fn a_truncated_download_fails_and_leaves_no_file() -> TestResult {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let address = listener.local_addr()?;
+        let serve = std::thread::spawn(move || -> std::io::Result<()> {
+            use std::io::{Read, Write};
+            let (mut stream, _) = listener.accept()?;
+            let mut request = [0_u8; 1024];
+            let _ = stream.read(&mut request)?;
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1000000\r\n\r\npartial")?;
+            Ok(())
+        });
+        let dir = temp_update_dir()?;
+        let path = dir.join("encoder");
+        let result = download_to(&format!("http://{address}/encoder"), &path).await;
+        assert!(matches!(result, Err(UpdateError::Network(_))), "{result:?}");
+        assert!(!path.exists(), "a truncated download was promoted");
+        serve.join().expect("server thread")?;
+        fs::remove_dir_all(dir)?;
         Ok(())
     }
 
