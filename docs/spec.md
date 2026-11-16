@@ -62,7 +62,7 @@ Harnesses:
 rayline run <HARNESS> [--local | --config <file>] [HARNESS ARGS]...
 ```
 
-1. With neither flag: **cloud mode**. Config from `~/.config/rayline/settings.json`. No local process. The harness talks to Rayline Platform directly.
+1. With neither flag: **cloud mode**. Config from `~/.config/rayline/settings.json`. No local process. The harness talks to Rayline Platform directly. When a local process is running, the run first prints to stderr `Note: a local process is running; this run uses Rayline Platform. Add --local to use the local process.`
 2. `--local`: **local mode**. Config from `~/.config/rayline/settings.json`. The harness talks to the local process, which is started if it isn't running. The config must have a `routing` section (section 5.4).
 3. `--config <file>`: config from `<file>` instead of the default file (it replaces it, never merges). If the file has a `routing` section the run is in local mode, otherwise cloud mode.
 4. `--local` and `--config` together are a usage error.

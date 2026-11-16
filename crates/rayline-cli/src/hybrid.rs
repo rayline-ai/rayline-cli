@@ -439,6 +439,21 @@ fn exit_code(result: io::Result<()>) -> ExitCode {
     }
 }
 
+/// Whether a local process is running, for the note a cloud-mode run prints.
+/// Reads its state without creating anything; state it can't read is no.
+pub(crate) fn local_process_running() -> bool {
+    crate::home().is_ok_and(|home| running_in(&state_dir(&home)))
+}
+
+fn running_in(dir: &Path) -> bool {
+    matches!(
+        running(&Paths {
+            dir: dir.to_path_buf()
+        }),
+        Ok(Some(_))
+    )
+}
+
 /// The home directory and the local process's state directory, created
 /// owner-only.
 fn local_paths() -> io::Result<(PathBuf, Paths)> {
@@ -2886,6 +2901,24 @@ mod tests {
         // Nothing to clear is not an error.
         clear_state(&paths).unwrap();
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_cloud_run_notes_a_running_local_process_only_when_one_runs() {
+        let dir = temp_dir("note");
+        assert!(!running_in(&dir.join("missing")));
+        assert!(!running_in(&dir));
+        let paths = Paths { dir: dir.clone() };
+        // State it can't make sense of is no local process, not an error.
+        fs::write(paths.ready(), "{}").unwrap();
+        assert!(!running_in(&dir));
+        fs::remove_file(paths.ready()).unwrap();
+        fs::write(
+            paths.supervisor(),
+            json!({"pid": std::process::id(), "config": "/c.json"}).to_string(),
+        )
+        .unwrap();
+        assert!(running_in(&dir));
     }
 
     #[test]
