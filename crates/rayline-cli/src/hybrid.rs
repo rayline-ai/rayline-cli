@@ -508,6 +508,23 @@ pub(crate) fn running_from_routing_defaults() -> bool {
     })
 }
 
+/// Refuses a run's launch from the `--router local` defaults: they serve a
+/// run only on the process started from them, which has stopped since the
+/// run loaded them.
+fn may_launch(settings: &Settings) -> io::Result<()> {
+    if settings
+        .routing
+        .as_ref()
+        .is_some_and(|routing| routing.defaults)
+    {
+        return Err(io::Error::other(format!(
+            "{}: `routing` is required in local mode",
+            settings.file.display()
+        )));
+    }
+    Ok(())
+}
+
 /// The home directory and the local process's state directory, created
 /// owner-only.
 fn local_paths() -> io::Result<(PathBuf, Paths)> {
@@ -556,7 +573,10 @@ async fn run_harness(
                 running.check_runs(harness)?;
             }
             // Progress goes to stderr: the harness owns stdout.
-            None => launch(&home, &paths, settings, &|line| eprintln!("{line}")).await?,
+            None => {
+                may_launch(settings)?;
+                launch(&home, &paths, settings, &|line| eprintln!("{line}")).await?;
+            }
         }
     }
     let client = gateway_client()?;
@@ -3011,6 +3031,21 @@ mod tests {
         assert!(error.contains("routing.classifier_model"), "{error}");
         assert!(
             error.contains(r#""classifier_model": "<model id>""#),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_run_never_starts_a_process_from_the_router_defaults() {
+        let dir = temp_dir("defaults-gone");
+        let mut settings = local_settings(&dir, "a.json", None);
+        may_launch(&settings).unwrap();
+        if let Some(routing) = settings.routing.as_mut() {
+            routing.defaults = true;
+        }
+        let error = may_launch(&settings).unwrap_err().to_string();
+        assert!(
+            error.ends_with("`routing` is required in local mode"),
             "{error}"
         );
     }
