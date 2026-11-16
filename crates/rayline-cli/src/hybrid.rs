@@ -1808,7 +1808,9 @@ mod tests {
         let filler = "x".repeat(64 * 1024 - line.len() + "INFO quoted: ".len() - 1);
         fs::write(&log, format!("{line}{filler}\n")).unwrap();
         assert_eq!(exit_reason(&log, 0), None);
-        fs::write(&log, format!("{filler}\nError: the real one\n")).unwrap();
+        // A line that starts exactly at the cut is kept whole.
+        let after = "x".repeat(64 * 1024 - "Error: the real one\n".len() - 1);
+        fs::write(&log, format!("INFO a\nError: the real one\n{after}\n")).unwrap();
         assert_eq!(exit_reason(&log, 0).as_deref(), Some("the real one"));
     }
 
