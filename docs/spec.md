@@ -140,7 +140,7 @@ rayline top [--json]
 
 1. Shows live request metrics from the local process.
 2. `--json` prints one snapshot as JSON and exits.
-3. With no local process running it says so and exits with an error.
+3. The live view (a terminal, without `--json`) waits for a local process: while none runs it shows `Local process: not running` and checks again every refresh. When the local process restarts, it follows the new one. `--json`, or output that isn't a terminal, with no local process running says so and exits with an error.
 4. Under its title, `top` names the router that decides: `Router: local ARC (<decisions_model>) on this machine`, or `Router: hosted ARC (<decisions_model>) in Rayline Platform`. The snapshot carries this as `router`: `{"kind": "local" | "hosted", "model": <decisions_model>}`.
 5. Each request shows the router that decided it, how long a local decision took, and the event it was decided for (`task_start`, `tool_result`, ...): the row fields `router` (`local`, `hosted`, or `null` for a request no decision routed, such as a classifier call), `decision_ms` (local decisions only) and `decision_event`.
 
