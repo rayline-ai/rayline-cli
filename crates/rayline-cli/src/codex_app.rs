@@ -170,7 +170,9 @@ pub(crate) fn write_codex_home(home: &Path, config: &str) -> io::Result<()> {
     };
     let mut merged = apply_rayline_settings(&existing, config)
         .map_err(|error| toml_parse_error(&config_path, &existing, &error))?;
-    if cfg!(windows) {
+    // The user's config is read only when it is needed, so an unreadable one
+    // doesn't stop a home that already has its sandbox.
+    if cfg!(windows) && !has_windows_sandbox(&merged) {
         let seed_path = user_codex_home()?.join("config.toml");
         let seed = read_if_present(&seed_path)?;
         merged = with_windows_sandbox(&merged, seed.as_deref())
@@ -307,6 +309,15 @@ fn canonical(table: &Table) -> String {
 /// would run that setup (and its UAC prompt) again.
 const DEFAULT_WINDOWS_SANDBOX: &str = "unelevated";
 
+/// Whether `config` sets `[windows] sandbox`.
+fn has_windows_sandbox(config: &str) -> bool {
+    config.parse::<DocumentMut>().is_ok_and(|doc| {
+        doc.get("windows")
+            .and_then(|windows| windows.get("sandbox"))
+            .is_some()
+    })
+}
+
 /// `config` with `[windows] sandbox` set when it has none: the user's own
 /// setting from `seed` (their main `config.toml`), else
 /// [`DEFAULT_WINDOWS_SANDBOX`]. On Windows, Codex with no sandbox setting
@@ -314,14 +325,10 @@ const DEFAULT_WINDOWS_SANDBOX: &str = "unelevated";
 /// writes the choice only to the home it ran in. A value already in `config`
 /// is kept.
 fn with_windows_sandbox(config: &str, seed: Option<&str>) -> Result<String, TomlError> {
-    let mut doc: DocumentMut = config.parse()?;
-    if doc
-        .get("windows")
-        .and_then(|windows| windows.get("sandbox"))
-        .is_some()
-    {
+    if has_windows_sandbox(config) {
         return Ok(config.to_owned());
     }
+    let mut doc: DocumentMut = config.parse()?;
     let seeded = match seed {
         Some(seed) => seed
             .parse::<DocumentMut>()?
