@@ -137,7 +137,7 @@ fn a_config_file_starts_the_local_process_from_it() {
     let home = Home::new();
     fs::write(home.0.join(ROUTING_FILE), ROUTING).expect("routing file");
     for args in [
-        &["run", "pi", "--config", ROUTING_FILE][..],
+        &["run", "claude", "--config", ROUTING_FILE][..],
         &["local", "start", "--config", ROUTING_FILE],
         &["run", "codex", "--config", ROUTING_FILE],
     ] {
@@ -252,7 +252,7 @@ fn a_signed_out_local_start_fails_before_it_clears_state_or_downloads() {
     fs::write(state.join("supervisor.json"), &supervisor).expect("supervisor");
     fs::write(state.join("ready.json"), "{}").expect("ready");
 
-    for args in [&["local", "start"][..], &["run", "pi", "--local"]] {
+    for args in [&["local", "start"][..], &["run", "claude", "--local"]] {
         assert_fails(&home.run_exe(&exe, args), 1, "Not logged in to prod");
         assert_eq!(
             fs::read_to_string(state.join("supervisor.json")).expect("supervisor kept"),

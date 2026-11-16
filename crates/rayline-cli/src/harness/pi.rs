@@ -3,20 +3,58 @@
 //! is the literal key.
 //!
 //! `compat.sendSessionAffinityHeaders` makes pi send its session id as
-//! `x-session-affinity` on Messages (pi 0.87.1 and 1.0.0; off by default for
-//! non-OpenRouter endpoints), which the gateway keys the episode on. `-c` and
-//! `--resume` reuse the session id, so a resumed session keeps its episode.
+//! `x-session-affinity` on Messages (off by default for non-OpenRouter
+//! endpoints), which the gateway keys the episode on. `-c` and `--resume`
+//! reuse the session id, so a resumed session keeps its episode. A local-mode
+//! turn without that id fails, so local mode refuses a pi older than
+//! [`MIN_LOCAL_VERSION`], the first release tested to send it, before anything
+//! starts.
 //!
 //! `compat.allowEmptySignature` is not set, in any environment. pi then resends
 //! a thinking block that came back without a signature as a text block, which
 //! is its default for Messages, so no thinking block with an empty signature
 //! goes upstream.
 
+use std::path::Path;
+use std::process::{Command, Stdio};
+
 use serde_json::json;
 
 use super::{Plan, RenderContext, json_file};
 
 pub(crate) const PROVIDER_ID: &str = "rayline";
+/// The first pi tested to send `x-session-affinity` on Messages.
+pub(crate) const MIN_LOCAL_VERSION: (u64, u64, u64) = (0, 87, 1);
+
+/// Refuse a pi that local mode can't run: older than [`MIN_LOCAL_VERSION`].
+/// `command` is pi with the launch's environment. A pi that cannot run, exits
+/// non-zero or prints no version is an error naming the probe.
+pub(crate) fn require_local_version(mut command: Command) -> Result<(), String> {
+    let shown = format!("`{} --version`", Path::new(command.get_program()).display());
+    let output = command
+        .arg("--version")
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| format!("failed to run {shown}: {error}"))?;
+    if !output.status.success() {
+        return Err(format!("{shown} failed: {}", output.status));
+    }
+    let printed = String::from_utf8_lossy(&output.stdout);
+    let version = super::omp::parse_version(&printed)
+        .ok_or_else(|| format!("{shown} printed no version: {:?}", printed.trim()))?;
+    local_version_error(version).map_or(Ok(()), Err)
+}
+
+fn local_version_error(version: (u64, u64, u64)) -> Option<String> {
+    (version < MIN_LOCAL_VERSION).then(|| {
+        let (major, minor, patch) = MIN_LOCAL_VERSION;
+        format!(
+            "pi {}.{}.{} doesn't send its session id, which local mode needs; upgrade to pi \
+             {major}.{minor}.{patch} or later: npm install -g @earendil-works/pi-coding-agent",
+            version.0, version.1, version.2
+        )
+    })
+}
 
 pub(crate) fn plan(ctx: &RenderContext<'_>) -> Plan {
     let compat = json!({
@@ -68,6 +106,19 @@ pub(crate) fn plan(ctx: &RenderContext<'_>) -> Plan {
 mod tests {
     use super::super::Harness;
     use super::super::tests::{TEST_URL, env_value, render};
+    use super::local_version_error;
+
+    #[test]
+    fn local_mode_refuses_a_pi_that_sends_no_session_id() {
+        let error = local_version_error((0, 73, 1)).expect("too old");
+        assert!(
+            error.starts_with("pi 0.73.1 doesn't send its session id"),
+            "{error}"
+        );
+        assert!(error.contains("pi 0.87.1 or later"), "{error}");
+        assert_eq!(local_version_error((0, 87, 1)), None);
+        assert_eq!(local_version_error((1, 5, 0)), None);
+    }
 
     #[test]
     fn renders_models_and_default_settings() {
@@ -147,5 +198,33 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(dir.join("models.json")).unwrap())
                 .unwrap();
         assert_eq!(models["providers"]["rayline"]["baseUrl"], TEST_URL);
+    }
+
+    /// The probe reads the version pi prints on stdout, and refuses one it
+    /// can't read.
+    #[cfg(unix)]
+    #[test]
+    fn the_version_probe_reads_pi_s_stdout() {
+        let probe = |script: &str| {
+            let mut command = std::process::Command::new("sh");
+            command.args(["-c", script, "pi"]);
+            super::require_local_version(command)
+        };
+        assert_eq!(probe("echo 0.87.1"), Ok(()));
+        assert!(
+            probe("echo 0.80.0")
+                .unwrap_err()
+                .contains("upgrade to pi 0.87.1")
+        );
+        assert!(
+            probe("echo 0.87.1 >&2")
+                .unwrap_err()
+                .contains("printed no version")
+        );
+        assert!(
+            probe("echo 0.87.1; exit 1")
+                .unwrap_err()
+                .contains("failed: exit status: 1")
+        );
     }
 }

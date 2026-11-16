@@ -53,7 +53,7 @@ pub(crate) fn version_warning(version_output: &str) -> Option<String> {
 }
 
 /// The first `X.Y.Z` in `text`.
-fn parse_version(text: &str) -> Option<(u64, u64, u64)> {
+pub(super) fn parse_version(text: &str) -> Option<(u64, u64, u64)> {
     text.split(|ch: char| !(ch.is_ascii_digit() || ch == '.'))
         .find_map(|token| {
             let mut parts = token.split('.').map(|part| part.parse::<u64>().ok());
