@@ -966,6 +966,17 @@ fn local_arc(home: &Path, routing: &crate::config::Routing) -> io::Result<Option
     if routing.router == crate::config::Router::Hosted {
         return Ok(None);
     }
+    // The encoder is checked before anything is downloaded.
+    let encoder = match std::env::var_os("RAYLINE_ARC_ENCODER") {
+        Some(path) => PathBuf::from(path),
+        None => {
+            let executable = current_exe()?;
+            let directory = executable
+                .parent()
+                .ok_or_else(|| io::Error::other("rayline executable has no parent directory"))?;
+            arc_encoder_beside(directory, ENCODER_SHIPS)?
+        }
+    };
     // Development overrides: `RAYLINE_ARC_MODEL` and `RAYLINE_ARC_ENCODER`
     // name the encoder weights and binary, `RAYLINE_ARC_RELEASE` a release
     // directory. Without them, the
@@ -1030,19 +1041,6 @@ fn local_arc(home: &Path, routing: &crate::config::Routing) -> io::Result<Option
     if hub.is_some() {
         progress.release_ready();
     }
-    let encoder = match std::env::var_os("RAYLINE_ARC_ENCODER") {
-        Some(path) => PathBuf::from(path),
-        None => installed_binary("rayline-arc-encoder").map_err(|error| {
-            io::Error::new(
-                error.kind(),
-                format!(
-                    "`local` decisions need the ARC encoder `rayline-arc-encoder` beside `rayline`, \
-                     which releases ship for macOS arm64 and for Linux with an NVIDIA GPU (driver only); \
-                     run `rayline update`, or set `routing.router` to `hosted` ({error})"
-                ),
-            )
-        })?,
-    };
     Ok(Some(LocalArc {
         source,
         encoder,
@@ -1050,6 +1048,58 @@ fn local_arc(home: &Path, routing: &crate::config::Routing) -> io::Result<Option
         // Beside the local process's state, which each start clears.
         release,
     }))
+}
+
+/// Whether Rayline releases ship the ARC encoder for this platform.
+const ENCODER_SHIPS: bool = cfg!(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    all(target_os = "windows", target_arch = "x86_64")
+));
+
+/// The ARC encoder installed in `directory`, or an error saying why there is
+/// none: releases don't ship it for this platform (`ships` false), it isn't
+/// installed, or it can't be read.
+fn arc_encoder_beside(directory: &Path, ships: bool) -> io::Result<PathBuf> {
+    if !ships {
+        let os = match std::env::consts::OS {
+            "macos" => "macOS",
+            "linux" => "Linux",
+            "windows" => "Windows",
+            os => os,
+        };
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            format!(
+                "`local` decisions need the ARC encoder, which Rayline releases ship only for \
+                 macOS arm64, and Linux (x86_64 and aarch64) and Windows x86_64 with an NVIDIA GPU, not for {os} {}; \
+                 set `routing.router` to `hosted`",
+                std::env::consts::ARCH
+            ),
+        ));
+    }
+    let path = directory.join(format!(
+        "rayline-arc-encoder{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    fs::canonicalize(&path).map_err(|error| {
+        let message = if error.kind() == io::ErrorKind::NotFound {
+            format!(
+                "`local` decisions need the ARC encoder, and it isn't installed: no {} beside \
+                 `rayline`; run `rayline update` to install it, or set `routing.router` to `hosted`",
+                path.display()
+            )
+        } else {
+            format!(
+                "`local` decisions need the ARC encoder, and {} can't be read: {error}",
+                path.display()
+            )
+        };
+        io::Error::new(error.kind(), message)
+    })
 }
 
 /// `name`, installed beside [`current_exe`].
@@ -1926,6 +1976,48 @@ mod tests {
             message.ends_with("Reinstall the complete release with `rayline update --force`"),
             "{message}"
         );
+    }
+
+    #[test]
+    fn a_missing_encoder_says_whether_releases_ship_one_for_this_platform() {
+        let dir = temp_dir("encoder");
+        let unsupported = arc_encoder_beside(&dir, false).unwrap_err();
+        assert_eq!(unsupported.kind(), io::ErrorKind::Unsupported);
+        let message = unsupported.to_string();
+        assert!(
+            message.contains(
+                "ship only for macOS arm64, and Linux (x86_64 and aarch64) and Windows x86_64 with an NVIDIA GPU, not for "
+            ),
+            "{message}"
+        );
+        assert!(
+            message.ends_with("set `routing.router` to `hosted`"),
+            "{message}"
+        );
+        assert!(!message.contains("update"), "{message}");
+
+        let missing = arc_encoder_beside(&dir, true).unwrap_err();
+        assert_eq!(missing.kind(), io::ErrorKind::NotFound);
+        let message = missing.to_string();
+        assert!(message.contains("it isn't installed"), "{message}");
+        assert!(
+            message.contains("run `rayline update` to install it"),
+            "{message}"
+        );
+        assert!(!message.contains("--force"), "{message}");
+
+        let path = dir.join(format!(
+            "rayline-arc-encoder{}",
+            std::env::consts::EXE_SUFFIX
+        ));
+        fs::write(&path, b"").unwrap();
+        assert_eq!(
+            arc_encoder_beside(&dir, true).unwrap(),
+            fs::canonicalize(&path).unwrap()
+        );
+        // Releases that don't ship one refuse even an encoder put there by hand.
+        assert!(arc_encoder_beside(&dir, false).is_err());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     // The built-in prod takes no `--env`: `--env prod` selects a configured

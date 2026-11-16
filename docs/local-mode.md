@@ -136,7 +136,8 @@ Every entry works the same way. No setting marks a model as local.
 
 `local` decisions are a preview. They need the ARC encoder binary
 `rayline-arc-encoder` beside `rayline`, which releases ship for
-macOS arm64 and Linux with an NVIDIA GPU (driver only). On Linux:
+macOS arm64, and for Linux (x86_64 and aarch64) and Windows x86_64 with an
+NVIDIA GPU (driver only); start checks for it before it downloads anything. On Linux:
 
 - x86_64 needs an NVIDIA GPU of compute capability 7.5, 8.x, 9.0 or 12.0
   (T4, A100, A10/L4/RTX 30 and 40, H100, RTX 50), and aarch64 one of 9.0 or
@@ -147,6 +148,19 @@ macOS arm64 and Linux with an NVIDIA GPU (driver only). On Linux:
 - It needs glibc 2.28 or later (as `rayline` does) and AVX2 on x86_64, and
   is 0.6 to 0.8 GB.
 - There is no build for other GPUs (Vulkan) or for the CPU alone.
+
+On Windows:
+
+- It needs Windows 10 version 1903 or later, or Windows Server 2022, on
+  x86_64, with an NVIDIA GPU of compute capability 7.5, 8.x, 9.0 or 12.0 and
+  NVIDIA driver 576 or later. No CUDA toolkit or Visual C++ runtime.
+- It is the encoder plus the cuBLAS DLLs it loads, `cublas64_12.dll` and
+  `cublasLt64_12.dll`, about 1 GB together, installed beside `rayline`.
+- Windows on Arm and other GPUs aren't supported.
+
+When the encoder finds no GPU it can use (no NVIDIA GPU, or a driver too old
+for it), start fails with an error that says so instead of running ARC on the
+CPU, which takes seconds a turn.
 
 On first use, start downloads the
 release and about 1 GB of encoder weights into the Hugging Face cache and
@@ -226,7 +240,8 @@ Code's `settings.json`, overrides the models Rayline sets.
 The [pi-arc](https://github.com/rayline-ai/pi-arc) extension can ask the
 local process for each turn's model while you keep using your own Pi, with
 its own extensions, keys and models. This is a preview with the same limits
-as `local` decisions: macOS on Apple Silicon, or Linux with an NVIDIA GPU.
+as `local` decisions: macOS on Apple Silicon, or Linux or Windows with an
+NVIDIA GPU.
 
 ```bash
 rayline auth login

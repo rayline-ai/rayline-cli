@@ -4,7 +4,8 @@
 //! Unix keeps hybrid state private with 0700/0600 modes. Windows has no mode
 //! bits, so the same files get a protected DACL that grants only the current
 //! user. A named event gives the CLI a graceful way to stop a detached local
-//! process that has no console it can signal and no gateway serving yet.
+//! process that has no console it can signal and no gateway serving yet. A
+//! kill-on-close job ties the local process's children to its lifetime.
 
 use std::ffi::OsStr;
 use std::io;
@@ -28,6 +29,11 @@ use windows_sys::Win32::Security::{
     TOKEN_USER, TokenUser,
 };
 use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
+use windows_sys::Win32::System::JobObjects::{
+    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+    SetInformationJobObject,
+};
 use windows_sys::Win32::System::Threading::{
     CreateEventW, EVENT_MODIFY_STATE, GetCurrentProcess, INFINITE, OpenEventW, OpenProcessToken,
     SetEvent, WaitForSingleObject,
@@ -278,6 +284,59 @@ pub fn request_stop(pid: u32) -> io::Result<()> {
     let handle = Handle(handle);
     // SAFETY: opened with EVENT_MODIFY_STATE.
     if unsafe { SetEvent(handle.0) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// The job this process's children join: closing its last handle, which
+/// happens only when this process exits, however it exits, kills them.
+struct ChildJob(Handle);
+
+// SAFETY: a job handle may be used from any thread.
+unsafe impl Send for ChildJob {}
+// SAFETY: as above; the handle is only read after creation.
+unsafe impl Sync for ChildJob {}
+
+static CHILD_JOB: std::sync::OnceLock<io::Result<ChildJob>> = std::sync::OnceLock::new();
+
+fn child_job() -> io::Result<&'static ChildJob> {
+    CHILD_JOB
+        .get_or_init(|| {
+            // SAFETY: an unnamed job with default security.
+            let job = unsafe { CreateJobObjectW(null(), null()) };
+            if job.is_null() {
+                return Err(io::Error::last_os_error());
+            }
+            let job = Handle(job);
+            // SAFETY: an all-zero JOBOBJECT_EXTENDED_LIMIT_INFORMATION is valid; only the limit flags are set.
+            let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            // SAFETY: `limits` is the struct this information class takes, with its size.
+            let set = unsafe {
+                SetInformationJobObject(
+                    job.0,
+                    JobObjectExtendedLimitInformation,
+                    (&raw const limits).cast(),
+                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                )
+            };
+            if set == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(ChildJob(job))
+        })
+        .as_ref()
+        .map_err(|error| io::Error::new(error.kind(), error.to_string()))
+}
+
+/// Put the child process `process` in this process's kill-on-close job, so it
+/// cannot outlive this process: a crashed or killed local process otherwise
+/// leaves the ARC encoder holding the GPU.
+pub fn kill_with_this_process(process: std::os::windows::io::RawHandle) -> io::Result<()> {
+    let job = child_job()?;
+    // SAFETY: a valid job handle and the caller's open process handle.
+    if unsafe { AssignProcessToJobObject(job.0.0, process.cast()) } == 0 {
         return Err(io::Error::last_os_error());
     }
     Ok(())

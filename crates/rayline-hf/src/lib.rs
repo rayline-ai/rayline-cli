@@ -454,10 +454,14 @@ fn create_symlink_or_copy(
 
     #[cfg(windows)]
     {
-        match std::os::windows::fs::symlink_file(symlink_target, symlink_path) {
-            Ok(()) => {}
-            Err(e) => {
-                warn!("[HfCache] Symlink creation failed ({e}), falling back to copy");
+        // A symlink needs Developer Mode or an elevated user. Without it, a hard
+        // link (same volume, no privilege) keeps one copy of a large blob on
+        // disk; a copy is the last resort.
+        if let Err(e) = std::os::windows::fs::symlink_file(symlink_target, symlink_path) {
+            if let Err(link) = fs::hard_link(_blob_path, symlink_path) {
+                warn!(
+                    "[HfCache] Symlink ({e}) and hard link ({link}) failed, falling back to copy"
+                );
                 fs::copy(_blob_path, symlink_path)
                     .map_err(|e| format!("Failed to copy blob to snapshot: {e}"))?;
             }
