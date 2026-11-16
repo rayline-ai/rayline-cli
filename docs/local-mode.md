@@ -193,6 +193,10 @@ rayline local status
 rayline local stop
 ```
 
+Pi needs version 0.87.1 or later in local mode (`npm install -g
+@earendil-works/pi-coding-agent`). An older Pi doesn't send its session id,
+so `rayline run pi --local` refuses it.
+
 | Command | Does |
 |---|---|
 | `rayline local start [--config <file>] [--router <local\|hosted>]` | Starts the local process from the default config file, or from `<file>`. The config must have a `routing` section, except with `--router local`. `--router` overrides `routing.router`. |

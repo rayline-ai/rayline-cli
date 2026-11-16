@@ -43,7 +43,7 @@ pub(crate) mod hermes;
 mod omp;
 mod openclaw;
 mod opencode;
-mod pi;
+pub(crate) mod pi;
 mod yaml_merge;
 
 use std::ffi::OsString;

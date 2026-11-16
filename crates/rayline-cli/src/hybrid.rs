@@ -1265,6 +1265,10 @@ fn harness_command(
             let harness = crate::harness::Harness::from_command(name).ok_or_else(|| {
                 io::Error::other(format!("unsupported local-mode harness {name:?}"))
             })?;
+            if harness == crate::harness::Harness::Pi {
+                crate::harness::pi::require_local_version(withheld_command(&program, withheld))
+                    .map_err(io::Error::other)?;
+            }
             let major_version = harness
                 .major_version(withheld_command(&program, withheld))
                 .map_err(io::Error::other)?;
