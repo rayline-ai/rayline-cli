@@ -44,7 +44,8 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 - **`rayline local stop` could return before the local process had removed
   its state**, leaving a `gateway-token` that made every later `start`,
   `stop` and `status` fail until it was deleted by hand. `stop` now returns
-  only once the process's state is gone.
+  only once the process's state is gone. If you hit this on 0.5.2, delete
+  `~/.rayline/local/gateway-token`, then run `rayline local start`.
 - **The ARC encoder is stopped even when the execution core fails to stop.**
 - **The download progress line ends at 100%**, and an output rate is shown
   only after half a second of output.
