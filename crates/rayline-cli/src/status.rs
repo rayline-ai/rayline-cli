@@ -1466,6 +1466,7 @@ mod tests {
                 env,
                 harness_protocol: None,
                 router: None,
+                routing_defaults: false,
             },
         )
         .map(|settings| hosted_environment(&settings))

@@ -83,6 +83,10 @@ struct Supervisor {
     /// started with one.
     #[serde(default)]
     classifier_model: Option<String>,
+    /// Started from the `--router local` defaults (no `routing` in its
+    /// config): a `rayline run --local` without `routing` runs on it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    routing_defaults: bool,
 }
 
 /// `routing.router`, and for `local` the ARC release with the built-in
@@ -294,7 +298,22 @@ pub(crate) async fn start(settings: &Settings) -> ExitCode {
             launch(&home, &paths, settings, &|line| {
                 let _ = io::Write::write_all(&mut io::stdout(), format!("{line}\n").as_bytes());
             })
-            .await
+            .await?;
+            if let Some(routing) = &settings.routing
+                && routing.classifier_model.is_none()
+            {
+                let _ = io::Write::write_all(
+                    &mut io::stdout(),
+                    format!(
+                        "Note: Claude Code needs `routing.classifier_model` in {}, \
+                         set to a model Rayline Platform serves:\n{}",
+                        settings.file.display(),
+                        routing.with_classifier_model()
+                    )
+                    .as_bytes(),
+                );
+            }
+            Ok(())
         }
         .await,
     )
@@ -472,6 +491,23 @@ fn running_in(dir: &Path) -> bool {
     )
 }
 
+/// Whether the running local process was started from the `--router local`
+/// defaults, for a `rayline run --local` to load them. Reads its state
+/// without creating anything; state it can't read is no.
+pub(crate) fn running_from_routing_defaults() -> bool {
+    crate::home().is_ok_and(|home| {
+        matches!(
+            running(&Paths {
+                dir: state_dir(&home)
+            }),
+            Ok(Some(Supervisor {
+                routing_defaults: true,
+                ..
+            }))
+        )
+    })
+}
+
 /// The home directory and the local process's state directory, created
 /// owner-only.
 fn local_paths() -> io::Result<(PathBuf, Paths)> {
@@ -497,15 +533,15 @@ async fn run_harness(
         )));
     }
     if harness == "claude"
-        && settings
-            .routing
-            .as_ref()
-            .is_some_and(|routing| routing.classifier_model.is_none())
+        && let Some(routing) = &settings.routing
+        && routing.classifier_model.is_none()
     {
         return Err(io::Error::other(format!(
             "{}: `routing.classifier_model` is required to run Claude Code in local mode: \
-             it serves Claude Code's auto-mode safety checks",
-            settings.file.display()
+             it serves Claude Code's auto-mode safety checks. Set it to a model Rayline \
+             Platform serves:\n{}",
+            settings.file.display(),
+            routing.with_classifier_model().trim_end()
         )));
     }
     if harness == "pi" {
@@ -758,6 +794,10 @@ async fn launch(
                 .routing
                 .as_ref()
                 .and_then(|routing| routing.classifier_model.clone()),
+            routing_defaults: settings
+                .routing
+                .as_ref()
+                .is_some_and(|routing| routing.defaults),
         };
         write_private_json(
             &paths.supervisor(),
@@ -2553,6 +2593,7 @@ mod tests {
             env: None,
             harness_protocol: None,
             router: None,
+            routing_defaults: false,
         })
         .unwrap();
         let withheld = [
@@ -2862,6 +2903,7 @@ mod tests {
             env,
             harness_protocol: None,
             router: None,
+            routing_defaults: false,
         })
         .unwrap()
     }
@@ -2883,6 +2925,7 @@ mod tests {
             }),
             decisions_model: Some("arc-swift-1.0".to_owned()),
             classifier_model: None,
+            routing_defaults: false,
         };
         let state = json!({"listen_url": "http://127.0.0.1:5000",
                            "routes_url": "http://127.0.0.1:5001/v1/routes"});
@@ -2922,6 +2965,7 @@ mod tests {
             router: Some(RouterSource::Hosted),
             decisions_model: None,
             classifier_model: None,
+            routing_defaults: false,
         };
         let error = running.check_runs("claude").unwrap_err().to_string();
         assert!(error.contains("earlier Rayline"), "{error}");
@@ -2965,6 +3009,37 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("routing.classifier_model"), "{error}");
+        assert!(
+            error.contains(r#""classifier_model": "<model id>""#),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_process_started_from_the_router_defaults_says_so_in_its_record() {
+        let mut record = Supervisor {
+            pid: 1,
+            config: PathBuf::from("/c.json"),
+            env: None,
+            router: Some(RouterSource::Hosted),
+            decisions_model: Some("d".to_owned()),
+            classifier_model: None,
+            routing_defaults: false,
+        };
+        // Other records are written as before.
+        let written = serde_json::to_value(&record).unwrap();
+        assert!(written.get("routing_defaults").is_none(), "{written}");
+        assert_eq!(
+            serde_json::from_value::<Supervisor>(written).unwrap(),
+            record
+        );
+        record.routing_defaults = true;
+        let written = serde_json::to_value(&record).unwrap();
+        assert_eq!(written["routing_defaults"], true);
+        assert_eq!(
+            serde_json::from_value::<Supervisor>(written).unwrap(),
+            record
+        );
     }
 
     #[cfg(windows)]
@@ -3043,6 +3118,7 @@ mod tests {
             router: Some(RouterSource::of(&started)),
             decisions_model: None,
             classifier_model: None,
+            routing_defaults: false,
         };
         supervisor.check_serves(&started).unwrap();
         assert_eq!(supervisor.router, Some(RouterSource::Hosted));
@@ -3168,6 +3244,7 @@ mod tests {
                 router: Some(RouterSource::Hosted),
                 decisions_model: None,
                 classifier_model: None,
+                routing_defaults: false,
             })
         );
         let error = record(u64::from(u32::MAX)).unwrap_err().to_string();
