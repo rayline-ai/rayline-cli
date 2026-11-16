@@ -17,6 +17,9 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 
 ### Changed
 
+- `rayline run openclaw` refuses an OpenClaw older than 2026.9.6 with a
+  message naming the version to install, instead of handing it a config it
+  rejects as invalid.
 - **Installing and updating Rayline no longer download the ARC encoder.** The
   installers fetch only `rayline`, `rayline-core` and `rayline-core-LICENSE`.
   The first `rayline local start` (or `rayline run ... --local` that starts

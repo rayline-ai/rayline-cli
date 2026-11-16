@@ -15,8 +15,7 @@
 //! is its default for Messages, so no thinking block with an empty signature
 //! goes upstream.
 
-use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 use serde_json::json;
 
@@ -29,20 +28,8 @@ pub(crate) const MIN_LOCAL_VERSION: (u64, u64, u64) = (0, 87, 1);
 /// Refuse a pi that local mode can't run: older than [`MIN_LOCAL_VERSION`].
 /// `command` is pi with the launch's environment. A pi that cannot run, exits
 /// non-zero or prints no version is an error naming the probe.
-pub(crate) fn require_local_version(mut command: Command) -> Result<(), String> {
-    let shown = format!("`{} --version`", Path::new(command.get_program()).display());
-    let output = command
-        .arg("--version")
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|error| format!("failed to run {shown}: {error}"))?;
-    if !output.status.success() {
-        return Err(format!("{shown} failed: {}", output.status));
-    }
-    let printed = String::from_utf8_lossy(&output.stdout);
-    let version = super::omp::parse_version(&printed)
-        .ok_or_else(|| format!("{shown} printed no version: {:?}", printed.trim()))?;
-    local_version_error(version).map_or(Ok(()), Err)
+pub(crate) fn require_local_version(command: Command) -> Result<(), String> {
+    local_version_error(super::installed_version(command)?).map_or(Ok(()), Err)
 }
 
 fn local_version_error(version: (u64, u64, u64)) -> Option<String> {

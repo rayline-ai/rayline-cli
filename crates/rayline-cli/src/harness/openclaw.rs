@@ -30,12 +30,34 @@
 //! Completions upstream; ordinary function tools are.
 
 use std::ffi::OsString;
+use std::process::Command;
 
 use serde_json::json;
 
 use super::{ConfigFile, Plan, RenderContext, json_file};
 
 pub(crate) const CONFIG_FILE: &str = "openclaw.json";
+/// The oldest OpenClaw tested with the config Rayline writes: older releases
+/// reject the whole file over fields they don't know (`compat`,
+/// `memory.search`).
+pub(crate) const MIN_VERSION: (u64, u64, u64) = (2026, 9, 6);
+
+/// Refuse an OpenClaw older than [`MIN_VERSION`], before its config is
+/// written. `command` is OpenClaw with the launch's environment.
+pub(crate) fn require_version(command: Command) -> Result<(), String> {
+    version_error(super::installed_version(command)?).map_or(Ok(()), Err)
+}
+
+fn version_error(version: (u64, u64, u64)) -> Option<String> {
+    (version < MIN_VERSION).then(|| {
+        let (major, minor, patch) = MIN_VERSION;
+        format!(
+            "OpenClaw {}.{}.{} can't load the config Rayline writes; upgrade to OpenClaw \
+             {major}.{minor}.{patch} or later: npm install -g openclaw",
+            version.0, version.1, version.2
+        )
+    })
+}
 pub(crate) const PROVIDER_ID: &str = "rayline";
 pub(crate) const RESPONSES_PROVIDER_ID: &str = "rayline-resp";
 /// The file the key SecretRef reads, next to the config.
@@ -190,6 +212,35 @@ mod tests {
     use super::super::Harness;
     use super::super::tests::{TEST_KEY, TEST_URL, env_value, render};
     use super::{CONFIG_FILE, KEY_FILE};
+
+    /// An OpenClaw older than the config Rayline writes is refused with the
+    /// version to upgrade to; the probe reads `openclaw --version`'s stdout.
+    #[cfg(unix)]
+    #[test]
+    fn an_openclaw_older_than_the_config_is_refused() {
+        let probe = |script: &str| {
+            let mut command = std::process::Command::new("sh");
+            command.args(["-c", script, "openclaw"]);
+            Harness::OpenClaw.require_version(command)
+        };
+        assert_eq!(probe("echo 'OpenClaw 2026.9.6 (1a2b3c4)'"), Ok(()));
+        assert_eq!(probe("echo 2026.11.3"), Ok(()));
+        assert_eq!(
+            probe("echo 'OpenClaw 2026.6.35'").unwrap_err(),
+            "OpenClaw 2026.6.35 can't load the config Rayline writes; upgrade to OpenClaw \
+             2026.9.6 or later: npm install -g openclaw"
+        );
+        assert!(
+            probe("echo nothing")
+                .unwrap_err()
+                .contains("printed no version")
+        );
+        // Other harnesses have no minimum here.
+        assert_eq!(
+            Harness::Hermes.require_version(std::process::Command::new("false")),
+            Ok(())
+        );
+    }
 
     #[test]
     fn renders_chat_completions_with_session_affinity_and_disables_side_calls() {
