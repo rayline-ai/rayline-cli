@@ -89,7 +89,6 @@ writes the Rayline provider into an isolated CODEX_HOME
 running on a different config, you'll be prompted to restart it.
 
 Options:
-  --model <model>         Model to request (default: your key's ARC Sage)
   --help                  Show this message and exit
 ";
 
@@ -100,7 +99,6 @@ Write a Codex profile at $CODEX_HOME/rayline.config.toml (or ~/.codex) that
 reaches ARC through the Rayline router with your router key.
 
 Options:
-  --model <model>         Model to request (default: your key's ARC Sage)
   --help                  Show this message and exit
 ";
 
@@ -247,24 +245,16 @@ pub(crate) enum Launch {
         args: Vec<OsString>,
     },
     Codex {
-        options: CodexOptions,
         args: Vec<OsString>,
     },
     CodexApp {
-        options: CodexOptions,
         args: Vec<OsString>,
     },
-    CodexConfigure(CodexOptions),
+    CodexConfigure,
     Harness {
         harness: Harness,
         args: Vec<OsString>,
     },
-}
-
-/// `--model` of `run codex`, `run codex app` and `run codex configure`.
-#[derive(Debug, Default, PartialEq, Eq)]
-pub(crate) struct CodexOptions {
-    pub model: Option<String>,
 }
 
 impl Run {
@@ -281,7 +271,7 @@ impl Launch {
     pub(crate) fn protocol(&self) -> Protocol {
         match self {
             Launch::Claude { .. } => Protocol::AnthropicMessages,
-            Launch::Codex { .. } | Launch::CodexApp { .. } | Launch::CodexConfigure(_) => {
+            Launch::Codex { .. } | Launch::CodexApp { .. } | Launch::CodexConfigure => {
                 Protocol::OpenaiResponses
             }
             Launch::Harness { harness, .. } => match harness {
@@ -298,8 +288,7 @@ impl Launch {
         match self {
             Launch::Claude { isolated: true, .. } => Some("`--isolated`"),
             Launch::CodexApp { .. } => Some("`run codex app`"),
-            Launch::CodexConfigure(_) => Some("`run codex configure`"),
-            Launch::Codex { options, .. } if options.model.is_some() => Some("`--model`"),
+            Launch::CodexConfigure => Some("`run codex configure`"),
             Launch::Claude { .. } | Launch::Codex { .. } | Launch::Harness { .. } => None,
         }
     }
@@ -758,8 +747,6 @@ struct RunGrammar {
     passthrough: bool,
     /// Reads `--isolated` (`run claude`).
     isolated: bool,
-    /// Reads `--model` (`run codex`).
-    codex: bool,
 }
 
 impl RunGrammar {
@@ -769,7 +756,6 @@ impl RunGrammar {
             own_help,
             passthrough,
             isolated: false,
-            codex: false,
         }
     }
 }
@@ -779,7 +765,6 @@ struct RunOptions {
     local: bool,
     config: Option<PathBuf>,
     isolated: bool,
-    codex: CodexOptions,
     /// What goes to the harness.
     args: Vec<OsString>,
 }
@@ -805,10 +790,6 @@ fn parse_run(args: &mut Args<'_>) -> Result<OrHelp<Run>, UsageError> {
         }
         Some(harness) => harness,
     };
-    let codex = |help, own_help, passthrough| RunGrammar {
-        codex: true,
-        ..RunGrammar::new(help, own_help, passthrough)
-    };
     let (target, grammar) = match harness {
         "claude" => (
             Target::Claude,
@@ -820,13 +801,16 @@ fn parse_run(args: &mut Args<'_>) -> Result<OrHelp<Run>, UsageError> {
         "codex" => match args.peek().and_then(|arg| arg.to_str()) {
             Some("app") => {
                 args.next();
-                (Target::CodexApp, codex(CODEX_APP, true, true))
+                (Target::CodexApp, RunGrammar::new(CODEX_APP, true, true))
             }
             Some("configure") => {
                 args.next();
-                (Target::CodexConfigure, codex(CODEX_CONFIGURE, true, false))
+                (
+                    Target::CodexConfigure,
+                    RunGrammar::new(CODEX_CONFIGURE, true, false),
+                )
             }
-            _ => (Target::Codex, codex(RUN, false, true)),
+            _ => (Target::Codex, RunGrammar::new(RUN, false, true)),
         },
         name => match Harness::from_command(name) {
             Some(harness) => (Target::Harness(harness), RunGrammar::new(RUN, false, true)),
@@ -846,15 +830,9 @@ fn parse_run(args: &mut Args<'_>) -> Result<OrHelp<Run>, UsageError> {
             isolated: options.isolated,
             args: options.args,
         },
-        Target::Codex => Launch::Codex {
-            options: options.codex,
-            args: options.args,
-        },
-        Target::CodexApp => Launch::CodexApp {
-            options: options.codex,
-            args: options.args,
-        },
-        Target::CodexConfigure => Launch::CodexConfigure(options.codex),
+        Target::Codex => Launch::Codex { args: options.args },
+        Target::CodexApp => Launch::CodexApp { args: options.args },
+        Target::CodexConfigure => Launch::CodexConfigure,
         Target::Harness(harness) => Launch::Harness {
             harness,
             args: options.args,
@@ -907,11 +885,6 @@ fn run_options(args: &mut Args<'_>, grammar: RunGrammar) -> Result<Option<RunOpt
                     return Err(help.error("`--isolated` given more than once"));
                 }
                 options.isolated = true;
-            }
-            "--model" if grammar.codex => {
-                args.next();
-                let model = args.value(name, inline, help)?;
-                set_once(&mut options.codex.model, model.to_owned(), name, help)?;
             }
             "--help" if flag && grammar.own_help => return Ok(None),
             _ if grammar.passthrough => break,
@@ -1107,13 +1080,7 @@ mod tests {
     fn every_harness_runs_in_cloud_mode_with_neither_flag() {
         for (name, launch) in [
             ("claude", claude(&[])),
-            (
-                "codex",
-                Launch::Codex {
-                    options: CodexOptions::default(),
-                    args: Vec::new(),
-                },
-            ),
+            ("codex", Launch::Codex { args: Vec::new() }),
             ("opencode", harness(Harness::OpenCode, &[])),
             ("pi", harness(Harness::Pi, &[])),
             ("omp", harness(Harness::Omp, &[])),
@@ -1184,10 +1151,6 @@ mod tests {
         assert_error(
             &["run", "claude", "--isolated", "--isolated"],
             "`--isolated` given more than once",
-        );
-        assert_error(
-            &["run", "codex", "--model", "a", "--model", "b"],
-            "`--model` given more than once",
         );
     }
 
@@ -1261,10 +1224,7 @@ mod tests {
         );
         assert_eq!(
             run(&["run", "codex", "--", "app"]).launch,
-            Launch::Codex {
-                options: CodexOptions::default(),
-                args: os(&["app"]),
-            }
+            Launch::Codex { args: os(&["app"]) }
         );
     }
 
@@ -1283,7 +1243,6 @@ mod tests {
             Run {
                 config: ConfigFlag::Local,
                 launch: Launch::Codex {
-                    options: CodexOptions::default(),
                     args: os(&["--help"]),
                 },
             }
@@ -1364,15 +1323,29 @@ mod tests {
     }
 
     #[test]
-    fn codex_takes_model_before_its_own_arguments() {
+    fn a_harness_model_flag_goes_to_the_harness() {
         assert_eq!(
-            run(&["run", "codex", "--model", "m", "exec", "--model", "x"]).launch,
+            run(&["run", "codex", "--model", "m", "exec", "-m", "x"]).launch,
             Launch::Codex {
-                options: CodexOptions {
-                    model: Some("m".to_owned()),
-                },
-                args: os(&["exec", "--model", "x"]),
+                args: os(&["--model", "m", "exec", "-m", "x"]),
             }
+        );
+        assert_eq!(
+            run(&["run", "codex", "--local", "-m", "m"]),
+            Run {
+                config: ConfigFlag::Local,
+                launch: Launch::Codex {
+                    args: os(&["-m", "m"]),
+                },
+            }
+        );
+        assert_eq!(
+            run(&["run", "claude", "--local", "--model", "m"]).launch,
+            claude(&["--model", "m"])
+        );
+        assert_eq!(
+            run(&["run", "openclaw", "agent", "--model", "rayline/m"]).launch,
+            harness(Harness::OpenClaw, &["agent", "--model", "rayline/m"])
         );
     }
 
@@ -1383,14 +1356,12 @@ mod tests {
         assert_eq!(
             run(&["run", "codex", "--auth", "none"]).launch,
             Launch::Codex {
-                options: CodexOptions::default(),
                 args: os(&["--auth", "none"]),
             }
         );
         assert_eq!(
             run(&["run", "codex", "app", "--auth", "none"]).launch,
             Launch::CodexApp {
-                options: CodexOptions::default(),
                 args: os(&["--auth", "none"]),
             }
         );
@@ -1401,15 +1372,12 @@ mod tests {
     }
 
     #[test]
-    fn codex_app_takes_its_options_then_the_workspace() {
+    fn codex_app_takes_the_workspace() {
         assert_eq!(
-            run(&["run", "codex", "app", "--model", "m", "~/work"]),
+            run(&["run", "codex", "app", "~/work"]),
             Run {
                 config: ConfigFlag::Default,
                 launch: Launch::CodexApp {
-                    options: CodexOptions {
-                        model: Some("m".to_owned()),
-                    },
                     args: os(&["~/work"]),
                 },
             }
@@ -1419,21 +1387,20 @@ mod tests {
             run(&["run", "codex", "--local", "app"]),
             Run {
                 config: ConfigFlag::Local,
-                launch: Launch::Codex {
-                    options: CodexOptions::default(),
-                    args: os(&["app"]),
-                },
+                launch: Launch::Codex { args: os(&["app"]) },
             }
         );
     }
 
     #[test]
-    fn codex_configure_takes_only_model() {
+    fn codex_configure_takes_no_arguments() {
         assert_eq!(
-            run(&["run", "codex", "configure", "--model", "m"]).launch,
-            Launch::CodexConfigure(CodexOptions {
-                model: Some("m".to_owned()),
-            })
+            run(&["run", "codex", "configure"]).launch,
+            Launch::CodexConfigure
+        );
+        assert_error(
+            &["run", "codex", "configure", "--model", "m"],
+            "unexpected `--model`",
         );
         assert_error(
             &["run", "codex", "configure", "--base-url", "http://x"],
@@ -1457,10 +1424,11 @@ mod tests {
             local(&["run", "codex", "configure"]),
             Some("`run codex configure`")
         );
-        assert_eq!(local(&["run", "codex", "--model", "m"]), Some("`--model`"));
         for args in [
             &["run", "claude", "-p", "hi"][..],
+            &["run", "claude", "--model", "m"],
             &["run", "codex", "exec"],
+            &["run", "codex", "--model", "m"],
             &["run", "pi"],
             &["run", "pi", "--config", "routing.json"],
         ] {
@@ -1624,36 +1592,6 @@ mod tests {
             );
         }
         assert_error(&["update", "now"], "unexpected `now`");
-    }
-
-    #[test]
-    fn codex_options_need_a_value_and_are_given_once() {
-        for words in [
-            &["run", "codex"][..],
-            &["run", "codex", "app"],
-            &["run", "codex", "configure"],
-        ] {
-            let with = |extra: &[&str]| -> Vec<String> {
-                words
-                    .iter()
-                    .chain(extra)
-                    .map(|arg| (*arg).to_owned())
-                    .collect()
-            };
-            let check = |extra: &[&str], problem: &str| {
-                let args = with(extra);
-                let args: Vec<&str> = args.iter().map(String::as_str).collect();
-                assert_error(&args, problem);
-            };
-            let needs = "`--model` needs a value";
-            check(&["--model"], needs);
-            check(&["--model="], needs);
-            check(&["--model", "--local"], needs);
-            check(
-                &["--model", "a", "--model=b"],
-                "`--model` given more than once",
-            );
-        }
     }
 
     #[test]

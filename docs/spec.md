@@ -69,7 +69,7 @@ rayline run <HARNESS> [--local | --config <file>] [HARNESS ARGS]...
 5. Rayline options come first, right after the harness name. The first argument that is not a Rayline option, or everything after `--`, goes to the harness unchanged, including `--help`.
 6. `rayline run --help` prints the usage above. `rayline run <HARNESS>` with an unknown harness is a usage error.
 7. Each harness keeps today's behaviour in both modes, apart from what this spec removes.
-8. Local mode refuses these kept options and commands (section 9) before anything starts: `rayline run claude --isolated`, `rayline run codex app`, `rayline run codex configure`, and `rayline run codex` with `--model`. `app` and `configure` are Rayline commands only as the word right after `rayline run codex`. After Rayline's options they are codex arguments, so `rayline run codex --local app` passes `app` to codex.
+8. Local mode refuses these kept options and commands (section 9) before anything starts: `rayline run claude --isolated`, `rayline run codex app` and `rayline run codex configure`. `app` and `configure` are Rayline commands only as the word right after `rayline run codex`. After Rayline's options they are codex arguments, so `rayline run codex --local app` passes `app` to codex.
 9. For `claude`, `codex`, `pi` and `opencode`, local mode refuses a command line that resumes or forks a saved session, before anything starts. It looks at the harness arguments before any `--`, in both the `--flag` and `--flag=value` forms, and refuses these:
    - `claude`: `-r`, `-c`, `--resume`, `--continue`, `--fork-session`, `--resume-session-at`;
    - `codex`: `resume` or `fork` as the first argument, or `exec resume` as the first two;
@@ -80,6 +80,11 @@ rayline run <HARNESS> [--local | --config <file>] [HARNESS ARGS]...
 10. Local mode refuses OpenClaw container mode, before anything starts: `rayline run openclaw` when `OPENCLAW_CONTAINER` is set to a non-empty value, or when any harness argument is `--container` or `--container=<value>`.
 11. Before a cloud-mode `rayline run hermes` launch, on every OS, Rayline runs `hermes pm install --extra anthropic` with the launch's environment (`HERMES_HOME` set to Rayline's Hermes home), once per Hermes install and home; later launches skip it. If the install fails or cannot run, the launch stops with Hermes' last output and the command to run by hand with that home.
 12. Local mode refuses `rayline run pi` before anything starts when `pi` isn't on `PATH`, or when `pi --version` can't run, exits non-zero, prints no version or prints one older than 0.87.1 (an older pi sends no session id). When pi is older, the error names the minimum version and `npm install -g @earendil-works/pi-coding-agent`.
+13. Rayline sets each launch up for ARC and passes the harness arguments through unread, a harness's own model flag included. The endpoint decides what a model id means:
+    - cloud mode: the hosted router serves the model id the harness sends, or refuses it;
+    - local mode: the declared model is `rayline-auto`; a model id the harness sends is a request, and ARC decides which model runs;
+    - a harness may change its own request for the model it named, and the endpoint answers that request. Codex sends GPT reasoning fields and non-function tools for a model id it recognises as a GPT reasoning model (for example `codex -m openai/gpt-6.1-sol`); in local mode the core refuses that request with 400 naming the field, before anything runs. OpenClaw sends its session header only for a model Rayline declares; in local mode any other `--model` is refused by the core with 400 session_identity_required.
+    - a harness's own config pins override the environment Rayline sets, for example a subagent model pinned in Claude Code's `settings.json`.
 
 Harness-specific options and subcommands are **kept for review** (section 9).
 
@@ -434,7 +439,7 @@ One file: `~/.config/rayline/credentials.json`. `rayline auth login` writes `ses
 ### 7.2 Set by Rayline for a harness
 
 1. Claude Code: `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL_FORCE`, `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, `CLAUDE_CODE_MAX_OUTPUT_TOKENS`, `CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK`, `CLAUDE_CODE_DISABLE_REFUSAL_RETRY`, `CLAUDE_CODE_TETHER_LIVE`, `RAYLINE_ENV_NAME`.
-   - `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, in cloud mode: set to the router's auto-compact window for the model, or removed when the router gives none.
+   - `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, in cloud mode: set to the router's auto-compact window for the main ARC model (the `ANTHROPIC_MODEL` value), or removed when the router gives none.
    - `CLAUDE_CODE_AUTO_MODE_SERVER`, in local mode: always `0`.
 2. Other harnesses: `CODEX_HOME` (cloud-mode Codex and the Codex desktop app, set to Rayline's own folder for it, section 8.2), `HERMES_HOME`, `PI_CODING_AGENT_DIR`, `OPENCODE_CONFIG`, `OPENCLAW_CONFIG_PATH`.
 3. Removed from the Claude Code environment: `ANTHROPIC_API_KEY`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, `CLAUDE_CODE_USE_FOUNDRY`.
@@ -519,7 +524,7 @@ These keep today's behaviour for now, under the new command shape. Their aliases
 1. `rayline auth login`: `-b, --no-browser` (device-code login) and `-p, --paste` (paste the callback URL). `--paste` with `--no-browser` behaves as today (`--paste` wins). Launching a harness while signed out signs in on the spot with the default flow when stdin and stdout are both terminals. Otherwise the launch fails as signed out. A local-mode launch that reuses a running local process doesn't read the credentials, so it runs even when signed out.
 2. `rayline update`: `--check`, `--version <version>`, `--force`, `--dry-run`.
 3. `rayline run claude --isolated`: gives Claude Code its own config folder (`~/.rayline/harness/claude-code/`) so it can run beside other sessions.
-4. `rayline run codex`: `--model <model>`; the subcommands `rayline run codex app [WORKSPACE]` (launches the Codex desktop app on its own `CODEX_HOME`, `~/.rayline/harness/codex-app/`) and `rayline run codex configure` (writes a Codex profile, `rayline.config.toml`, to the user's Codex home: `CODEX_HOME`, else `~/.codex`, Codex's own default).
+4. `rayline run codex`: the subcommands `rayline run codex app [WORKSPACE]` (launches the Codex desktop app on its own `CODEX_HOME`, `~/.rayline/harness/codex-app/`) and `rayline run codex configure` (writes a Codex profile, `rayline.config.toml`, to the user's Codex home: `CODEX_HOME`, else `~/.codex`, Codex's own default).
 
 ## 10. Removed
 

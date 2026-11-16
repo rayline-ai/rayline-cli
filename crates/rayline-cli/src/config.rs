@@ -1481,6 +1481,29 @@ mod tests {
         assert_eq!(settings.file, with_routing);
     }
 
+    /// The config profiles `scripts/acceptance.sh` runs load, each in the
+    /// mode, router and decisions model its name says.
+    #[test]
+    fn acceptance_profiles_load() {
+        let home = temp_home();
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/acceptance/profiles");
+        let profile = |name: &str| {
+            load(&home, opts(Mode::File(&dir.join(format!("{name}.json"))))).expect(name)
+        };
+        assert!(!profile("cloud").local);
+        for (name, router, decisions_model) in [
+            ("local-hosted-arc-swift", Router::Hosted, "arc-swift-1.0"),
+            ("local-hosted-arc-sage", Router::Hosted, "arc-sage-1.0"),
+            ("local-router-local", Router::Local, "arc-swift-1.0"),
+        ] {
+            let settings = profile(name);
+            assert!(settings.local, "{name}");
+            let routing = settings.routing.expect(name);
+            assert_eq!(routing.router, router, "{name}");
+            assert_eq!(routing.decisions_model, decisions_model, "{name}");
+        }
+    }
+
     #[test]
     fn config_file_replaces_the_default_file() {
         let home = temp_home();

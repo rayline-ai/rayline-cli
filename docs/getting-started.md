@@ -101,9 +101,8 @@ rayline run codex -- exec "summarize this repo"
   in cloud mode if it doesn't.
 - `--local` and `--config` together are a usage error.
 - Local mode refuses `rayline run claude --isolated`,
-  `rayline run codex --model`, `rayline run codex app` and
-  `rayline run codex configure`. The error says the option isn't available in
-  local mode.
+  `rayline run codex app` and `rayline run codex configure`. The error says
+  the option isn't available in local mode.
 - Local mode also refuses to resume or fork a saved session, before anything
   starts. It checks the harness arguments before any `--`:
   - `claude`: `-r`, `-c`, `--resume`, `--continue`, `--fork-session`,
@@ -128,6 +127,19 @@ Rayline writes the files it generates for a harness under
 `~/.rayline/local/harness/<name>/` in local mode. Each mode writes its own
 endpoint, key and model list there.
 
+### Models
+
+A harness's own model flag, such as `--model` or `-m`, goes to the harness
+like any other argument. Rayline doesn't read it.
+
+- In cloud mode the flag names a model, and Rayline Platform serves it or
+  refuses it. Rayline doesn't check it.
+- In local mode the declared model is `rayline-auto`. A model the flag names
+  is a request, and ARC decides which model runs. OpenClaw in local mode works
+  only with the declared model.
+- A model pinned in the harness's own config, such as a subagent model in
+  Claude Code's `settings.json`, overrides the models Rayline sets.
+
 ### Claude Code
 
 `--isolated` gives Claude Code its own config folder,
@@ -142,7 +154,6 @@ rayline run claude --isolated
 
 | Option or subcommand | Does |
 |---|---|
-| `--model <model>` | The model Codex asks for. |
 | `rayline run codex app [WORKSPACE]` | Launches the Codex desktop app on its own `CODEX_HOME`, `~/.rayline/harness/codex-app/`, and opens `WORKSPACE` if you give one. |
 | `rayline run codex configure` | Writes a Codex profile, `rayline.config.toml`, to your Codex home: `CODEX_HOME`, or `~/.codex` if it isn't set. |
 
