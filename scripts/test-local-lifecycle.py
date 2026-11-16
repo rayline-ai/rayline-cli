@@ -195,6 +195,9 @@ print('qualified Pi profile loaded')
             openclaw = harness_dir / "openclaw"
             openclaw.write_text("""#!/usr/bin/env python3
 import json, os, pathlib, sys
+if sys.argv[1:] == ['--version']:
+    print('OpenClaw 2026.11.3')
+    sys.exit(0)
 assert pathlib.Path(os.environ['OPENCLAW_CONFIG_PATH']).is_file()
 print(json.dumps(sys.argv[1:]))
 """)
