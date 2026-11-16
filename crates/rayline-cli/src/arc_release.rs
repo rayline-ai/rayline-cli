@@ -113,7 +113,8 @@ pub fn fetch_file(
     let (repo, revision, path) = (file.repo, file.revision, file.path.as_str());
     let matches = |at: &Path| {
         fs::metadata(at).is_ok_and(|meta| meta.len() <= file.max_bytes)
-            && (stamped(stamps, at, &file.sha256) || hashes_to(stamps, at, &file.sha256))
+            && (stamped(stamps, at, &file.sha256)
+                || hashes_to(stamps, at, &file.sha256, std::time::SystemTime::now))
     };
     if let Some(cached) = rayline_hf::cached_hf_file(hub, repo, path, revision) {
         if matches(&cached) {
@@ -189,10 +190,23 @@ fn stamped(_stamps: &Path, _at: &Path, _sha256: &str) -> bool {
     false
 }
 
+/// How long a file must have been unchanged, by both its modification and
+/// inode change times, before its stamp is recorded. A filesystem that keeps
+/// times to 1 or 2 seconds (FAT, exFAT, HFS+) would otherwise give a rewrite
+/// in the same second as the hash the stamp's times.
+#[cfg(unix)]
+const SETTLED: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// Whether `at` hashes to `sha256`. On Unix, when it does, records its stamp
 /// in `stamps`, but only when the file hashed (one open handle) is the one
-/// `at` resolves to and nothing changed it during the hash.
-fn hashes_to(stamps: &Path, at: &Path, sha256: &str) -> bool {
+/// `at` resolves to, nothing changed it during the hash, and it had been
+/// unchanged for [`SETTLED`] when `now` (read after the hash) says so.
+fn hashes_to(
+    stamps: &Path,
+    at: &Path,
+    sha256: &str,
+    now: impl FnOnce() -> std::time::SystemTime,
+) -> bool {
     let Ok(real) = fs::canonicalize(at) else {
         return false;
     };
@@ -212,13 +226,36 @@ fn hashes_to(stamps: &Path, at: &Path, sha256: &str) -> bool {
             .metadata()
             .is_ok_and(|after| stamp_of(&real, &after) == stamp)
             && fs::metadata(&real).is_ok_and(|now| stamp_of(&real, &now) == stamp);
-        if unchanged {
+        if unchanged && settled(&before, now()) {
             record_stamp(stamps, sha256, &stamp);
         }
     }
     #[cfg(not(unix))]
-    let _ = stamps;
+    let _ = (stamps, now);
     true
+}
+
+/// Whether `meta`'s modification and inode change times are both at least
+/// [`SETTLED`] before `now`. A time that can't be read, or is in the future,
+/// is not.
+#[cfg(unix)]
+fn settled(meta: &fs::Metadata, now: std::time::SystemTime) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    let Ok(now) = now.duration_since(std::time::UNIX_EPOCH) else {
+        return false;
+    };
+    let at = |secs: i64, nanos: i64| {
+        Some(std::time::Duration::new(
+            u64::try_from(secs).ok()?,
+            u32::try_from(nanos).ok()?,
+        ))
+    };
+    [
+        at(meta.mtime(), meta.mtime_nsec()),
+        at(meta.ctime(), meta.ctime_nsec()),
+    ]
+    .into_iter()
+    .all(|time| time.is_some_and(|time| now.checked_sub(time).is_some_and(|age| age >= SETTLED)))
 }
 
 /// Writes a stamp into `stamps` (created owner-only), replacing any before
@@ -641,13 +678,16 @@ mod tests {
         fs::write(&file, b"heads").expect("write");
         let sha = sha256_hex(b"heads");
         let other = sha256_hex(b"other");
+        // A clock past the settling time; a just-written file at the real
+        // time isn't stamped (see the next test).
+        let later = || std::time::SystemTime::now() + 2 * SETTLED;
         assert!(!stamped(&stamps, &file, &sha), "no stamp before a hash");
-        assert!(!hashes_to(&stamps, &file, &other));
+        assert!(!hashes_to(&stamps, &file, &other, later));
         assert!(
             !stamped(&stamps, &file, &other),
             "a failed hash records nothing"
         );
-        assert!(hashes_to(&stamps, &file, &sha));
+        assert!(hashes_to(&stamps, &file, &sha, later));
         assert!(stamped(&stamps, &file, &sha));
         assert_eq!(
             fs::metadata(&stamps).expect("stamps").permissions().mode() & 0o777,
@@ -672,7 +712,7 @@ mod tests {
         // Another file with the same bytes isn't the stamped one, nor is a
         // link that now resolves elsewhere.
         fs::write(&file, b"heads").expect("restore");
-        assert!(hashes_to(&stamps, &file, &sha));
+        assert!(hashes_to(&stamps, &file, &sha, later));
         let copy = hub.join("copy");
         fs::copy(&file, &copy).expect("copy");
         assert!(!stamped(&stamps, &copy, &sha));
@@ -696,18 +736,50 @@ mod tests {
         let _ = fs::remove_dir_all(hub);
     }
 
+    #[cfg(unix)]
     #[test]
-    fn a_cached_release_is_stamped_once_verified_on_unix() {
-        let hub = scratch("stamped");
+    fn a_file_changed_within_the_settling_time_is_not_stamped() {
+        let hub = scratch("settle");
+        fs::create_dir_all(&hub).expect("hub");
+        let stamps = hub.join("verified");
+        let file = hub.join("blob");
+        fs::write(&file, b"heads").expect("write");
+        let sha = sha256_hex(b"heads");
+        let written = fs::metadata(&file)
+            .and_then(|m| m.modified())
+            .expect("mtime");
+        // Hashed, but too fresh by either time: no stamp.
+        assert!(hashes_to(&stamps, &file, &sha, || written + SETTLED / 2));
+        assert!(!stamped(&stamps, &file, &sha));
+        // An old modification time doesn't help when the inode changed
+        // just now (a chmod, or a rewrite with the time put back).
+        fs::File::options()
+            .write(true)
+            .open(&file)
+            .and_then(|f| f.set_modified(written - 10 * SETTLED))
+            .expect("set mtime");
+        let changed = std::time::SystemTime::now();
+        assert!(hashes_to(&stamps, &file, &sha, || changed));
+        assert!(!stamped(&stamps, &file, &sha));
+        // Settled by both times: stamped.
+        assert!(hashes_to(&stamps, &file, &sha, || changed + 2 * SETTLED));
+        assert!(stamped(&stamps, &file, &sha));
+        let _ = fs::remove_dir_all(hub);
+    }
+
+    #[test]
+    fn a_fresh_download_is_hashed_again_on_the_next_start() {
+        // Just written, it hasn't settled: the next start hashes it (and on
+        // Unix stamps it then, once settled).
+        let hub = scratch("fresh");
         let stamps = hub.join("verified");
         let (served, pin) = release(&FILES);
         let fake = fake_hub(served);
         let dir =
             fetch(&hub, &stamps, &fake.url, None, &pin, &Progress::silent()).expect("fetches");
         for (name, body) in FILES {
-            assert_eq!(
-                stamped(&stamps, &dir.join(name), &sha256_hex(body)),
-                cfg!(unix),
+            assert!(
+                !stamped(&stamps, &dir.join(name), &sha256_hex(body)),
                 "{name}"
             );
         }
