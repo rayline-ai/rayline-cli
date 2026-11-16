@@ -1530,11 +1530,21 @@ fn exit_reason(log: &Path, start: u64) -> Option<String> {
     const TAIL: u64 = 64 * 1024;
     let mut file = fs::File::open(log).ok()?;
     let end = file.metadata().ok()?.len();
-    file.seek(SeekFrom::Start(start.max(end.saturating_sub(TAIL))))
+    let from = start.max(end.saturating_sub(TAIL));
+    // A cut after `start` reads from the byte before it and drops through the
+    // first newline, so it never takes part of a line for a whole one.
+    let cut = from > start;
+    file.seek(SeekFrom::Start(if cut { from - 1 } else { from }))
         .ok()?;
     let mut tail = Vec::new();
     file.read_to_end(&mut tail).ok()?;
-    String::from_utf8_lossy(&tail)
+    let lines = if cut {
+        let newline = tail.iter().position(|&byte| byte == b'\n')?;
+        &tail[newline + 1..]
+    } else {
+        &tail[..]
+    };
+    String::from_utf8_lossy(lines)
         .lines()
         .rev()
         .find_map(|line| line.trim_end().strip_prefix("Error: "))
@@ -1793,6 +1803,13 @@ mod tests {
         // Only this start's lines count.
         fs::write(&log, "Error: an earlier start failed\nINFO starting\n").unwrap();
         assert_eq!(exit_reason(&log, start), None);
+        // Past 64 KiB, a line the cut lands in is dropped, not read from the cut.
+        let line = "INFO quoted: Error: not a reason\n";
+        let filler = "x".repeat(64 * 1024 - line.len() + "INFO quoted: ".len() - 1);
+        fs::write(&log, format!("{line}{filler}\n")).unwrap();
+        assert_eq!(exit_reason(&log, 0), None);
+        fs::write(&log, format!("{filler}\nError: the real one\n")).unwrap();
+        assert_eq!(exit_reason(&log, 0).as_deref(), Some("the real one"));
     }
 
     #[test]
