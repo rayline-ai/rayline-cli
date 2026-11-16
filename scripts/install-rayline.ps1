@@ -27,7 +27,7 @@ function Remove-RetiredBackups {
     param([string]$Directory)
     # A dot .old name marks a committed replacement. .tmp files can still be
     # needed for recovery.
-    $pattern = '^\.(rayline\.exe|rayline-core\.exe|rayline-core-LICENSE)\.old-[0-9]+-[0-9a-f]+$'
+    $pattern = '^\.(rayline\.exe|rayline-core\.exe|rayline-core-LICENSE|rayline-arc-encoder\.exe|rayline-arc-encoder-LICENSE|[^\\/]+\.dll)\.old-[0-9]+-[0-9a-f]+$'
     try {
         Get-ChildItem -LiteralPath $Directory -File -Force | Where-Object { $_.Name -match $pattern } | ForEach-Object {
             Remove-RetiredBackup -Path $_.FullName

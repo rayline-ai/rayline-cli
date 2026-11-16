@@ -175,11 +175,13 @@ async fn run_on(
         return Ok(decision);
     }
 
-    let temp_dir = temp_update_dir()?;
-    let artifacts = download_and_verify(base_url, &target, platform_tag, &temp_dir, pubkeys).await;
+    // Removed however the update ends.
+    let temp_dir = TempDir(temp_update_dir()?);
+    let temp_dir = temp_dir.0.as_path();
+    let artifacts = download_and_verify(base_url, &target, platform_tag, temp_dir, pubkeys).await;
     // The encoder is refreshed only for a user who already fetched one.
     let encoder_dir = has_encoder(&arc_dir(home)).then(|| encoder_dir(home, &target));
-    let result = match artifacts {
+    match artifacts {
         Ok(artifacts) => {
             if request.dry_run {
                 Ok(UpdateResult {
@@ -222,7 +224,11 @@ async fn run_on(
                 replace_file(&artifacts.license, &license_install_path, false)?;
                 replace_binary(&artifacts.core, &core_install_path)?;
                 replace_binary(&artifacts.launcher, &install_path)?;
-                if let Some(dir) = &encoder_dir {
+                // A running local process restarts its encoder from its own
+                // version's directory: other versions go only while none runs.
+                if let Some(dir) = &encoder_dir
+                    && !crate::hybrid::local_process_running_in(home)
+                {
                     remove_other_encoders(dir);
                 }
                 Ok(UpdateResult {
@@ -238,9 +244,16 @@ async fn run_on(
             }
         }
         Err(error) => Err(error),
-    };
-    let _ = fs::remove_dir_all(&temp_dir);
-    result
+    }
+}
+
+/// A directory removed when dropped.
+struct TempDir(PathBuf);
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
 }
 
 /// Releases are published under their full version, build label included
@@ -514,14 +527,16 @@ fn has_encoder(arc: &Path) -> bool {
     })
 }
 
-/// Removes every entry of `keep`'s parent but `keep`: the encoders of other
-/// versions. A file that can't be removed stays until the next update.
-fn remove_other_encoders(keep: &Path) {
+/// Removes the other versions' encoders beside `keep`: every entry of its
+/// parent but `keep` and hidden ones (downloads in progress). One that
+/// can't be removed stays for the next time.
+pub(crate) fn remove_other_encoders(keep: &Path) {
     let (Some(arc), Some(name)) = (keep.parent(), keep.file_name()) else {
         return;
     };
     for entry in fs::read_dir(arc).into_iter().flatten().flatten() {
-        if entry.file_name() != name {
+        let entry_name = entry.file_name();
+        if entry_name != name && !entry_name.to_string_lossy().starts_with('.') {
             let path = entry.path();
             let _ = if path.is_dir() {
                 fs::remove_dir_all(&path)
@@ -2294,11 +2309,15 @@ mod tests {
         assert_eq!(fs::read(exe(&install, crate::CLI_BIN))?, b"installed");
         assert!(old.join(encoder_file_name()).is_file());
 
-        // After a successful fetch, other versions' encoders are removed.
+        // After a successful fetch, other versions' encoders are removed,
+        // but not a download in progress.
         fs::create_dir_all(&new)?;
+        let staging = arc_dir(&home).join(".fetch-1-2");
+        fs::create_dir_all(&staging)?;
         remove_other_encoders(&new);
         assert!(!old.exists());
         assert!(new.exists());
+        assert!(staging.exists());
         fs::remove_dir_all(home)?;
         fs::remove_dir_all(install)?;
         Ok(())

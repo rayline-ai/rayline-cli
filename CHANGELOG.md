@@ -24,7 +24,7 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   the same release into `~/.rayline/arc/<version>/`, checked against the
   release's signed checksums and shown in the ARC release's download line.
   `rayline update` fetches the new version's encoder only when
-  `~/.rayline/arc/` already holds one, and then removes older versions.
+  `~/.rayline/arc/` already holds one; older versions are removed by the next update or `rayline local start` while no local process runs.
 - `local` decisions on Linux and Windows need the NVIDIA driver: without it,
   start fails before downloading anything and says to use `--router hosted`.
 - Rayline no longer uses an encoder installed beside `rayline` by 0.5.3 and

@@ -442,7 +442,12 @@ fn exit_code(result: io::Result<()>) -> ExitCode {
 /// Whether a local process is running, for the note a cloud-mode run prints.
 /// Reads its state without creating anything; state it can't read is no.
 pub(crate) fn local_process_running() -> bool {
-    crate::home().is_ok_and(|home| running_in(&state_dir(&home)))
+    crate::home().is_ok_and(|home| local_process_running_in(&home))
+}
+
+/// Whether a local process of `home` is running; state it can't read is no.
+pub(crate) fn local_process_running_in(home: &Path) -> bool {
+    running_in(&state_dir(home))
 }
 
 fn running_in(dir: &Path) -> bool {
@@ -1118,6 +1123,9 @@ fn version_encoder(
     let dir = crate::update::encoder_dir(home, &version);
     let keys = crate::MINISIGN_PUBLIC_KEYS;
     let verified = |at: &Path, sha256: &str| crate::arc_release::verified(stamps, at, sha256);
+    // No local process runs while one starts: the other versions' encoders
+    // are no longer needed.
+    crate::update::remove_other_encoders(&dir);
     if let Some(encoder) = crate::update::fetched_encoder(&dir, platform, keys, &verified) {
         return Ok(encoder);
     }
@@ -1182,7 +1190,7 @@ fn load_libcuda() -> Result<(), String> {
 /// the encoder loads it from.
 #[cfg(windows)]
 fn find_nvcuda() -> Result<(), String> {
-    let root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+    let root = std::env::var_os("SystemRoot").ok_or("`SystemRoot` is not set")?;
     let path = PathBuf::from(root).join("System32").join("nvcuda.dll");
     if path.is_file() {
         Ok(())
