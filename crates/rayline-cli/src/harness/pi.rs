@@ -106,7 +106,7 @@ pub(crate) fn plan(ctx: &RenderContext<'_>) -> Plan {
 mod tests {
     use super::super::Harness;
     use super::super::tests::{TEST_URL, env_value, render};
-    use super::{local_version_error, require_local_version};
+    use super::local_version_error;
 
     #[test]
     fn local_mode_refuses_a_pi_that_sends_no_session_id() {
@@ -208,7 +208,7 @@ mod tests {
         let probe = |script: &str| {
             let mut command = std::process::Command::new("sh");
             command.args(["-c", script, "pi"]);
-            require_local_version(command)
+            super::require_local_version(command)
         };
         assert_eq!(probe("echo 0.87.1"), Ok(()));
         assert!(
