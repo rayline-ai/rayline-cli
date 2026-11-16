@@ -648,7 +648,7 @@ async fn download_and_verify(
 
 /// The local ARC encoder and its license, verified against `sums` (already
 /// signature-checked), when the release lists the encoder for this platform.
-/// A release without it (Intel macOS, Windows, or an older release) updates
+/// A release without it (Intel macOS, or an older release) updates
 /// without it. A file already installed beside `install_path` with the listed
 /// sha256 is not downloaded again; `None` when nothing needs installing.
 async fn download_encoder(

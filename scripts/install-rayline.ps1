@@ -128,7 +128,8 @@ try {
     $EncoderAssets = @()
     if (@($Entries | Where-Object { $_.Name -eq $EncoderAsset }).Count -gt 0) {
         $Dlls = @($Entries | Where-Object { $_.Name -match '^[^\\/.][^\\/]*\.dll$' } | ForEach-Object { $_.Name })
-        $EncoderAssets = @($EncoderAsset, "rayline-arc-encoder-LICENSE") + $Dlls
+        # The encoder exe last, so a failed copy never leaves it without its DLLs.
+        $EncoderAssets = @("rayline-arc-encoder-LICENSE") + $Dlls + @($EncoderAsset)
         foreach ($Asset in $EncoderAssets) {
             Invoke-WebRequest -Uri "$BaseUrl/$Asset" -OutFile (Join-Path $TempDir $Asset)
         }

@@ -189,9 +189,9 @@ async fn wait_healthy(url: &str, timeout: Duration) -> Result<Health> {
             tokio::time::timeout_at(deadline, client.get(format!("{url}/health")).send()).await;
         match health {
             Ok(Ok(response)) if response.status().is_success() => {
-                return response
-                    .json()
+                return tokio::time::timeout_at(deadline, response.json())
                     .await
+                    .map_err(|_| anyhow::anyhow!("the ARC encoder at {url} is not healthy"))?
                     .context("the ARC encoder's /health is not its JSON");
             }
             _ if tokio::time::Instant::now() >= deadline => {

@@ -61,9 +61,16 @@ $env:CUDAToolkit_ROOT = $cudaRoot
 $env:PATH = "$cudaRoot\bin;$env:PATH"
 
 # The pinned llama.cpp commit with the verified patches, as build.sh makes it.
-foreach ($patch in $pin.patches.PSObject.Properties) {
-  $actual = Get-Sha256 (Join-Path $encoder "patches\$($patch.Name)")
+if ($pin.commit -notmatch '^[0-9a-f]{40}$') { throw "the pinned llama.cpp commit is not a full sha: $($pin.commit)" }
+$patches = @()
+foreach ($patch in $pin.patches.PSObject.Properties | Sort-Object Name) {
+  $path = Join-Path $encoder "patches\$($patch.Name)"
+  $actual = Get-Sha256 $path
   if ($actual -ne $patch.Value) { throw "patch $($patch.Name) has sha256 $actual, pinned $($patch.Value)" }
+  $patches += $path
+}
+foreach ($file in Get-ChildItem (Join-Path $encoder "patches") -Filter *.patch) {
+  if (-not $pin.patches.PSObject.Properties[$file.Name]) { throw "patch $($file.Name) is not pinned" }
 }
 if (-not (Test-Path (Join-Path $SourceDir ".git"))) {
   New-Item -ItemType Directory -Force $SourceDir | Out-Null
@@ -72,12 +79,25 @@ if (-not (Test-Path (Join-Path $SourceDir ".git"))) {
   git -C $SourceDir remote add origin $pin.repository
   git -C $SourceDir fetch -q --depth 1 origin $pin.commit
   git -C $SourceDir -c advice.detachedHead=false checkout -q FETCH_HEAD
-  foreach ($patch in $pin.patches.PSObject.Properties) {
-    git -C $SourceDir apply (Join-Path $encoder "patches\$($patch.Name)")
-  }
 }
 $head = git -C $SourceDir rev-parse HEAD
 if ($head -ne $pin.commit) { throw "$SourceDir is at $head, pinned $($pin.commit)" }
+# Untracked files would be compiled too (llama.cpp globs its sources): refuse them, gitignored ones included. Only
+# this script's build directory may exist.
+$untracked = @(git -C $SourceDir ls-files --others --directory | Where-Object { $_ -ne "build-windows-cuda/" })
+if ($untracked) { throw "$SourceDir has untracked files: $($untracked -join ', ')" }
+# A clean checkout gets the patches; one that holds exactly the patches (an earlier run) is reused.
+if (-not (git -C $SourceDir status --porcelain --untracked-files=no)) {
+  git -C $SourceDir apply @patches
+} else {
+  $PSNativeCommandUseErrorActionPreference = $false
+  git -C $SourceDir apply --reverse --check @patches 2>$null
+  $reversible = $LASTEXITCODE -eq 0
+  $PSNativeCommandUseErrorActionPreference = $true
+  $applied = (git -C $SourceDir diff HEAD --stat | Select-Object -Last 1)
+  $pinned = (git -C $SourceDir apply --stat @patches | Select-Object -Last 1)
+  if (-not $reversible -or $applied -ne $pinned) { throw "$SourceDir has changes other than the pinned patches" }
+}
 
 # Static CRT, an explicit AVX2 baseline (GGML_NATIVE=OFF alone gives an SSE-only CPU backend), ggml's own thread pool
 # (no OpenMP DLL), cudart_static, no NCCL.
