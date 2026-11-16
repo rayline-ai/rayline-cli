@@ -18,17 +18,20 @@ pin="$repo/release/encoder-source.json"
 if [ "${1:-}" = --in-container ]; then
   # Inside the pinned image, as root: a C and C++ compiler (ring, zstd-sys and esaxx-rs build C/C++), then cargo.
   owner="$2" cargo_home="${CARGO_HOME:?}"
+  # Hand target/ and the cargo home back to the caller however the build ends, so a failed build leaves no
+  # root-owned files on the host.
+  trap 'chown -R "$owner" "$repo/target" "$cargo_home" 2>/dev/null || true' EXIT
   dnf install -y -q gcc gcc-c++ make >/dev/null
   cd "$repo"
+  mkdir -p "$repo/target"
   cargo build --release -p rayline-cli --locked
-  chown -R "$owner" "$repo/target" "$cargo_home"
   exit 0
 fi
 
 check="" check_only=""
 case "$#:${1:-}" in
   0:) ;;
-  2:--check) check="$2" check_only=1 ;;
+  2:--check) [ -n "$2" ] || { echo "usage: scripts/build-linux-cli.sh [--check BIN]" >&2; exit 2; }; check="$2" check_only=1 ;;
   *) echo "usage: scripts/build-linux-cli.sh [--check BIN]" >&2; exit 2 ;;
 esac
 command -v objdump >/dev/null || { echo "missing objdump (binutils)" >&2; exit 1; }

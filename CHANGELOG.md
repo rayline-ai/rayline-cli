@@ -9,11 +9,11 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 
 - **Local routing decisions on Linux with an NVIDIA GPU (preview).** Releases
   ship the ARC encoder for x86_64 and aarch64 Linux, and the installers,
-  `rayline update` and Homebrew install it beside `rayline`. It needs the
-  NVIDIA driver for CUDA 12 (525.60.13 or later; 570 or later on Blackwell
-  GPUs such as RTX 50 and GB10), no CUDA toolkit, and a GPU
-  of compute capability 7.5, 8.x, 9.0 or 12.x on x86_64 (T4 through H100,
-  RTX 50), or 9.0 or 12.1 on aarch64 (GH200, GB10). It is 0.6 to 0.8 GB.
+  `rayline update` and Homebrew install it beside `rayline`. It needs a GPU of
+  compute capability 7.5, 8.x, 9.0 or 12.0 on x86_64 (T4 through H100, RTX
+  50), or 9.0 or 12.1 on aarch64 (GH200, GB10), and the NVIDIA driver with no
+  CUDA toolkit: 525.60.13 or later (570 or later for RTX 50, 580 or later for
+  GB10). It is 0.6 to 0.8 GB.
   Other GPUs (Vulkan) and CPU-only machines aren't supported. See
   [Local mode](docs/local-mode.md).
 
