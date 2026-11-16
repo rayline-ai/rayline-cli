@@ -146,8 +146,9 @@ fi
   done
   # One LICENSE ships for every platform (a single release asset), so this notice is in all of them.
   printf '\n==> NVIDIA CUDA Toolkit <==\n\n'
-  echo "The Linux builds also contain the NVIDIA CUDA runtime, cuBLAS and cuBLASLt, linked statically and"
-  echo "redistributed under the NVIDIA CUDA Toolkit End User License Agreement: https://docs.nvidia.com/cuda/eula/"
+  echo "The Linux and Windows builds also contain the NVIDIA CUDA runtime, cuBLAS and cuBLASLt (on Windows, cuBLAS and"
+  echo "cuBLASLt are the DLLs beside the encoder), redistributed under the NVIDIA CUDA Toolkit End User License"
+  echo "Agreement: https://docs.nvidia.com/cuda/eula/"
 } > "$out/rayline-arc-encoder-LICENSE"
 
 echo "$out/rayline-arc-encoder"

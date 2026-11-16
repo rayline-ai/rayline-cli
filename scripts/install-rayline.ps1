@@ -4,6 +4,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+# Windows PowerShell's progress bar slows large downloads (the ARC encoder's DLLs) many times over.
+$ProgressPreference = "SilentlyContinue"
 $Repo = "rayline-ai/rayline-cli"
 
 function Fail($Message) {
@@ -25,7 +27,7 @@ function Remove-RetiredBackups {
     param([string]$Directory)
     # A dot .old name marks a committed replacement. .tmp files can still be
     # needed for recovery.
-    $pattern = '^\.(rayline\.exe|rayline-core\.exe|rayline-core-LICENSE)\.old-[0-9]+-[0-9a-f]+$'
+    $pattern = '^\.(rayline\.exe|rayline-core\.exe|rayline-core-LICENSE|rayline-arc-encoder\.exe|rayline-arc-encoder-LICENSE|[^\\/]+\.dll)\.old-[0-9]+-[0-9a-f]+$'
     try {
         Get-ChildItem -LiteralPath $Directory -File -Force | Where-Object { $_.Name -match $pattern } | ForEach-Object {
             Remove-RetiredBackup -Path $_.FullName
@@ -120,8 +122,19 @@ try {
         }
         [pscustomobject]@{ Name = $Matches[2]; Hash = $Matches[1] }
     }
+    # The local ARC encoder (NVIDIA CUDA), in releases that list it: the encoder, its LICENSE and the cuBLAS DLLs it
+    # loads from its own directory.
+    $EncoderAsset = "rayline-arc-encoder-$Platform"
+    $EncoderAssets = @()
+    if (@($Entries | Where-Object { $_.Name -eq $EncoderAsset }).Count -gt 0) {
+        $Dlls = @($Entries | Where-Object { $_.Name -match '^[^\\/.][^\\/]*\.dll$' } | ForEach-Object { $_.Name })
+        $EncoderAssets = @($EncoderAsset, "rayline-arc-encoder-LICENSE") + $Dlls
+        foreach ($Asset in $EncoderAssets) {
+            Invoke-WebRequest -Uri "$BaseUrl/$Asset" -OutFile (Join-Path $TempDir $Asset)
+        }
+    }
     $Expected = @{}
-    foreach ($Asset in @($RaylineAsset, $CoreAsset, "rayline-core-LICENSE")) {
+    foreach ($Asset in @($RaylineAsset, $CoreAsset, "rayline-core-LICENSE") + $EncoderAssets) {
         $Found = @($Entries | Where-Object { $_.Name -eq $Asset })
         if ($Found.Count -ne 1) {
             Fail "release checksums must include exactly one entry for $Asset"
@@ -138,6 +151,11 @@ try {
     # process directory, not the PowerShell location.
     $InstallDir = (New-Item -ItemType Directory -Force -Path $InstallDir).FullName
     Remove-RetiredBackups $InstallDir
+    # The encoder goes first, so a failed copy never leaves a new rayline without it.
+    foreach ($Asset in $EncoderAssets) {
+        $Name = if ($Asset -eq $EncoderAsset) { "rayline-arc-encoder.exe" } else { $Asset }
+        Install-File -Source (Join-Path $TempDir $Asset) -Dest (Join-Path $InstallDir $Name)
+    }
     Install-File -Source $LicensePath -Dest (Join-Path $InstallDir "rayline-core-LICENSE")
     Install-File -Source $RaylinePath -Dest (Join-Path $InstallDir "rayline.exe")
     Install-File -Source $CorePath -Dest (Join-Path $InstallDir "rayline-core.exe")

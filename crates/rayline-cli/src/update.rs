@@ -13,12 +13,20 @@ use url::Url;
 use crate::config::UpdateChannel;
 
 const CORE_LICENSE_NAME: &str = "rayline-core-LICENSE";
-/// The local ARC encoder. Releases ship it for macOS arm64; the updater also
-/// installs it on Linux when a release's `SHA256SUMS` lists it.
+/// The local ARC encoder, installed when a release's `SHA256SUMS` lists it
+/// for this platform.
 const ENCODER_NAME: &str = "rayline-arc-encoder";
 const ENCODER_LICENSE_NAME: &str = "rayline-arc-encoder-LICENSE";
 /// The platforms on which the encoder is installed when a release's `SHA256SUMS` lists it.
-const ENCODER_PLATFORMS: &[&str] = &["macosx_11_0_arm64", "linux_x86_64", "linux_aarch64"];
+const ENCODER_PLATFORMS: &[&str] = &[
+    "macosx_11_0_arm64",
+    "linux_x86_64",
+    "linux_aarch64",
+    "windows_x86_64",
+];
+/// The platform whose encoder loads DLLs from its own directory: every
+/// `.dll` that `SHA256SUMS` lists (cuBLAS) is installed beside it.
+const ENCODER_DLL_PLATFORM: &str = "windows_x86_64";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UpdateRequest {
@@ -67,6 +75,8 @@ struct UpdateArtifacts {
 struct EncoderArtifacts {
     binary: Option<PathBuf>,
     license: Option<PathBuf>,
+    /// The downloaded DLLs the encoder loads, each installed under its file name.
+    dlls: Vec<PathBuf>,
 }
 
 impl std::fmt::Display for UpdateError {
@@ -286,7 +296,8 @@ fn encoder_install_path(install_path: &Path) -> PathBuf {
     install_path.with_file_name(format!("{ENCODER_NAME}{}", std::env::consts::EXE_SUFFIX))
 }
 
-/// Installs the downloaded encoder files beside `rayline`, the license first.
+/// Installs the downloaded encoder files beside `rayline`: the license, the
+/// DLLs, then the encoder.
 fn install_encoder(encoder: &EncoderArtifacts, install_path: &Path) -> Result<(), UpdateError> {
     let encoder_install_path = encoder_install_path(install_path);
     if let Some(license) = &encoder.license {
@@ -295,6 +306,12 @@ fn install_encoder(encoder: &EncoderArtifacts, install_path: &Path) -> Result<()
             &encoder_install_path.with_file_name(ENCODER_LICENSE_NAME),
             false,
         )?;
+    }
+    for dll in &encoder.dlls {
+        let name = dll
+            .file_name()
+            .ok_or_else(|| UpdateError::Install(format!("no file name in {}", dll.display())))?;
+        replace_binary(dll, &encoder_install_path.with_file_name(name))?;
     }
     if let Some(binary) = &encoder.binary {
         replace_binary(binary, &encoder_install_path)?;
@@ -306,6 +323,7 @@ fn encoder_file_list(encoder: &EncoderArtifacts) -> String {
     [&encoder.binary, &encoder.license]
         .into_iter()
         .flatten()
+        .chain(&encoder.dlls)
         .map(|path| path.display().to_string())
         .collect::<Vec<_>>()
         .join(" and ")
@@ -671,10 +689,39 @@ async fn download_encoder(
         verify_checksum(sums, ENCODER_LICENSE_NAME, &license)?;
         Some(license)
     };
-    if binary.is_none() && license.is_none() {
+    let mut dlls = Vec::new();
+    if platform_tag == ENCODER_DLL_PLATFORM {
+        for dll in listed_dlls(sums) {
+            if installed_matches(sums, dll, &installed_binary.with_file_name(dll))? {
+                continue;
+            }
+            let downloaded = dest_dir.join(dll);
+            download_to(&format!("{base_url}/cli/v{version}/{dll}"), &downloaded).await?;
+            verify_checksum(sums, dll, &downloaded)?;
+            dlls.push(downloaded);
+        }
+    }
+    if binary.is_none() && license.is_none() && dlls.is_empty() {
         return Ok(None);
     }
-    Ok(Some(EncoderArtifacts { binary, license }))
+    Ok(Some(EncoderArtifacts {
+        binary,
+        license,
+        dlls,
+    }))
+}
+
+/// The `.dll` files `sums` lists: plain file names, without a path.
+fn listed_dlls(sums: &str) -> Vec<&str> {
+    sums.lines()
+        .filter_map(|line| line.split_whitespace().nth(1))
+        .map(|name| name.trim_start_matches('*'))
+        .filter(|name| {
+            name.to_ascii_lowercase().ends_with(".dll")
+                && !name.contains(['/', '\\'])
+                && !name.starts_with('.')
+        })
+        .collect()
 }
 
 /// Whether `installed` exists with the sha256 `sums` lists for `name`. A
@@ -1102,18 +1149,27 @@ fn cleanup_retired_backups(install_path: &Path) -> Result<(), UpdateError> {
 
 #[cfg(any(windows, test))]
 fn is_retired_backup(name: &str) -> bool {
-    ["rayline.exe", "rayline-core.exe", CORE_LICENSE_NAME]
-        .iter()
-        .any(|binary| {
-            name.strip_prefix(&format!(".{binary}.old-"))
-                .and_then(|suffix| suffix.split_once('-'))
-                .is_some_and(|(pid, nonce)| {
-                    !pid.is_empty()
-                        && pid.bytes().all(|b| b.is_ascii_digit())
-                        && !nonce.is_empty()
-                        && nonce.bytes().all(|b| b.is_ascii_hexdigit())
-                })
-        })
+    let Some((installed, suffix)) = name
+        .strip_prefix('.')
+        .and_then(|rest| rest.split_once(".old-"))
+    else {
+        return false;
+    };
+    let ours = [
+        "rayline.exe",
+        "rayline-core.exe",
+        CORE_LICENSE_NAME,
+        "rayline-arc-encoder.exe",
+        ENCODER_LICENSE_NAME,
+    ]
+    .contains(&installed)
+        || installed.to_ascii_lowercase().ends_with(".dll");
+    ours && suffix.split_once('-').is_some_and(|(pid, nonce)| {
+        !pid.is_empty()
+            && pid.bytes().all(|b| b.is_ascii_digit())
+            && !nonce.is_empty()
+            && nonce.bytes().all(|b| b.is_ascii_hexdigit())
+    })
 }
 
 #[cfg(any(windows, test))]
@@ -2104,6 +2160,91 @@ mod tests {
         );
         fs::remove_dir_all(dir)?;
         fs::remove_dir_all(install)?;
+        Ok(())
+    }
+
+    #[test]
+    fn retired_backups_are_only_of_installed_files() {
+        assert!(is_retired_backup(".rayline.exe.old-12-ab"));
+        assert!(is_retired_backup(".rayline-arc-encoder.exe.old-12-ab"));
+        assert!(is_retired_backup(".cublasLt64_12.dll.old-12-ab"));
+        assert!(!is_retired_backup(".notes.txt.old-12-ab"));
+        assert!(!is_retired_backup(".cublas64_12.dll.old-x-ab"));
+        assert!(!is_retired_backup("cublas64_12.dll"));
+    }
+
+    #[tokio::test]
+    async fn the_windows_encoder_brings_the_dlls_the_release_lists() -> TestResult {
+        const DLL: &[u8] = b"fixture dll\n";
+        let platform = ENCODER_DLL_PLATFORM;
+        let release = format!("/cli/v{TEST_RELEASE}");
+        let server = FakeReleaseServer::start(Files::from([
+            (
+                format!("{release}/{ENCODER_NAME}-{platform}"),
+                ENCODER.to_vec(),
+            ),
+            (
+                format!("{release}/{ENCODER_LICENSE_NAME}"),
+                ENCODER_LICENSE.to_vec(),
+            ),
+            (format!("{release}/cublas64_12.dll"), DLL.to_vec()),
+            (
+                format!("{release}/{ENCODER_NAME}-macosx_11_0_arm64"),
+                ENCODER.to_vec(),
+            ),
+        ]));
+        let (_, sums) = encoder_release(platform);
+        let sums = format!(
+            "{sums}{:x}  cublas64_12.dll\n{:x}  rayline-{TEST_RELEASE}-{platform}.zip\n",
+            Sha256::digest(DLL),
+            Sha256::digest(b"archive")
+        );
+        let (install, _) = install_from(&server)?;
+        let rayline = exe(&install, crate::CLI_BIN);
+        let dir = temp_update_dir()?;
+
+        let encoder = download_encoder(
+            &server.base_url,
+            TEST_RELEASE,
+            platform,
+            &sums,
+            &dir,
+            &rayline,
+        )
+        .await?
+        .expect("a missing encoder is fetched");
+        install_encoder(&encoder, &rayline)?;
+        assert_eq!(fs::read(install.join("cublas64_12.dll"))?, DLL);
+        assert_eq!(server.requests().len(), 3, "{:?}", server.requests());
+
+        // Installed and unchanged: nothing is fetched, the DLL included.
+        let unchanged = download_encoder(
+            &server.base_url,
+            TEST_RELEASE,
+            platform,
+            &sums,
+            &dir,
+            &rayline,
+        )
+        .await?;
+        assert!(unchanged.is_none());
+
+        // Another platform's encoder never takes the DLLs.
+        let (install_mac, _) = install_from(&server)?;
+        let mac = download_encoder(
+            &server.base_url,
+            TEST_RELEASE,
+            "macosx_11_0_arm64",
+            &sums.replace(platform, "macosx_11_0_arm64"),
+            &dir,
+            &exe(&install_mac, crate::CLI_BIN),
+        )
+        .await?
+        .expect("the mac encoder");
+        assert!(mac.dlls.is_empty());
+        fs::remove_dir_all(dir)?;
+        fs::remove_dir_all(install)?;
+        fs::remove_dir_all(install_mac)?;
         Ok(())
     }
 

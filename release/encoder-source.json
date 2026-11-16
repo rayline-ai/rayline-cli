@@ -13,5 +13,21 @@
       "x86_64": "75;80;86;89;90;120",
       "aarch64": "90;121"
     }
+  },
+  "windows_cuda": {
+    "redist": "https://developer.download.nvidia.com/compute/cuda/redist/",
+    "archives": {
+      "cuda_cudart/windows-x86_64/cuda_cudart-windows-x86_64-12.9.79-archive.zip": "179e9c43b0735ffe67207b3da556eb5a0c50f3047961882b7657d3b822d34ef8",
+      "cuda_nvcc/windows-x86_64/cuda_nvcc-windows-x86_64-12.9.86-archive.zip": "227b109663b5e57d2718bcabb24a4ba0d9d4e52d958e327dc476f7c28691be85",
+      "libcublas/windows-x86_64/libcublas-windows-x86_64-12.9.1.4-archive.zip": "d534d98b0b453a98914dbf3adf47d7e84b55037abf02f87466439e1dcef581ed",
+      "cuda_cccl/windows-x86_64/cuda_cccl-windows-x86_64-12.9.27-archive.zip": "17aaa7c6b8f94a417d8f3261780b7e34b9cbdfab7513bce86768623b06aa28b5",
+      "cuda_nvtx/windows-x86_64/cuda_nvtx-windows-x86_64-12.9.79-archive.zip": "b9d506ce9ba056bf171b60e9dada06fb3d8bed5453a6399d0541960bf9b81659",
+      "cuda_profiler_api/windows-x86_64/cuda_profiler_api-windows-x86_64-12.9.79-archive.zip": "b05519f8ce4f02167bfc859358f62eb771d89ac2af3a6952a82317f2af4bc5bd"
+    },
+    "dlls": [
+      "cublas64_12.dll",
+      "cublasLt64_12.dll"
+    ],
+    "cuda_arch": "75;80;86;89;90;120"
   }
 }
