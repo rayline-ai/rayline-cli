@@ -24,7 +24,13 @@ pub async fn render_top(request: &TopRequest) -> io::Result<String> {
 }
 
 async fn render_top_from_home(home: &Path, request: &TopRequest) -> io::Result<String> {
-    let source = TopSource::connect(&crate::hybrid::state_dir(home)).await?;
+    let state_dir = crate::hybrid::state_dir(home);
+    // The live view waits for a local process and follows a restarted one.
+    if !request.json && io::stdout().is_terminal() {
+        run_top_tui(&state_dir).await?;
+        return Ok(String::new());
+    }
+    let source = TopSource::connect(&state_dir).await?;
 
     if request.json {
         let snapshot = source.fetch_snapshot().await?;
@@ -36,13 +42,8 @@ async fn render_top_from_home(home: &Path, request: &TopRequest) -> io::Result<S
             .map_err(io::Error::other);
     }
 
-    if !io::stdout().is_terminal() {
-        let snapshot = source.fetch_snapshot().await?;
-        return Ok(format_top_snapshot(&snapshot));
-    }
-
-    run_top_tui(&source).await?;
-    Ok(String::new())
+    let snapshot = source.fetch_snapshot().await?;
+    Ok(format_top_snapshot(&snapshot))
 }
 
 /// The authenticated snapshot endpoint of one live local process, and the
@@ -55,15 +56,18 @@ struct TopSource {
 
 impl TopSource {
     async fn connect(state_dir: &Path) -> io::Result<Self> {
-        let (client, url, identity) =
-            crate::hybrid::top_connection(state_dir)
-                .await
-                .map_err(|error| {
-                    io::Error::new(
-                        io::ErrorKind::ConnectionRefused,
-                        format!("no local process is running: {error}"),
-                    )
-                })?;
+        Self::open(state_dir).await.map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::ConnectionRefused,
+                format!("no local process is running: {error}"),
+            )
+        })
+    }
+
+    /// [`Self::connect`] with `top_connection`'s error: `NotFound` when no
+    /// local process runs.
+    async fn open(state_dir: &Path) -> io::Result<Self> {
+        let (client, url, identity) = crate::hybrid::top_connection(state_dir).await?;
         Ok(Self {
             client,
             url,
@@ -83,6 +87,63 @@ impl TopSource {
             ));
         }
         Ok(snapshot)
+    }
+}
+
+/// What one refresh of the live view shows.
+#[derive(Debug)]
+enum Refresh {
+    Snapshot(Value),
+    NotRunning,
+    /// The fetch failed. `same_instance`: the instance the last snapshot
+    /// came from still runs, so that snapshot stays on screen.
+    Error {
+        message: String,
+        same_instance: bool,
+    },
+}
+
+/// One refresh of the live view. Fetches from the instance `source` holds;
+/// when that fails, reads the state again and follows the instance it names
+/// now (a restarted local process), and holds none while none runs.
+async fn refresh(state_dir: &Path, source: &mut Option<TopSource>) -> Refresh {
+    let fetch_error = match source.as_ref() {
+        Some(current) => match current.fetch_snapshot().await {
+            Ok(snapshot) => return Refresh::Snapshot(snapshot),
+            Err(error) => Some(error.to_string()),
+        },
+        None => None,
+    };
+    let next = match TopSource::open(state_dir).await {
+        Ok(next) => next,
+        Err(error) => {
+            *source = None;
+            return if error.kind() == io::ErrorKind::NotFound {
+                Refresh::NotRunning
+            } else {
+                Refresh::Error {
+                    message: error.to_string(),
+                    same_instance: false,
+                }
+            };
+        }
+    };
+    if let (Some(current), Some(message)) = (source.as_ref(), fetch_error)
+        && current.identity == next.identity
+    {
+        return Refresh::Error {
+            message,
+            same_instance: true,
+        };
+    }
+    let fetched = next.fetch_snapshot().await;
+    *source = Some(next);
+    match fetched {
+        Ok(snapshot) => Refresh::Snapshot(snapshot),
+        Err(error) => Refresh::Error {
+            message: error.to_string(),
+            same_instance: false,
+        },
     }
 }
 
@@ -201,10 +262,13 @@ impl Drop for TopTerminalGuard {
     }
 }
 
-async fn run_top_tui(source: &TopSource) -> io::Result<()> {
+async fn run_top_tui(state_dir: &Path) -> io::Result<()> {
     let mut stdout = io::stdout();
     let _guard = TopTerminalGuard::enter(&mut stdout)?;
-    let mut snapshot = Value::Null;
+    let mut source = None;
+    // None until a snapshot is fetched, and again while no local process runs.
+    let mut snapshot: Option<Value> = None;
+    let mut not_running = false;
     let mut last_error: Option<String> = None;
     let mut last_fetch: Option<Instant> = None;
     let mut paused = false;
@@ -219,13 +283,26 @@ async fn run_top_tui(source: &TopSource) -> io::Result<()> {
                     .map(|last| last.elapsed() >= TOP_REFRESH_INTERVAL)
                     .unwrap_or(true));
         if should_refresh {
-            match source.fetch_snapshot().await {
-                Ok(next_snapshot) => {
-                    snapshot = next_snapshot;
+            match refresh(state_dir, &mut source).await {
+                Refresh::Snapshot(next_snapshot) => {
+                    snapshot = Some(next_snapshot);
+                    not_running = false;
                     last_error = None;
                 }
-                Err(error) => {
-                    last_error = Some(error.to_string());
+                Refresh::NotRunning => {
+                    snapshot = None;
+                    not_running = true;
+                    last_error = None;
+                }
+                Refresh::Error {
+                    message,
+                    same_instance,
+                } => {
+                    if !same_instance {
+                        snapshot = None;
+                    }
+                    not_running = false;
+                    last_error = Some(message);
                 }
             }
             last_fetch = Some(Instant::now());
@@ -234,7 +311,14 @@ async fn run_top_tui(source: &TopSource) -> io::Result<()> {
         }
 
         if needs_draw {
-            draw_top(&mut stdout, &snapshot, last_error.as_deref(), paused, sort)?;
+            draw_top(
+                &mut stdout,
+                snapshot.as_ref(),
+                not_running,
+                last_error.as_deref(),
+                paused,
+                sort,
+            )?;
             needs_draw = false;
         }
 
@@ -265,7 +349,8 @@ async fn run_top_tui(source: &TopSource) -> io::Result<()> {
 
 fn draw_top(
     stdout: &mut io::Stdout,
-    snapshot: &Value,
+    snapshot: Option<&Value>,
+    not_running: bool,
     last_error: Option<&str>,
     paused: bool,
     sort: TopSort,
@@ -275,10 +360,21 @@ fn draw_top(
 
     let mut y = 0;
     y = draw_title(stdout, y, width, "Rayline CLI Top")?;
-    if let Some(router) = router_line(snapshot) {
-        y = draw_colored_line(stdout, y, width, Color::DarkCyan, &router)?;
+    if not_running {
+        y = draw_colored_line(
+            stdout,
+            y,
+            width,
+            Color::DarkYellow,
+            "Local process: not running",
+        )?;
     }
-    y = draw_top_summary(stdout, y, width, snapshot, paused, sort)?;
+    if let Some(snapshot) = snapshot {
+        if let Some(router) = router_line(snapshot) {
+            y = draw_colored_line(stdout, y, width, Color::DarkCyan, &router)?;
+        }
+        y = draw_top_summary(stdout, y, width, snapshot, paused, sort)?;
+    }
     if let Some(error) = last_error {
         y = draw_colored_line(
             stdout,
@@ -290,29 +386,30 @@ fn draw_top(
     }
     y = draw_line(stdout, y, width, "")?;
 
-    let active = sorted_top_rows(snapshot, "active", sort);
-    let recent = sorted_top_rows(snapshot, "recent", sort);
-    let remaining = height.saturating_sub(y).saturating_sub(1);
-    let active_budget = if remaining > 12 {
-        remaining / 2
-    } else {
-        remaining
-    };
-    y = draw_table_section(
-        stdout,
-        y,
-        width,
-        y.saturating_add(active_budget),
-        "Active",
-        &active,
-    )?;
-    if y < height.saturating_sub(1) {
-        y = draw_line(stdout, y, width, "")?;
-    }
     let footer_y = height.saturating_sub(1);
-    y = draw_table_section(stdout, y, width, footer_y, "Recent", &recent)?;
+    if let Some(snapshot) = snapshot {
+        let active = sorted_top_rows(snapshot, "active", sort);
+        let recent = sorted_top_rows(snapshot, "recent", sort);
+        let remaining = height.saturating_sub(y).saturating_sub(1);
+        let active_budget = if remaining > 12 {
+            remaining / 2
+        } else {
+            remaining
+        };
+        y = draw_table_section(
+            stdout,
+            y,
+            width,
+            y.saturating_add(active_budget),
+            "Active",
+            &active,
+        )?;
+        if y < footer_y {
+            y = draw_line(stdout, y, width, "")?;
+        }
+        draw_table_section(stdout, y, width, footer_y, "Recent", &recent)?;
+    }
 
-    let _ = y;
     let footer = "q/Esc quit  p pause  r refresh  s sort  | --json for scripts";
     queue!(
         stdout,
@@ -824,6 +921,70 @@ mod tests {
                 stream.write_all(&body).await.unwrap();
             }
         })
+    }
+
+    #[tokio::test]
+    async fn the_live_view_waits_for_a_local_process_and_follows_a_restarted_one() {
+        let home = unique_test_dir("hybrid-top-follow");
+        let state_dir = crate::hybrid::state_dir(&home);
+        let mut source = None;
+        assert!(matches!(
+            refresh(&state_dir, &mut source).await,
+            Refresh::NotRunning
+        ));
+
+        let first = hybrid_top_fixture(&home, serde_json::json!({})).await;
+        let Refresh::Snapshot(snapshot) = refresh(&state_dir, &mut source).await else {
+            panic!("the first instance");
+        };
+        assert_eq!(snapshot["instance_id"], "test-core");
+
+        // A restart: the old instance is gone and the state names another.
+        first.abort();
+        let second = hybrid_top_fixture(
+            &home,
+            serde_json::json!({"instance_id": "second-core", "snapshot_body": {
+                "runtime": "rayline-local", "instance_id": "second-core",
+                "pid": std::process::id(), "core_pid": std::process::id(),
+                "totals": {"completed_requests": 0, "errored_requests": 0, "local_requests": 0,
+                    "remote_requests": 0, "input_tokens": 0, "output_tokens": 0},
+                "active": [], "recent": []}}),
+        )
+        .await;
+        let ready_path = state_dir.join("ready.json");
+        let mut ready: Value = serde_json::from_slice(&fs::read(&ready_path).unwrap()).unwrap();
+        ready["instance_id"] = Value::from("second-core");
+        fs::write(&ready_path, serde_json::to_vec(&ready).unwrap()).unwrap();
+        let Refresh::Snapshot(snapshot) = refresh(&state_dir, &mut source).await else {
+            panic!("the restarted instance");
+        };
+        assert_eq!(snapshot["instance_id"], "second-core");
+        assert_eq!(snapshot["totals"]["completed_requests"], 0);
+
+        // A running instance top can't authenticate to is an error, not
+        // "not running".
+        let token_path = state_dir.join("gateway-token");
+        fs::write(&token_path, "wrong-private-token").unwrap();
+        let mut fresh = None;
+        let Refresh::Error {
+            message,
+            same_instance: false,
+        } = refresh(&state_dir, &mut fresh).await
+        else {
+            panic!("an error on a running instance");
+        };
+        assert!(message.contains("health/authentication"), "{message}");
+        assert!(!message.contains("private-token"), "{message}");
+        fs::write(&token_path, "test-private-token").unwrap();
+
+        // Stopped: the state is gone, and the view waits.
+        second.abort();
+        fs::remove_file(&ready_path).unwrap();
+        assert!(matches!(
+            refresh(&state_dir, &mut source).await,
+            Refresh::NotRunning
+        ));
+        assert!(source.is_none());
     }
 
     #[tokio::test]
