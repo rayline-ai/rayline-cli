@@ -136,8 +136,8 @@ Every entry works the same way. No setting marks a model as local.
 
 `local` decisions are a preview. They need the ARC encoder binary
 `rayline-arc-encoder` beside `rayline`, which releases ship for
-macOS arm64, and for Linux and Windows x86_64 with an NVIDIA GPU (driver
-only); start checks for it before it downloads anything. On Linux:
+macOS arm64, and for Linux (x86_64 and aarch64) and Windows x86_64 with an
+NVIDIA GPU (driver only); start checks for it before it downloads anything. On Linux:
 
 - x86_64 needs an NVIDIA GPU of compute capability 7.5, 8.x, 9.0 or 12.0
   (T4, A100, A10/L4/RTX 30 and 40, H100, RTX 50), and aarch64 one of 9.0 or
