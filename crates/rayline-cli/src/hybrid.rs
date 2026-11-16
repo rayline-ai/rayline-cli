@@ -1803,7 +1803,8 @@ mod tests {
     /// Puts an `opencode` that reports version 2 first on `PATH`, so a hybrid
     /// OpenCode launch can read its version without OpenCode installed. Each
     /// run writes the names (not the values) of its environment to
-    /// `env-names.txt` beside it. The caller holds ENV_LOCK; Drop restores
+    /// `env-names.txt` beside it. A `pi` reporting 0.87.1 sits beside it, for
+    /// local mode's pi version check. The caller holds ENV_LOCK; Drop restores
     /// `PATH`.
     struct FakeOpenCode {
         dir: PathBuf,
@@ -1828,6 +1829,18 @@ mod tests {
                      echo 'opencode v2.0.25'\n",
                 )
                 .unwrap();
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt as _;
+                    fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
+                }
+            }
+            // And a pi that local mode accepts (its version probe).
+            if cfg!(windows) {
+                fs::write(dir.join("pi.cmd"), "@echo 0.87.1\r\n").unwrap();
+            } else {
+                let binary = dir.join("pi");
+                fs::write(&binary, "#!/bin/sh\necho 0.87.1\n").unwrap();
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt as _;
