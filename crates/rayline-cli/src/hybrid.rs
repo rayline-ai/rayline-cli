@@ -931,6 +931,9 @@ fn local_arc(home: &Path, routing: &crate::config::Routing) -> io::Result<Option
         }
     };
     let weights = arc_encoder_weights();
+    // Stamps of the cached files already hashed, in Rayline's own state: the
+    // Hugging Face cache may be shared.
+    let stamps = home.join(crate::DOT_CONFIG_DIR).join("arc-verified");
     if let (Some((hub, _)), None) = (&hub, &model) {
         crate::arc_release::expect_unless_cached(hub, &weights, &progress);
     }
@@ -945,10 +948,11 @@ fn local_arc(home: &Path, routing: &crate::config::Routing) -> io::Result<Option
                 .clone()
                 .unwrap_or_else(crate::arc_release::built_in);
             let token = rayline_hf::hf_token(home).map_err(io::Error::other)?;
-            let dir = crate::arc_release::fetch(hub, hub_url, token.as_deref(), &pin, &progress)
-                .map_err(|error| {
-                    io::Error::other(format!("cannot load the ARC release: {error}"))
-                })?;
+            let dir =
+                crate::arc_release::fetch(hub, &stamps, hub_url, token.as_deref(), &pin, &progress)
+                    .map_err(|error| {
+                        io::Error::other(format!("cannot load the ARC release: {error}"))
+                    })?;
             let source = format!("release {} at {}", pin.repo, pin.revision);
             (dir, source)
         }
@@ -959,10 +963,11 @@ fn local_arc(home: &Path, routing: &crate::config::Routing) -> io::Result<Option
     let model = match (model, &hub) {
         (Some(model), _) => model,
         (None, Some((hub, hub_url))) => {
-            let path = crate::arc_release::fetch_file(hub, hub_url, None, &weights, &progress)
-                .map_err(|error| {
-                    io::Error::other(format!("cannot load the ARC encoder: {error}"))
-                })?;
+            let path =
+                crate::arc_release::fetch_file(hub, &stamps, hub_url, None, &weights, &progress)
+                    .map_err(|error| {
+                        io::Error::other(format!("cannot load the ARC encoder: {error}"))
+                    })?;
             fs::canonicalize(path)?
         }
         (None, None) => unreachable!("weights to download have a hub"),
