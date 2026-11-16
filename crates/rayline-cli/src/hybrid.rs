@@ -627,6 +627,8 @@ async fn launch(
         probe_decisions(&config, &router_key, settings.env.as_deref(), say).await?;
     }
     let log = private_log(&paths.log())?;
+    // Where this start's lines begin in the append-only log.
+    let log_start = log.metadata()?.len();
     let mut command = Command::new(current_exe()?);
     command
         .arg(crate::cli::LOCAL_PROCESS)
@@ -695,10 +697,16 @@ async fn launch(
         let started = Instant::now();
         loop {
             if let Some(status) = child.try_wait()? {
-                return Err(io::Error::other(format!(
+                let exited = format!(
                     "the local process exited ({status}); see {}",
                     paths.log().display()
-                )));
+                );
+                return Err(io::Error::other(
+                    match exit_reason(&paths.log(), log_start) {
+                        Some(reason) => format!("{reason}\n{exited}"),
+                        None => exited,
+                    },
+                ));
             }
             if paths.ready().exists() {
                 let state = ready(paths)?;
@@ -1514,6 +1522,23 @@ fn write_private_json(path: &Path, value: &Value, pretty: bool) -> io::Result<()
     Ok(())
 }
 
+/// The error the local process printed before it exited: the last
+/// `Error: ` line it wrote to the log at or after `start`. `None` when it
+/// printed none, or the log can't be read.
+fn exit_reason(log: &Path, start: u64) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = fs::File::open(log).ok()?;
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut tail = Vec::new();
+    file.read_to_end(&mut tail).ok()?;
+    String::from_utf8_lossy(&tail)
+        .lines()
+        .rev()
+        .find_map(|line| line.trim_end().strip_prefix("Error: "))
+        .filter(|reason| !reason.is_empty())
+        .map(str::to_owned)
+}
+
 /// Open the append-only runtime log owner-only: never through a symlink, and
 /// narrowed to 0600 even when an older file was looser.
 fn private_log(path: &Path) -> io::Result<fs::File> {
@@ -1746,6 +1771,26 @@ fn acquire_lock(lock_path: &Path) -> io::Result<std::fs::File> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failed_start_shows_the_error_the_local_process_printed() {
+        let log = temp_dir("exit-reason").join("runtime.log");
+        fs::write(&log, "Error: an earlier start failed\n").unwrap();
+        let start = fs::metadata(&log).unwrap().len();
+        let mut file = fs::OpenOptions::new().append(true).open(&log).unwrap();
+        std::io::Write::write_all(
+            &mut file,
+            b"\x1b[2m2026-11-16T13:00:00Z\x1b[0m INFO starting\r\nError: the ARC encoder found no GPU it can use\r\n",
+        )
+        .unwrap();
+        assert_eq!(
+            exit_reason(&log, start).as_deref(),
+            Some("the ARC encoder found no GPU it can use")
+        );
+        // Only this start's lines count.
+        fs::write(&log, "Error: an earlier start failed\nINFO starting\n").unwrap();
+        assert_eq!(exit_reason(&log, start), None);
+    }
 
     #[test]
     fn the_ready_file_s_skipped_models_become_one_warning_each() {
