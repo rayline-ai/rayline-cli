@@ -134,10 +134,23 @@ Every entry works the same way. No setting marks a model as local.
 | `router` | `local` or `hosted` | no, default `hosted` | `hosted`: Rayline Platform's ARC decides. Set `local` to decide on this machine: ARC runs inside the local process, and no routing decision goes to Rayline Platform. |
 | `arc_release` | object with `repo`, `revision`, `manifest_sha256`, and optionally `dir` | no | Overrides the built-in ARC release for `local` decisions with a Hugging Face repo, a full commit id, the sha256 of the release's `manifest.json`, and the repo directory it is in (default the repo root). For a private repo, set `HF_TOKEN` or sign in with `huggingface-cli login`. |
 
-`local` decisions are a preview. They need the ARC encoder binary
-`rayline-arc-encoder` beside `rayline`, which releases ship for
-macOS arm64, and for Linux (x86_64 and aarch64) and Windows x86_64 with an
-NVIDIA GPU (driver only); start checks for it before it downloads anything. On Linux:
+`local` decisions are a preview. They run the ARC encoder,
+`rayline-arc-encoder`, which releases ship for macOS arm64, and for Linux
+(x86_64 and aarch64) and Windows x86_64 with an NVIDIA GPU. Installing or
+updating Rayline doesn't download it: the first `rayline local start` (or
+`rayline run ... --local` that starts the local process) with
+`routing.router: "local"` downloads it from the same release as `rayline`
+into `~/.rayline/arc/<version>/` and checks it against the release's
+checksums. After that, `rayline update` fetches the new version's encoder
+along with `rayline`. Before it downloads anything, start checks that the
+platform has an encoder build and, on Linux and Windows, that the NVIDIA
+driver is installed; otherwise it fails and says to use `--router hosted`.
+macOS arm64 needs no driver. Rayline 0.5.3 and earlier installed the encoder
+beside `rayline`; Rayline no longer uses that copy, so you can delete
+`rayline-arc-encoder`, `rayline-arc-encoder-LICENSE` and, on Windows, the
+`cublas*.dll` files from the folder `rayline` is in.
+
+On Linux:
 
 - x86_64 needs an NVIDIA GPU of compute capability 7.5, 8.x, 9.0 or 12.0
   (T4, A100, A10/L4/RTX 30 and 40, H100, RTX 50), and aarch64 one of 9.0 or
@@ -155,16 +168,16 @@ On Windows:
   x86_64, with an NVIDIA GPU of compute capability 7.5, 8.x, 9.0 or 12.0 and
   NVIDIA driver 576 or later. No CUDA toolkit or Visual C++ runtime.
 - It is the encoder plus the cuBLAS DLLs it loads, `cublas64_12.dll` and
-  `cublasLt64_12.dll`, about 1 GB together, installed beside `rayline`.
+  `cublasLt64_12.dll`, about 1 GB together.
 - Windows on Arm and other GPUs aren't supported.
 
 When the encoder finds no GPU it can use (no NVIDIA GPU, or a driver too old
 for it), start fails with an error that says so instead of running ARC on the
 CPU, which takes seconds a turn.
 
-On first use, start downloads the
+On first use, start also downloads the
 release and about 1 GB of encoder weights into the Hugging Face cache and
-checks them against their pins. Later starts hash a cached file again only
+checks them against their pins, shown in the same progress line. Later starts hash a cached file again only
 if it changed since it was last checked (a stamp in `~/.rayline/arc-verified/`);
 on Windows, where a file's metadata doesn't show every change, every start
 hashes the whole release again. With `routing.router: "local"`, every

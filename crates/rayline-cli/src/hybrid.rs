@@ -981,17 +981,17 @@ fn local_arc(home: &Path, routing: &crate::config::Routing) -> io::Result<Option
     if routing.router == crate::config::Router::Hosted {
         return Ok(None);
     }
-    // The encoder is checked before anything is downloaded.
-    let encoder = match std::env::var_os("RAYLINE_ARC_ENCODER") {
-        Some(path) => PathBuf::from(path),
-        None => {
-            let executable = current_exe()?;
-            let directory = executable
-                .parent()
-                .ok_or_else(|| io::Error::other("rayline executable has no parent directory"))?;
-            arc_encoder_beside(directory, ENCODER_SHIPS)?
-        }
-    };
+    // The platform and the NVIDIA driver are checked before anything is
+    // downloaded. `RAYLINE_ARC_ENCODER` names a development encoder, which
+    // may run without them.
+    let encoder_override = std::env::var_os("RAYLINE_ARC_ENCODER").map(PathBuf::from);
+    if encoder_override.is_none() {
+        encoder_ships(ENCODER_SHIPS)?;
+        #[cfg(target_os = "linux")]
+        nvidia_driver("Linux", "libcuda.so.1", load_libcuda())?;
+        #[cfg(windows)]
+        nvidia_driver("Windows", "nvcuda.dll", find_nvcuda())?;
+    }
     // Development overrides: `RAYLINE_ARC_MODEL` and `RAYLINE_ARC_ENCODER`
     // name the encoder weights and binary, `RAYLINE_ARC_RELEASE` a release
     // directory. Without them, the
@@ -1018,6 +1018,11 @@ fn local_arc(home: &Path, routing: &crate::config::Routing) -> io::Result<Option
     if let (Some((hub, _)), None) = (&hub, &model) {
         crate::arc_release::expect_unless_cached(hub, &weights, &progress);
     }
+    // The encoder of this version, fetched once, in the same transfer.
+    let encoder = match encoder_override {
+        Some(path) => path,
+        None => version_encoder(home, &stamps, &progress)?,
+    };
     let (release, source) = match (release_dir, &hub) {
         (Some(dir), _) => {
             let source = format!("release directory {}", dir.display());
@@ -1075,45 +1080,130 @@ const ENCODER_SHIPS: bool = cfg!(any(
     all(target_os = "windows", target_arch = "x86_64")
 ));
 
-/// The ARC encoder installed in `directory`, or an error saying why there is
-/// none: releases don't ship it for this platform (`ships` false), it isn't
-/// installed, or it can't be read.
-fn arc_encoder_beside(directory: &Path, ships: bool) -> io::Result<PathBuf> {
-    if !ships {
-        let os = match std::env::consts::OS {
-            "macos" => "macOS",
-            "linux" => "Linux",
-            "windows" => "Windows",
-            os => os,
-        };
-        return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            format!(
-                "`local` decisions need the ARC encoder, which Rayline releases ship only for \
-                 macOS arm64, and Linux (x86_64 and aarch64) and Windows x86_64 with an NVIDIA GPU, not for {os} {}; \
-                 set `routing.router` to `hosted`",
-                std::env::consts::ARCH
-            ),
-        ));
+/// Refuses `local` decisions where Rayline releases ship no encoder
+/// (`ships` false).
+fn encoder_ships(ships: bool) -> io::Result<()> {
+    if ships {
+        return Ok(());
     }
-    let path = directory.join(format!(
-        "rayline-arc-encoder{}",
-        std::env::consts::EXE_SUFFIX
-    ));
-    fs::canonicalize(&path).map_err(|error| {
-        let message = if error.kind() == io::ErrorKind::NotFound {
-            format!(
-                "`local` decisions need the ARC encoder, and it isn't installed: no {} beside \
-                 `rayline`; run `rayline update` to install it, or set `routing.router` to `hosted`",
-                path.display()
-            )
+    let os = match std::env::consts::OS {
+        "macos" => "macOS",
+        "linux" => "Linux",
+        "windows" => "Windows",
+        os => os,
+    };
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        format!(
+            "`local` decisions need the ARC encoder, which Rayline releases ship only for \
+             macOS arm64, and Linux (x86_64 and aarch64) and Windows x86_64 with an NVIDIA GPU, not for {os} {}; \
+             set `routing.router` to `hosted`",
+            std::env::consts::ARCH
+        ),
+    ))
+}
+
+/// This version's ARC encoder in `~/.rayline/arc/<version>/`, downloaded
+/// from its release (with the signed SHA256SUMS `rayline update` checks)
+/// when it isn't there or doesn't match, reporting to `progress`. Checked by
+/// sha256 with `stamps` like the release's files.
+fn version_encoder(
+    home: &Path,
+    stamps: &Path,
+    progress: &crate::start_progress::Progress,
+) -> io::Result<PathBuf> {
+    let platform = crate::update::detect_platform_tag().map_err(io::Error::other)?;
+    let version = crate::update::Version::parse(crate::RAYLINE_VERSION)
+        .map_err(|_| io::Error::other(format!("invalid version {}", crate::RAYLINE_VERSION)))?;
+    let dir = crate::update::encoder_dir(home, &version);
+    let keys = crate::MINISIGN_PUBLIC_KEYS;
+    let verified = |at: &Path, sha256: &str| crate::arc_release::verified(stamps, at, sha256);
+    if let Some(encoder) = crate::update::fetched_encoder(&dir, platform, keys, &verified) {
+        return Ok(encoder);
+    }
+    tokio::runtime::Handle::current()
+        .block_on(crate::update::fetch_encoder(
+            crate::UPDATE_BASE_URL,
+            &version,
+            platform,
+            &dir,
+            keys,
+            &crate::update::Report {
+                on_len: &|len| progress.expect(len),
+                on_bytes: &|bytes| progress.on_bytes(bytes),
+                on_done: &|| progress.file_done(),
+            },
+        ))
+        .map_err(|error| {
+            io::Error::other(format!(
+                "cannot download the ARC encoder of {} {}: {error}",
+                crate::DISPLAY_NAME,
+                crate::RAYLINE_VERSION
+            ))
+        })?;
+    // Settled first, so this check records the stamps the next start reads.
+    crate::arc_release::settle();
+    crate::update::fetched_encoder(&dir, platform, keys, &verified).ok_or_else(|| {
+        io::Error::other(format!(
+            "the ARC encoder downloaded into {} doesn't match its SHA256SUMS",
+            dir.display()
+        ))
+    })
+}
+
+/// On Linux the encoder runs on an NVIDIA GPU through the driver's
+/// `libcuda.so.1`. Loads it as the encoder will, so a machine without the
+/// driver is refused before anything is downloaded.
+#[cfg(target_os = "linux")]
+fn load_libcuda() -> Result<(), String> {
+    let name = c"libcuda.so.1";
+    // SAFETY: `name` is a NUL-terminated C string that outlives the call;
+    // dlopen returns a handle or null.
+    let handle = unsafe { libc::dlopen(name.as_ptr(), libc::RTLD_LAZY | libc::RTLD_LOCAL) };
+    if handle.is_null() {
+        // SAFETY: dlerror returns null or a NUL-terminated string that stays
+        // valid until the next dl* call on this thread; it is copied at once.
+        let error = unsafe { libc::dlerror() };
+        return Err(if error.is_null() {
+            "not found".to_owned()
         } else {
+            // SAFETY: non-null, NUL-terminated, see above.
+            unsafe { std::ffi::CStr::from_ptr(error) }
+                .to_string_lossy()
+                .into_owned()
+        });
+    }
+    // SAFETY: `handle` came from the dlopen above and is closed once.
+    unsafe { libc::dlclose(handle) };
+    Ok(())
+}
+
+/// On Windows the NVIDIA driver installs `nvcuda.dll` in System32, where
+/// the encoder loads it from.
+#[cfg(windows)]
+fn find_nvcuda() -> Result<(), String> {
+    let root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+    let path = PathBuf::from(root).join("System32").join("nvcuda.dll");
+    if path.is_file() {
+        Ok(())
+    } else {
+        Err(format!("no {}", path.display()))
+    }
+}
+
+/// Refuses local decisions on `os` when the NVIDIA driver's `library`
+/// couldn't be loaded.
+#[cfg(any(target_os = "linux", windows, test))]
+fn nvidia_driver(os: &str, library: &str, loaded: Result<(), String>) -> io::Result<()> {
+    loaded.map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
             format!(
-                "`local` decisions need the ARC encoder, and {} can't be read: {error}",
-                path.display()
-            )
-        };
-        io::Error::new(error.kind(), message)
+                "`local` decisions on {os} need the NVIDIA driver, and its {library} can't be \
+                 loaded ({error}); install the NVIDIA driver, or use hosted decisions: \
+                 `rayline local start --router hosted`"
+            ),
+        )
     })
 }
 
@@ -2006,9 +2096,9 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_encoder_says_whether_releases_ship_one_for_this_platform() {
-        let dir = temp_dir("encoder");
-        let unsupported = arc_encoder_beside(&dir, false).unwrap_err();
+    fn local_decisions_need_a_platform_releases_ship_the_encoder_for() {
+        assert!(encoder_ships(true).is_ok());
+        let unsupported = encoder_ships(false).unwrap_err();
         assert_eq!(unsupported.kind(), io::ErrorKind::Unsupported);
         let message = unsupported.to_string();
         assert!(
@@ -2021,30 +2111,24 @@ mod tests {
             message.ends_with("set `routing.router` to `hosted`"),
             "{message}"
         );
-        assert!(!message.contains("update"), "{message}");
+    }
 
-        let missing = arc_encoder_beside(&dir, true).unwrap_err();
-        assert_eq!(missing.kind(), io::ErrorKind::NotFound);
-        let message = missing.to_string();
-        assert!(message.contains("it isn't installed"), "{message}");
-        assert!(
-            message.contains("run `rayline update` to install it"),
-            "{message}"
-        );
-        assert!(!message.contains("--force"), "{message}");
-
-        let path = dir.join(format!(
-            "rayline-arc-encoder{}",
-            std::env::consts::EXE_SUFFIX
-        ));
-        fs::write(&path, b"").unwrap();
+    #[test]
+    fn without_the_nvidia_driver_local_decisions_are_refused() {
+        assert!(nvidia_driver("Linux", "libcuda.so.1", Ok(())).is_ok());
+        let error = nvidia_driver(
+            "Linux",
+            "libcuda.so.1",
+            Err("libcuda.so.1: cannot open shared object file".to_owned()),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
         assert_eq!(
-            arc_encoder_beside(&dir, true).unwrap(),
-            fs::canonicalize(&path).unwrap()
+            error.to_string(),
+            "`local` decisions on Linux need the NVIDIA driver, and its libcuda.so.1 can't be \
+             loaded (libcuda.so.1: cannot open shared object file); install the NVIDIA driver, \
+             or use hosted decisions: `rayline local start --router hosted`"
         );
-        // Releases that don't ship one refuse even an encoder put there by hand.
-        assert!(arc_encoder_beside(&dir, false).is_err());
-        let _ = fs::remove_dir_all(&dir);
     }
 
     // The built-in prod takes no `--env`: `--env prod` selects a configured
