@@ -156,7 +156,15 @@ pub async fn run_argv(original_argv: &[OsString]) -> ExitCode {
         cli::Command::Local(cli::Local::Start { .. }) => hybrid::start(&settings).await,
         cli::Command::Local(cli::Local::Status { json }) => hybrid::status(json).await,
         cli::Command::Local(cli::Local::Stop) => hybrid::stop().await,
-        cli::Command::Run(run) => run_cloud(run.launch, hosted).await,
+        cli::Command::Run(run) => {
+            if hybrid::local_process_running() {
+                eprintln!(
+                    "Note: a local process is running; this run uses Rayline Platform. \
+                     Add --local to use the local process."
+                );
+            }
+            run_cloud(run.launch, hosted).await
+        }
         cli::Command::Top { json } => {
             print_or_fail(top::render_top(&top::TopRequest { json }).await, "Error")
         }
