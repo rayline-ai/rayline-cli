@@ -338,7 +338,8 @@ pi-arc finds the local Routes API with `rayline local status --json`:
   outside the release is left out and listed in the answer's
   `receipt.excluded` with the reason `unknown_action`, and a priced model that
   no offered action runs is listed in `routing.prices.unused`. With no offered
-  action the release knows, there is nothing to pick and the request fails.
+  action the release knows, there is nothing to pick: the request is refused
+  (400, `no_feasible_target`) with no receipt.
   An action outside the release named in `routing.execution.history`,
   `last_served` or `hold` is refused (400, `execution_unknown_action`).
 - There is no fallback: when the local process isn't running or can't
