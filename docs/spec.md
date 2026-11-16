@@ -79,7 +79,7 @@ rayline run <HARNESS> [--local | --config <file>] [HARNESS ARGS]...
    The arguments of other harnesses are not checked: `hermes --resume` and `openclaw --session-id`, for example, are passed on.
 10. Local mode refuses OpenClaw container mode, before anything starts: `rayline run openclaw` when `OPENCLAW_CONTAINER` is set to a non-empty value, or when any harness argument is `--container` or `--container=<value>`.
 11. Before a cloud-mode `rayline run hermes` launch, on every OS, Rayline runs `hermes pm install --extra anthropic` with the launch's environment (`HERMES_HOME` set to Rayline's Hermes home), once per Hermes install and home; later launches skip it. If the install fails or cannot run, the launch stops with Hermes' last output and the command to run by hand with that home.
-12. Local mode refuses `rayline run pi` before anything starts when `pi` isn't on `PATH`, or when `pi --version` can't run, exits non-zero, prints no version or prints one older than 0.87.1 (an older pi sends no session id). The error names the minimum version and `npm install -g @earendil-works/pi-coding-agent`.
+12. Local mode refuses `rayline run pi` before anything starts when `pi` isn't on `PATH`, or when `pi --version` can't run, exits non-zero, prints no version or prints one older than 0.87.1 (an older pi sends no session id). When pi is older, the error names the minimum version and `npm install -g @earendil-works/pi-coding-agent`.
 
 Harness-specific options and subcommands are **kept for review** (section 9).
 

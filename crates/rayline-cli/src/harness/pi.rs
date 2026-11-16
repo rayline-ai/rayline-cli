@@ -106,7 +106,7 @@ pub(crate) fn plan(ctx: &RenderContext<'_>) -> Plan {
 mod tests {
     use super::super::Harness;
     use super::super::tests::{TEST_URL, env_value, render};
-    use super::local_version_error;
+    use super::{local_version_error, require_local_version};
 
     #[test]
     fn local_mode_refuses_a_pi_that_sends_no_session_id() {
@@ -198,5 +198,33 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(dir.join("models.json")).unwrap())
                 .unwrap();
         assert_eq!(models["providers"]["rayline"]["baseUrl"], TEST_URL);
+    }
+
+    /// The probe reads the version pi prints on stdout, and refuses one it
+    /// can't read.
+    #[cfg(unix)]
+    #[test]
+    fn the_version_probe_reads_pi_s_stdout() {
+        let probe = |script: &str| {
+            let mut command = std::process::Command::new("sh");
+            command.args(["-c", script, "pi"]);
+            require_local_version(command)
+        };
+        assert_eq!(probe("echo 0.87.1"), Ok(()));
+        assert!(
+            probe("echo 0.80.0")
+                .unwrap_err()
+                .contains("upgrade to pi 0.87.1")
+        );
+        assert!(
+            probe("echo 0.87.1 >&2")
+                .unwrap_err()
+                .contains("printed no version")
+        );
+        assert!(
+            probe("echo 0.87.1; exit 1")
+                .unwrap_err()
+                .contains("failed: exit status: 1")
+        );
     }
 }
