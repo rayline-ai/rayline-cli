@@ -176,6 +176,11 @@ impl Progress {
         state.base = None;
     }
 
+    /// Whether anything was downloaded.
+    pub fn downloaded(&self) -> bool {
+        self.state.borrow().started.is_some()
+    }
+
     /// The release is in the cache: says whether it was downloaded, or
     /// was there already.
     pub fn release_ready(&self) {

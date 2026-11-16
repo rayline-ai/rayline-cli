@@ -1036,10 +1036,17 @@ fn local_arc(home: &Path, routing: &crate::config::Routing) -> io::Result<Option
     if let (Some((hub, _)), None) = (&hub, &model) {
         crate::arc_release::expect_unless_cached(hub, &weights, &progress);
     }
+    // What was downloaded is checked again once it has settled, which
+    // records the stamps the next start reads instead of hashing.
+    let mut recheck: Vec<Box<dyn FnOnce() -> io::Result<()> + '_>> = Vec::new();
     // The encoder of this version, fetched once, in the same transfer.
     let encoder = match encoder_override {
         Some(path) => path,
-        None => version_encoder(home, &stamps, &progress)?,
+        None => {
+            let encoder = version_encoder(home, &stamps, &progress)?;
+            recheck.push(Box::new(|| encoder_check(home, &stamps).map(drop)));
+            encoder
+        }
     };
     let (release, source) = match (release_dir, &hub) {
         (Some(dir), _) => {
@@ -1052,12 +1059,18 @@ fn local_arc(home: &Path, routing: &crate::config::Routing) -> io::Result<Option
                 .clone()
                 .unwrap_or_else(crate::arc_release::built_in);
             let token = rayline_hf::hf_token(home).map_err(io::Error::other)?;
-            let dir =
-                crate::arc_release::fetch(hub, &stamps, hub_url, token.as_deref(), &pin, &progress)
+            let source = format!("release {} at {}", pin.repo, pin.revision);
+            let stamps = &stamps;
+            let fetch = move |progress: &crate::start_progress::Progress| {
+                crate::arc_release::fetch(hub, stamps, hub_url, token.as_deref(), &pin, progress)
                     .map_err(|error| {
                         io::Error::other(format!("cannot load the ARC release: {error}"))
-                    })?;
-            let source = format!("release {} at {}", pin.repo, pin.revision);
+                    })
+            };
+            let dir = fetch(&progress)?;
+            recheck.push(Box::new(move || {
+                fetch(&crate::start_progress::Progress::silent()).map(drop)
+            }));
             (dir, source)
         }
         (None, None) => unreachable!("a release to download has a hub"),
@@ -1067,15 +1080,26 @@ fn local_arc(home: &Path, routing: &crate::config::Routing) -> io::Result<Option
     let model = match (model, &hub) {
         (Some(model), _) => model,
         (None, Some((hub, hub_url))) => {
-            let path =
-                crate::arc_release::fetch_file(hub, &stamps, hub_url, None, &weights, &progress)
+            let fetch = |progress: &crate::start_progress::Progress| {
+                crate::arc_release::fetch_file(hub, &stamps, hub_url, None, &weights, progress)
                     .map_err(|error| {
                         io::Error::other(format!("cannot load the ARC encoder: {error}"))
-                    })?;
+                    })
+            };
+            let path = fetch(&progress)?;
+            recheck.push(Box::new(move || {
+                fetch(&crate::start_progress::Progress::silent()).map(drop)
+            }));
             fs::canonicalize(path)?
         }
         (None, None) => unreachable!("weights to download have a hub"),
     };
+    if progress.downloaded() {
+        crate::arc_release::settle();
+        for check in recheck {
+            check()?;
+        }
+    }
     if hub.is_some() {
         progress.release_ready();
     }
@@ -1162,14 +1186,26 @@ fn version_encoder(
                 crate::RAYLINE_VERSION
             ))
         })?;
-    // Settled first, so this check records the stamps the next start reads.
-    crate::arc_release::settle();
-    crate::update::fetched_encoder(&dir, platform, keys, &verified).ok_or_else(|| {
-        io::Error::other(format!(
-            "the ARC encoder downloaded into {} doesn't match its SHA256SUMS",
-            dir.display()
-        ))
-    })
+    // Each file matched before it was moved in; `local_arc` checks them
+    // again once they have settled.
+    Ok(dir.join(crate::update::encoder_file_name()))
+}
+
+/// This version's encoder in `~/.rayline/arc/<version>/`, checked against
+/// its signed SHA256SUMS with `stamps`.
+fn encoder_check(home: &Path, stamps: &Path) -> io::Result<PathBuf> {
+    let platform = crate::update::detect_platform_tag().map_err(io::Error::other)?;
+    let version = crate::update::Version::parse(crate::RAYLINE_VERSION)
+        .map_err(|_| io::Error::other(format!("invalid version {}", crate::RAYLINE_VERSION)))?;
+    let dir = crate::update::encoder_dir(home, &version);
+    let verified = |at: &Path, sha256: &str| crate::arc_release::verified(stamps, at, sha256);
+    crate::update::fetched_encoder(&dir, platform, crate::MINISIGN_PUBLIC_KEYS, &verified)
+        .ok_or_else(|| {
+            io::Error::other(format!(
+                "the ARC encoder downloaded into {} doesn't match its SHA256SUMS",
+                dir.display()
+            ))
+        })
 }
 
 /// On Linux the encoder runs on an NVIDIA GPU through the driver's
