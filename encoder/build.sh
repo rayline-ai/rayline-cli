@@ -3,7 +3,7 @@
 #
 #   encoder/build.sh [--backend metal|cuda|cpu] [--cuda-arch LIST] [--source-dir DIR] [--output-dir DIR] [--jobs N]
 #
-# --backend: metal (the default; macOS arm64, what releases ship), or on Linux cuda or cpu. cuda needs --cuda-arch,
+# --backend: metal (the default; macOS arm64), or on Linux cuda or cpu. Releases ship metal and cuda. cuda needs --cuda-arch,
 # an explicit CMAKE_CUDA_ARCHITECTURES list such as "89;121", and the CUDA toolkit (nvcc on PATH or in
 # /usr/local/cuda/bin); it links the CUDA runtime and cuBLAS statically, so the binary needs only the driver.
 #
@@ -113,9 +113,14 @@ if [ "$backend" = metal ]; then
   c++ -std=c++17 -O2 -mmacosx-version-min="$min_macos" -o "$out/rayline-arc-encoder" "${server[@]}" \
     "${libs[@]}" -framework Foundation -framework Metal -framework MetalKit -framework Accelerate -pthread
 else
-  # A developer build for Linux hosts; releases do not ship it.
-  extra=(-DGGML_CUDA=OFF)
-  [ "$backend" = cuda ] && extra=(-DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="$cuda_arch")
+  # Linux. Releases ship the cuda build, made in a pinned toolkit image by build-linux-release.sh.
+  # No -march=native: the binary runs on other CPUs than the build host (x86_64 keeps ggml's AVX2 baseline). ggml's own
+  # thread pool instead of OpenMP, so libgomp is not needed at run time.
+  extra=(-DGGML_NATIVE=OFF -DGGML_OPENMP=OFF -DGGML_CUDA=OFF)
+  # NCCL (multi-GPU collectives) stays off: the encoder runs on one GPU, and the toolkit image's NCCL can't be linked
+  # statically.
+  [ "$backend" = cuda ] && extra=(-DGGML_NATIVE=OFF -DGGML_OPENMP=OFF -DGGML_CUDA=ON -DGGML_CUDA_NCCL=OFF
+                                   -DCMAKE_CUDA_ARCHITECTURES="$cuda_arch")
   cmake -S "$src" -B "$b" -G "$generator" "${common[@]}" "${extra[@]}" >/dev/null
   cmake --build "$b" --target llama -j "$jobs" >/dev/null
   libs=()
@@ -123,9 +128,10 @@ else
     file="$(find "$b" -name "lib$lib.a" | head -1)"
     [ -n "$file" ] && libs+=("$file")
   done
-  system=(-fopenmp -pthread -ldl)
-  [ "$backend" = cuda ] && system+=(-L/usr/local/cuda/lib64 -lcudart_static -lcublas_static -lcublasLt_static
-                                    -lculibos -lcuda -lrt)
+  system=(-pthread -ldl)
+  # The driver library may be absent on a build host: the toolkit's stub stands in at link time (libcuda.so.1).
+  [ "$backend" = cuda ] && system+=(-L/usr/local/cuda/lib64 -L/usr/local/cuda/lib64/stubs -lcudart_static
+                                    -lcublas_static -lcublasLt_static -lculibos -lcuda -lrt)
   c++ -std=c++17 -O2 -o "$out/rayline-arc-encoder" "${server[@]}" \
     -Wl,--start-group "${libs[@]}" -Wl,--end-group "${system[@]}"
 fi
@@ -138,6 +144,10 @@ fi
     printf '\n==> llama.cpp/%s <==\n\n' "$license"
     cat "$src/$license"
   done
+  # One LICENSE ships for every platform (a single release asset), so this notice is in all of them.
+  printf '\n==> NVIDIA CUDA Toolkit <==\n\n'
+  echo "The Linux builds also contain the NVIDIA CUDA runtime, cuBLAS and cuBLASLt, linked statically and"
+  echo "redistributed under the NVIDIA CUDA Toolkit End User License Agreement: https://docs.nvidia.com/cuda/eula/"
 } > "$out/rayline-arc-encoder-LICENSE"
 
 echo "$out/rayline-arc-encoder"

@@ -30,10 +30,10 @@ The release workflow uploads:
 - `rayline-<version>-windows_x86_64.zip` for Windows;
 - `rayline-core-LICENSE`, the execution core's license;
 - `rayline-core-source.json` with the pinned public source and toolchain;
-- `rayline-arc-encoder-macosx_11_0_arm64`, the local ARC encoder, and
-  `rayline-arc-encoder-LICENSE`, the licenses of the llama.cpp code it bundles
-  (macOS arm64 only; the macOS arm64 archive carries both, and other platforms
-  ship without them);
+- `rayline-arc-encoder-<platform>` for `macosx_11_0_arm64`, `linux_x86_64`
+  and `linux_aarch64`, the local ARC encoder, and `rayline-arc-encoder-LICENSE`,
+  the licenses of the llama.cpp and CUDA code it bundles (those platforms'
+  archives carry both; Intel macOS and Windows ship without them);
 - `SHA256SUMS` covering every uploaded binary, archive, license and provenance
   file, and `SHA256SUMS.minisig`, its minisign signature;
 - `latest.txt`, the release's version pointer, and `latest.txt.minisig`, its
@@ -62,7 +62,7 @@ https://get.rayline.ai/cli/v<version>/rayline-<platform>
 https://get.rayline.ai/cli/v<version>/rayline-core-<platform>
 https://get.rayline.ai/cli/v<version>/rayline-core-LICENSE
 https://get.rayline.ai/cli/v<version>/rayline-core-source.json
-https://get.rayline.ai/cli/v<version>/rayline-arc-encoder-macosx_11_0_arm64
+https://get.rayline.ai/cli/v<version>/rayline-arc-encoder-<platform>
 https://get.rayline.ai/cli/v<version>/rayline-arc-encoder-LICENSE
 https://get.rayline.ai/cli/v<version>/SHA256SUMS
 https://get.rayline.ai/cli/v<version>/SHA256SUMS.minisig
@@ -174,14 +174,35 @@ different layouts.
 ## ARC encoder build
 
 `rayline-arc-encoder` is the local ARC encoder: `encoder/arc_encoder_server.cpp`
-linked against a static llama.cpp with the Metal shaders embedded. It ships for
-macOS arm64 only. `release/encoder-source.json` pins the llama.cpp repository,
-the exact commit and the sha256 of every patch in `encoder/patches/`; both
-release pipelines build it with:
+linked against a static llama.cpp. It ships for macOS arm64 (Metal, shaders
+embedded) and for x86_64 and aarch64 Linux (NVIDIA CUDA).
+`release/encoder-source.json` pins the llama.cpp repository, the exact commit
+and the sha256 of every patch in `encoder/patches/`, and for Linux the CUDA
+toolkit image (by digest) and each architecture's `CMAKE_CUDA_ARCHITECTURES`
+list. Both release pipelines build it with:
 
 ```bash
-encoder/build.sh --output-dir dist-encoder
+encoder/build.sh --output-dir dist-encoder                      # macOS arm64
+encoder/build-linux-release.sh --output-dir dist-encoder \
+  --smoke-model stories260K.gguf                                # Linux, needs Docker
 ```
+
+The Linux build runs `build.sh --backend cuda` in the pinned Rocky Linux 8
+toolkit image, so the binary needs glibc 2.28 or later. It is built for a CPU
+baseline, not the runner's CPU (`GGML_NATIVE=OFF`; AVX2 on x86_64), without
+OpenMP. It links the CUDA runtime and cuBLAS statically, with cuBLAS pruned
+(`nvprune`) to the pinned GPU generations (0.6 to 0.8 GB), and loads only the NVIDIA driver
+(`libcuda.so.1`) and the system C/C++ runtimes; the script refuses anything
+else or a newer glibc. Runners have no GPU, so its smoke test runs against the
+toolkit's `libcuda` stub, on which ggml falls back to the CPU. Building six
+CUDA architectures takes about 25 minutes on 8 cores.
+
+Linux `rayline` is built the same way, by `scripts/build-linux-cli.sh`: `cargo
+build` runs in that pinned Rocky Linux 8 image with the runner's Rust toolchain
+mounted, so `rayline` also needs glibc 2.28 at most, and the script refuses a
+newer requirement. `rayline-core` is built with `CGO_ENABLED=0`, so it is
+static and needs no glibc. CI builds Linux `rayline` this way on x86_64 and
+aarch64.
 
 The script fetches the pinned commit, refuses another commit, local changes or
 a patch whose sha256 differs from the pin, applies the patches and writes

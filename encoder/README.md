@@ -4,11 +4,14 @@ The local ARC encoder: a loopback HTTP server on llama.cpp (`libllama`, static) 
 GGUF (`rayline-ai/ARC-1.0`) and returns the encoder's final-layer state at requested token offsets. Rayline's local
 ARC decisions (`routing.router = local`, PRs #291–#292) start this binary from beside the `rayline` executable
 (`RAYLINE_ARC_ENCODER` names another binary); on its own it is a standalone server. Releases ship it for macOS arm64
-only. The protocol (`/health`, `/encode`, `/close`) is documented at the top
+(Metal) and x86_64/aarch64 Linux (NVIDIA CUDA, driver only). The protocol (`/health`, `/encode`, `/close`) is documented at the top
 of `arc_encoder_server.cpp`.
 
 - `build.sh`: fetches llama.cpp at the commit pinned in `../release/encoder-source.json`, verifies it and the
   patches by sha256, and builds.
+- `build-linux-release.sh`: the Linux release build. Runs `build.sh --backend cuda` in the CUDA toolkit image pinned
+  by digest (Rocky Linux 8, so glibc 2.28) for the pinned architecture list, refuses any dynamic library beyond the
+  driver and the system C/C++ runtimes or a newer glibc, and smoke-tests on the CPU through the toolkit's `libcuda` stub.
 - `patches/0001-…`: an embeddings context skips the LM head and honors the batch's output flags (unpatched, it runs
   the 248k-token vocabulary head on every token and holds ~8 GB of logits at 8,192 tokens).
 - `smoke_test.py`: starts a built binary with any small GGUF and checks the protocol.
@@ -22,11 +25,12 @@ encoder/build.sh                       # writes encoder/build/dist/rayline-arc-e
 python3 encoder/smoke_test.py encoder/build/dist/rayline-arc-encoder [model.gguf]
 ```
 
-On Linux (development only):
+On Linux:
 
 ```bash
-encoder/build.sh --backend cuda --cuda-arch "89;121"   # needs the CUDA toolkit; links cudart and cuBLAS statically
-encoder/build.sh --backend cpu
+encoder/build-linux-release.sh --output-dir dist --smoke-model model.gguf   # the release build; needs Docker, no GPU
+encoder/build.sh --backend cuda --cuda-arch "89;121"   # on the host's CUDA toolkit; links cudart and cuBLAS statically
+encoder/build.sh --backend cpu                         # development only
 ```
 
 `build.sh` refuses another commit, unpinned patches, local changes and untracked files. The macOS binary links only
@@ -51,7 +55,7 @@ A new platform ships only after all seven steps pass on its target hardware.
 5. **Process integration.** Shutdown works through `--parent-pipe` (stdin closing); document any environment flag
    the launcher must set.
 6. **Release.** A job for that platform tag; the asset goes in the archive and `SHA256SUMS`; installers and
-   `rayline update` install it only when listed; the binary is code-signed (notarized or Authenticode).
+   `rayline update` install it only when listed; the binary is code-signed (notarized or Authenticode; Linux relies on the signed `SHA256SUMS`).
 7. **End to end.** Real `claude -p` and Pi turns in local mode through the sibling binary, then an offline restart.
 
 ### Windows (not yet shipped)
@@ -72,8 +76,8 @@ Follow upstream llama.cpp's Windows builds ([release.yml](https://github.com/ggm
 | Platform | Backend | Hardware | Parity (same action) | Shipped |
 |---|---|---|---|---|
 | macOS arm64 | Metal | M4 Max | 256/265 | yes |
-| Linux aarch64 | CUDA | GB10 | 258/265 | no |
-| Linux x86_64 | CUDA | L4 (sm_89) | 258/265 | no |
+| Linux aarch64 | CUDA | GB10 | 258/265 | yes (`90;121`) |
+| Linux x86_64 | CUDA | L4 (sm_89) | 258/265 | yes (`75;80;86;89;90;120`) |
 | Windows x86_64 | CUDA | L4 (sm_89) | 258/265 (bit-identical to Linux L4; 10–20% slower) | no |
 | Linux | CPU | any | not run | no: 77 s for an 8k first encode |
 

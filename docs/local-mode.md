@@ -135,8 +135,20 @@ Every entry works the same way. No setting marks a model as local.
 | `arc_release` | object with `repo`, `revision`, `manifest_sha256`, and optionally `dir` | no | Overrides the built-in ARC release for `local` decisions with a Hugging Face repo, a full commit id, the sha256 of the release's `manifest.json`, and the repo directory it is in (default the repo root). For a private repo, set `HF_TOKEN` or sign in with `huggingface-cli login`. |
 
 `local` decisions are a preview. They need the ARC encoder binary
-`rayline-arc-encoder` beside `rayline`, which only macOS arm64 releases
-ship. On first use, start downloads the
+`rayline-arc-encoder` beside `rayline`, which releases ship for
+macOS arm64 and Linux with an NVIDIA GPU (driver only). On Linux:
+
+- x86_64 needs an NVIDIA GPU of compute capability 7.5, 8.x, 9.0 or 12.0
+  (T4, A100, A10/L4/RTX 30 and 40, H100, RTX 50), and aarch64 one of 9.0 or
+  12.1 (GH200, GB10). Compute capability 10.x (B200, GB200) isn't supported
+  yet.
+- The encoder needs the NVIDIA driver and no CUDA toolkit: 525.60.13 or later
+  for T4 through H100, 570 or later for RTX 50, and 580 or later for GB10.
+- It needs glibc 2.28 or later (as `rayline` does) and AVX2 on x86_64, and
+  is 0.6 to 0.8 GB.
+- There is no build for other GPUs (Vulkan) or for the CPU alone.
+
+On first use, start downloads the
 release and about 1 GB of encoder weights into the Hugging Face cache and
 checks them against their pins. Later starts hash a cached file again only
 if it changed since it was last checked (a stamp in `~/.rayline/arc-verified/`);
@@ -202,7 +214,7 @@ rayline local stop
 The [pi-arc](https://github.com/rayline-ai/pi-arc) extension can ask the
 local process for each turn's model while you keep using your own Pi, with
 its own extensions, keys and models. This is a preview with the same limits
-as `local` decisions: macOS on Apple Silicon only.
+as `local` decisions: macOS on Apple Silicon, or Linux with an NVIDIA GPU.
 
 ```bash
 rayline auth login
