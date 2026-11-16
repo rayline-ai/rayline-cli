@@ -327,11 +327,12 @@ pub(crate) async fn stop() -> ExitCode {
         async {
             let (_, paths) = local_paths()?;
             let _lock = acquire_lock(&paths.lock())?;
-            if running(&paths)?.is_none() {
+            let Some(supervisor) = running(&paths)? else {
                 clear_state(&paths)?;
                 println!("Local process: not running");
                 return Ok(());
-            }
+            };
+            let pid = i32::try_from(supervisor.pid).map_err(io::Error::other)?;
             let state = ready(&paths)?;
             // Shutdown remains available when core health fails. The private
             // gateway token authenticates this command independently.
@@ -354,7 +355,8 @@ pub(crate) async fn stop() -> ExitCode {
                 return Err(io::Error::other("local process shutdown identity mismatch"));
             }
             // The local process gives its core up to 5 seconds to stop,
-            // then the ARC encoder up to 3.
+            // then the ARC encoder up to 3, and removes its state files, the
+            // ready file last.
             let deadline = Instant::now() + Duration::from_secs(10);
             while paths.ready().exists() {
                 if Instant::now() >= deadline {
@@ -364,6 +366,13 @@ pub(crate) async fn stop() -> ExitCode {
                     )));
                 }
                 tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            // Its state is gone; give the process up to 2 seconds to exit.
+            // One that still looks alive after that (a zombie its parent
+            // hasn't reaped, or a reused pid) doesn't fail the stop.
+            let exit_by = Instant::now() + Duration::from_secs(2);
+            while Instant::now() < exit_by && process_exists(pid).unwrap_or(false) {
+                tokio::time::sleep(Duration::from_millis(50)).await;
             }
             fs::remove_file(paths.supervisor())?;
             println!("Local process stopped.");
