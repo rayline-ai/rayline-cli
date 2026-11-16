@@ -55,7 +55,8 @@ jobs:
             exe_suffix: ""
             archive_ext: tar.gz
           - platform_tag: windows_x86_64
-            timeout: 45
+            # The CUDA encoder for every pinned architecture.
+            timeout: 300
             os: windows-latest
             exe_suffix: ".exe"
             archive_ext: zip
@@ -136,6 +137,18 @@ jobs:
           cp "$RUNNER_TEMP/encoder/rayline-arc-encoder" "dist/rayline-arc-encoder-${PLATFORM_TAG}"
           cp "$RUNNER_TEMP/encoder/rayline-arc-encoder-LICENSE" dist/rayline-arc-encoder-LICENSE
 
+      # Windows: NVIDIA CUDA from the redist archives pinned in release/encoder-source.json; the cuBLAS DLLs ship as
+      # their own assets, installed beside the encoder.
+      - name: Build ARC encoder (Windows)
+        if: matrix.platform_tag == 'windows_x86_64'
+        shell: pwsh
+        run: |
+          encoder\windows\build.ps1 -OutputDir "$env:RUNNER_TEMP\encoder"
+          $pin = Get-Content release\encoder-source.json -Raw | ConvertFrom-Json
+          Copy-Item "$env:RUNNER_TEMP\encoder\rayline-arc-encoder.exe" "dist\rayline-arc-encoder-windows_x86_64"
+          Copy-Item "$env:RUNNER_TEMP\encoder\rayline-arc-encoder-LICENSE" "dist\rayline-arc-encoder-LICENSE"
+          foreach ($dll in $pin.windows_cuda.dlls) { Copy-Item "$env:RUNNER_TEMP\encoder\$dll" "dist\$dll" }
+
       - name: Install Rust
         shell: bash
         run: |
@@ -180,9 +193,12 @@ jobs:
           cp README.md LICENSE NOTICE "package/${package_dir}/"
           encoder_asset="dist/rayline-arc-encoder-${PLATFORM_TAG}"
           if [[ -f "$encoder_asset" ]]; then
-            cp "$encoder_asset" "package/${package_dir}/rayline-arc-encoder"
+            cp "$encoder_asset" "package/${package_dir}/rayline-arc-encoder${EXE_SUFFIX}"
             cp dist/rayline-arc-encoder-LICENSE "package/${package_dir}/"
-            chmod 0755 "$encoder_asset" "package/${package_dir}/rayline-arc-encoder"
+            chmod 0755 "$encoder_asset" "package/${package_dir}/rayline-arc-encoder${EXE_SUFFIX}"
+            for dll in dist/*.dll; do
+              [[ -e "$dll" ]] && cp "$dll" "package/${package_dir}/"
+            done
           fi
 
           if [[ "$RUNNER_OS" == "Windows" ]]; then
@@ -299,7 +315,7 @@ jobs:
           Assets:
           - \`rayline-<platform>\` and \`rayline-core-<platform>\` are the bare binaries used by \`rayline update\` and the install scripts.
           - \`rayline-${version}-<platform>.tar.gz\` / \`.zip\` archives contain \`rayline\`, \`rayline-core\`, source provenance and license/readme files.
-          - \`rayline-arc-encoder-<platform>\` is the local ARC encoder for macOS arm64 and Linux (NVIDIA CUDA; needs only the driver), also in those archives, with its third-party licenses in \`rayline-arc-encoder-LICENSE\`.
+          - \`rayline-arc-encoder-<platform>\` is the local ARC encoder for macOS arm64, Linux and Windows (NVIDIA CUDA; needs only the driver), also in those archives, with its third-party licenses in \`rayline-arc-encoder-LICENSE\`. On Windows the cuBLAS DLLs it loads, \`cublas64_12.dll\` and \`cublasLt64_12.dll\`, are assets of their own, installed beside it.
           - \`SHA256SUMS\` covers every uploaded binary, archive and provenance file.
           - \`SHA256SUMS.minisig\` is the minisign signature over \`SHA256SUMS\`.
           EOF

@@ -4,11 +4,12 @@ The local ARC encoder: a loopback HTTP server on llama.cpp (`libllama`, static) 
 GGUF (`rayline-ai/ARC-1.0`) and returns the encoder's final-layer state at requested token offsets. Rayline's local
 ARC decisions (`routing.router = local`, PRs #291–#292) start this binary from beside the `rayline` executable
 (`RAYLINE_ARC_ENCODER` names another binary); on its own it is a standalone server. Releases ship it for macOS arm64
-(Metal) and x86_64/aarch64 Linux (NVIDIA CUDA, driver only). The protocol (`/health`, `/encode`, `/close`) is documented at the top
+(Metal), x86_64/aarch64 Linux and x86_64 Windows (NVIDIA CUDA, driver only). The protocol (`/health`, `/encode`, `/close`) is documented at the top
 of `arc_encoder_server.cpp`.
 
 - `build.sh`: fetches llama.cpp at the commit pinned in `../release/encoder-source.json`, verifies it and the
   patches by sha256, and builds.
+- `windows/build.ps1`: the Windows release build (NVIDIA CUDA), below.
 - `build-linux-release.sh`: the Linux release build. Runs `build.sh --backend cuda` in the CUDA toolkit image pinned
   by digest (Rocky Linux 8, so glibc 2.28) for the pinned architecture list, refuses any dynamic library beyond the
   driver and the system C/C++ runtimes or a newer glibc, and smoke-tests on the CPU through the toolkit's `libcuda` stub.
@@ -58,18 +59,24 @@ A new platform ships only after all seven steps pass on its target hardware.
    `rayline update` install it only when listed; the binary is code-signed (notarized or Authenticode; Linux relies on the signed `SHA256SUMS`).
 7. **End to end.** Real `claude -p` and Pi turns in local mode through the sibling binary, then an offline restart.
 
-### Windows (not yet shipped)
+### Windows
 
-Follow upstream llama.cpp's Windows builds ([release.yml](https://github.com/ggml-org/llama.cpp/blob/master/.github/workflows/release.yml), [docs/build.md](https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md)):
-- **Build:** MSVC for CUDA, clang-cl for CPU variants, Ninja; `GGML_NATIVE=OFF`, `GGML_OPENMP=OFF`, static CRT (`/MT`).
-- **CUDA:** install the toolkit from NVIDIA's redist zips ([windows-setup-cuda](https://github.com/ggml-org/llama.cpp/blob/master/.github/actions/windows-setup-cuda/action.yml)) and set an explicit `CMAKE_CUDA_ARCHITECTURES` list.
-- **cuBLAS:** Windows has no static cuBLAS, so ship `cublas64_12.dll` (102.5 MB) and `cublasLt64_12.dll` (668.7 MB) beside the `.exe` (57.6 MB). With `/MT` no VC++ redistributable is needed.
-- **Drivers:** CUDA 12 builds need driver ≥ 525, CUDA 13 builds ≥ 580 ([release notes](https://docs.nvidia.com/cuda/cuda-toolkit-release-notes/)).
-- **Unicode and long paths:** embed an app manifest with `activeCodePage` UTF-8 and `longPathAware` ([#18571](https://github.com/ggml-org/llama.cpp/issues/18571)). Measured: a wide argv alone fails, because `std::filesystem::path` still uses the ANSI code page. The manifest goes in with the Windows build job.
-- **Process:** the parent puts the encoder in a Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`; closing stdin (`--parent-pipe`) gives the graceful exit, since there is no SIGTERM.
-- **Model cache:** Hugging Face cache symlinks need Developer Mode, or a fallback that copies files.
-- **Signing:** Authenticode-sign the `.exe` and the DLLs, with a timestamp. EV certificates no longer bypass SmartScreen ([Microsoft Learn](https://learn.microsoft.com/windows/apps/package-and-deploy/smartscreen-reputation)).
-- **Later:** Vulkan and Windows arm64 are phase 2.
+`windows/build.ps1` (PowerShell 7, Visual Studio 2022 Build Tools, Git; no GPU) follows upstream llama.cpp's Windows
+CUDA build: MSVC and Ninja, `GGML_NATIVE=OFF` with an explicit AVX2 baseline, `GGML_OPENMP=OFF`, the static C runtime
+(`/MT`, so no VC++ redistributable) and `cudart_static`. The CUDA toolkit comes from NVIDIA's redist archives, each
+pinned by sha256 in `windows_cuda` (the network installer fails unattended).
+- **cuBLAS:** Windows has no static cuBLAS, so `cublas64_12.dll` (102.5 MB) and `cublasLt64_12.dll` (668.7 MB) ship
+  beside the `.exe` as release assets of their own; `rayline update` and `install-rayline.ps1` install every `.dll`
+  the release's `SHA256SUMS` lists.
+- **Driver:** `nvcuda.dll` is delay-loaded. Without a driver (or with one older than 576, which CUDA 12.9 needs) the
+  encoder runs on the CPU and reports a `cpu` engine, which the local process refuses with an error.
+- **Paths:** an embedded manifest sets `activeCodePage` UTF-8 and `longPathAware`, so a model under a non-ASCII
+  profile directory opens (a wide argv alone isn't enough: `std::filesystem::path` still uses the ANSI code page).
+- **Process:** the local process puts the encoder and the core in a kill-on-close Job Object, so neither outlives it;
+  closing stdin (`--parent-pipe`) is the graceful exit, since there is no SIGTERM.
+- **Signing:** releases Authenticode-sign `rayline.exe`, `rayline-core.exe` and the encoder; the cuBLAS DLLs keep
+  NVIDIA's signature.
+- **Later:** Vulkan and Windows on Arm.
 
 ### Validated platforms
 

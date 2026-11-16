@@ -142,6 +142,8 @@ async fn spawn(
         .kill_on_drop(true)
         .spawn()
         .with_context(|| format!("start the ARC encoder {}", files.binary.display()))?;
+    crate::hybrid::tie_to_this_process(&child)
+        .context("tie the ARC encoder to the local process")?;
     let parent_pipe = child.stdin.take().context("encoder stdin unavailable")?;
     let stdout = child.stdout.take().context("encoder stdout unavailable")?;
     let url = tokio::time::timeout(timeout, async {
@@ -154,11 +156,31 @@ async fn spawn(
     })
     .await
     .context("the ARC encoder did not start in time")??;
-    wait_healthy(&url, timeout).await?;
+    let Health { engine } = wait_healthy(&url, timeout).await?;
+    refuse_cpu_engine(&engine)?;
     Ok((child, parent_pipe, url))
 }
 
-async fn wait_healthy(url: &str, timeout: Duration) -> Result<()> {
+#[derive(Deserialize)]
+struct Health {
+    engine: String,
+}
+
+/// Refuses an encoder that runs on the CPU: it found no GPU it can use (on
+/// Windows and Linux, no NVIDIA GPU, or a driver too old for its CUDA), and a
+/// CPU encode takes seconds per turn.
+fn refuse_cpu_engine(engine: &str) -> Result<()> {
+    if engine.split('+').any(|part| part == "cpu") {
+        bail!(
+            "the ARC encoder found no GPU it can use and would run on the CPU ({engine}); \
+             local decisions need Apple Silicon, or an NVIDIA GPU with a current driver \
+             (Linux 525.60.13 or later, Windows 576 or later); set `routing.router` to `hosted`"
+        );
+    }
+    Ok(())
+}
+
+async fn wait_healthy(url: &str, timeout: Duration) -> Result<Health> {
     let client = reqwest::Client::builder().no_proxy().build()?;
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
@@ -166,7 +188,12 @@ async fn wait_healthy(url: &str, timeout: Duration) -> Result<()> {
         let health =
             tokio::time::timeout_at(deadline, client.get(format!("{url}/health")).send()).await;
         match health {
-            Ok(Ok(response)) if response.status().is_success() => return Ok(()),
+            Ok(Ok(response)) if response.status().is_success() => {
+                return tokio::time::timeout_at(deadline, response.json())
+                    .await
+                    .map_err(|_| anyhow::anyhow!("the ARC encoder at {url} is not healthy"))?
+                    .context("the ARC encoder's /health is not its JSON");
+            }
             _ if tokio::time::Instant::now() >= deadline => {
                 bail!("the ARC encoder at {url} is not healthy")
             }
@@ -880,6 +907,16 @@ mod tests {
         .await
         .expect("ends by its deadline");
         assert!(checked.is_err());
+    }
+
+    #[test]
+    fn an_encoder_on_the_cpu_is_refused() {
+        assert!(refuse_cpu_engine("llamacpp@b11669-arc+cuda+kv-f16+fa").is_ok());
+        assert!(refuse_cpu_engine("llamacpp@b11669-arc+metal+kv-f16+fa").is_ok());
+        let refused = refuse_cpu_engine("llamacpp@b11669-arc+cpu+kv-f16+fa")
+            .expect_err("a cpu engine is refused")
+            .to_string();
+        assert!(refused.contains("routing.router"), "{refused}");
     }
 
     #[test]

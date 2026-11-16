@@ -83,3 +83,30 @@ jobs:
         run: |
           encoder/build-linux-release.sh --output-dir "$RUNNER_TEMP/encoder" --cuda-arch "$CUDA_ARCH" \
             --smoke-model "$RUNNER_TEMP/smoke.gguf"
+
+  windows:
+    name: Build and smoke test (Windows x86_64, CUDA 89)
+    runs-on: windows-2022
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+
+      - name: Fetch the smoke-test model
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri $env:SMOKE_MODEL_URL -OutFile "$env:RUNNER_TEMP\smoke.gguf" -UseBasicParsing
+          $actual = (Get-FileHash "$env:RUNNER_TEMP\smoke.gguf" -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $env:SMOKE_MODEL_SHA256) { throw "smoke model sha256 $actual" }
+
+      # One architecture keeps CI short; releases build the pinned list. No GPU and no driver: the delay-loaded
+      # nvcuda.dll is never found, the CUDA runtime reports no device and ggml runs the smoke test on the CPU.
+      - name: Build
+        shell: pwsh
+        run: encoder\windows\build.ps1 -OutputDir "$env:RUNNER_TEMP\encoder" -CudaArch 89
+
+      - name: Smoke test
+        shell: pwsh
+        run: python -I encoder\smoke_test.py "$env:RUNNER_TEMP\encoder\rayline-arc-encoder.exe" "$env:RUNNER_TEMP\smoke.gguf"

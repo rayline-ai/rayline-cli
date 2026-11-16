@@ -1422,6 +1422,7 @@ fn spawn_core(
         .kill_on_drop(true)
         .spawn()
         .context("start ARC execution core")?;
+    tie_to_this_process(&child).context("tie the execution core to the local process")?;
     // Keep the pipe open even while Child::wait closes its own stdin handle.
     // The core exits on EOF if the local process is terminated without running cleanup.
     let parent_pipe = Some(
@@ -1539,6 +1540,18 @@ fn shutdown_signal() -> Result<impl std::future::Future<Output = Result<()>>> {
             Ok(())
         })
     }
+}
+
+/// On Windows, puts `child` in the local process's kill-on-close job, so it
+/// exits with the local process even when the local process is killed.
+pub(crate) fn tie_to_this_process(child: &Child) -> Result<()> {
+    #[cfg(windows)]
+    if let Some(handle) = child.raw_handle() {
+        rayline_local_router::windows_state::kill_with_this_process(handle)?;
+    }
+    #[cfg(not(windows))]
+    let _ = child;
+    Ok(())
 }
 
 async fn stop_child(

@@ -1056,7 +1056,8 @@ const ENCODER_SHIPS: bool = cfg!(any(
     all(
         target_os = "linux",
         any(target_arch = "x86_64", target_arch = "aarch64")
-    )
+    ),
+    all(target_os = "windows", target_arch = "x86_64")
 ));
 
 /// The ARC encoder installed in `directory`, or an error saying why there is
@@ -1074,7 +1075,7 @@ fn arc_encoder_beside(directory: &Path, ships: bool) -> io::Result<PathBuf> {
             io::ErrorKind::Unsupported,
             format!(
                 "`local` decisions need the ARC encoder, which Rayline releases ship only for \
-                 macOS arm64 and Linux with an NVIDIA GPU, not for {os} {}; \
+                 macOS arm64, and Linux (x86_64 and aarch64) and Windows x86_64 with an NVIDIA GPU, not for {os} {}; \
                  set `routing.router` to `hosted`",
                 std::env::consts::ARCH
             ),
@@ -1984,7 +1985,9 @@ mod tests {
         assert_eq!(unsupported.kind(), io::ErrorKind::Unsupported);
         let message = unsupported.to_string();
         assert!(
-            message.contains("ship only for macOS arm64 and Linux with an NVIDIA GPU, not for "),
+            message.contains(
+                "ship only for macOS arm64, and Linux (x86_64 and aarch64) and Windows x86_64 with an NVIDIA GPU, not for "
+            ),
             "{message}"
         );
         assert!(
