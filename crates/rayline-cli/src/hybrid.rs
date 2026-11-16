@@ -355,10 +355,10 @@ pub(crate) async fn stop() -> ExitCode {
                 return Err(io::Error::other("local process shutdown identity mismatch"));
             }
             // The local process gives its core up to 5 seconds to stop,
-            // then the ARC encoder up to 3, removes its state files (the
-            // ready file last) and exits.
+            // then the ARC encoder up to 3, and removes its state files, the
+            // ready file last.
             let deadline = Instant::now() + Duration::from_secs(10);
-            while paths.ready().exists() || process_exists(pid)? {
+            while paths.ready().exists() {
                 if Instant::now() >= deadline {
                     return Err(io::Error::other(format!(
                         "the local process did not stop within 10s; see {}",
@@ -366,6 +366,13 @@ pub(crate) async fn stop() -> ExitCode {
                     )));
                 }
                 tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            // Its state is gone; give the process up to 2 seconds to exit.
+            // One that still looks alive after that (a zombie its parent
+            // hasn't reaped, or a reused pid) doesn't fail the stop.
+            let exit_by = Instant::now() + Duration::from_secs(2);
+            while Instant::now() < exit_by && process_exists(pid).unwrap_or(false) {
+                tokio::time::sleep(Duration::from_millis(50)).await;
             }
             fs::remove_file(paths.supervisor())?;
             println!("Local process stopped.");
