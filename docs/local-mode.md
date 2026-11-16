@@ -135,8 +135,10 @@ Every entry works the same way. No setting marks a model as local.
 | `arc_release` | object with `repo`, `revision`, `manifest_sha256`, and optionally `dir` | no | Overrides the built-in ARC release for `local` decisions with a Hugging Face repo, a full commit id, the sha256 of the release's `manifest.json`, and the repo directory it is in (default the repo root). For a private repo, set `HF_TOKEN` or sign in with `huggingface-cli login`. |
 
 `local` decisions are a preview. They need the ARC encoder binary
-`rayline-arc-encoder` beside `rayline`, which only macOS arm64 releases
-ship. On first use, start downloads the
+`rayline-arc-encoder` beside `rayline`, which releases ship for
+macOS arm64 and Linux with an NVIDIA GPU (driver only). The Linux encoder runs on the GPU with
+the NVIDIA driver alone (no CUDA toolkit), needs glibc 2.28 or later (and AVX2
+on x86_64), and is 0.6 to 0.8 GB. On first use, start downloads the
 release and about 1 GB of encoder weights into the Hugging Face cache and
 checks them against their pins. Later starts hash a cached file again only
 if it changed since it was last checked (a stamp in `~/.rayline/arc-verified/`);

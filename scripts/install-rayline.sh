@@ -18,7 +18,7 @@ Options:
   --version      Release version to install, for example 0.5.0.
                  Defaults to the latest GitHub release.
   --install-dir  Directory for rayline, rayline-core and rayline-core-LICENSE
-                 (and, on macOS arm64, rayline-arc-encoder and its LICENSE).
+                 (and, on macOS arm64 and Linux, rayline-arc-encoder and its LICENSE).
                  Defaults to ~/.rayline/bin.
 EOF
 }
@@ -131,7 +131,7 @@ download "$base_url/$core_asset" "$tmp_dir/$core_asset"
 download "$base_url/rayline-core-LICENSE" "$tmp_dir/rayline-core-LICENSE"
 assets="$rayline_asset $core_asset rayline-core-LICENSE"
 
-# The local ARC encoder ships for macOS arm64 only, and only in releases that list it.
+# The local ARC encoder ships for macOS arm64 and Linux, and only in releases that list it.
 encoder_asset="rayline-arc-encoder-$platform"
 encoder=false
 if awk -v asset="$encoder_asset" '$2 == asset { found = 1 } END { exit !found }' "$tmp_dir/SHA256SUMS"; then

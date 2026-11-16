@@ -47,3 +47,39 @@ jobs:
 
       - name: Smoke test
         run: python3 -I encoder/smoke_test.py "$RUNNER_TEMP/encoder/rayline-arc-encoder" "$RUNNER_TEMP/smoke.gguf"
+
+  linux:
+    name: Build and smoke test (Linux ${{ matrix.machine }}, CUDA ${{ matrix.cuda_arch }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            machine: x86_64
+            cuda_arch: "89"
+          - os: ubuntu-24.04-arm
+            machine: aarch64
+            cuda_arch: "121"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+
+      - name: Fetch the smoke-test model
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -sSfL --retry 3 -o "$RUNNER_TEMP/smoke.gguf" "$SMOKE_MODEL_URL"
+          echo "$SMOKE_MODEL_SHA256  $RUNNER_TEMP/smoke.gguf" | sha256sum -c -
+
+      # One architecture keeps CI short; releases build the pinned list. No GPU: the smoke test runs on the CPU
+      # through the toolkit's libcuda stub.
+      - name: Build, check linkage and glibc, smoke test
+        env:
+          CUDA_ARCH: ${{ matrix.cuda_arch }}
+        run: |
+          encoder/build-linux-release.sh --output-dir "$RUNNER_TEMP/encoder" --cuda-arch "$CUDA_ARCH" \
+            --smoke-model "$RUNNER_TEMP/smoke.gguf"

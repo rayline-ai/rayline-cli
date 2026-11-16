@@ -158,7 +158,7 @@ When the binary is not inside a `.app` bundle and `brew` is on `PATH` but `brew 
 
 ### 3.6 Installers
 
-`scripts/install-rayline.sh` (macOS and Linux) and `scripts/install-rayline.ps1` (Windows) install `rayline`, `rayline-core` and `rayline-core-LICENSE`, and on macOS arm64 also `rayline-arc-encoder` and `rayline-arc-encoder-LICENSE`. Their public options:
+`scripts/install-rayline.sh` (macOS and Linux) and `scripts/install-rayline.ps1` (Windows) install `rayline`, `rayline-core` and `rayline-core-LICENSE`, and on macOS arm64 and Linux with an NVIDIA GPU (driver only) also `rayline-arc-encoder` and `rayline-arc-encoder-LICENSE`. Their public options:
 
 1. `install-rayline.sh`:
    - `--version <version>`: the release to install, a bare version such as `0.5.0`. A version with a leading `v` is rejected. Without it, the installer takes the latest GitHub release.
@@ -290,7 +290,7 @@ Required for local mode. Its presence in a `--config` file selects local mode.
    - The encoder weights (about 1 GB) come from `rayline-ai/ARC-1.0` at the built-in release's commit and a sha256 compiled into Rayline, whatever `arc_release` says, without a token, by the same rules. A release in `arc_release` must be built for those weights; Rayline can't check that.
    - When neither the release nor the `models` prices it takes price any model, start fails saying so.
    - Start still contacts the environment's Rayline router and checks each `models` entry's `tokenizer` (section 5.3), as with `hosted`.
-2. With `router` `local`, the local process runs the ARC encoder, `rayline-arc-encoder`, installed beside `rayline`. Only macOS arm64 releases ship it; without it, start fails with an error that says so and to use `hosted`.
+2. With `router` `local`, the local process runs the ARC encoder, `rayline-arc-encoder`, installed beside `rayline`. Releases ship it for macOS arm64 and Linux with an NVIDIA GPU (driver only); without it, start fails with an error that says so and to run `rayline update` or use `hosted`.
 3. With `router` `local`, a `models` entry the ARC release doesn't know, or that neither its `price` nor the release prices, is skipped: the local process doesn't route to it, and `rayline local start` prints one warning per skipped entry, naming it and why. Turns route among the remaining models. When every `models` entry is skipped, start fails with an error naming them. Item 5 is checked first.
 4. With `router` `local`, every turn routes by a local ARC decision; there is no fallback. A turn the decider can't decide fails with the decider's error code: one whose request holds more than the decider reads (over a million JSON values; over 16 bytes of text, images not counted, per token of the encoder's largest context of 270,336 tokens; over 1,024 tools; or over 64 working directories), or holds content the decider can't encode yet (images and documents), and any turn while the encoder is down. `rayline run codex`, `hermes` and `openclaw` (harnesses that don't send Anthropic Messages) fail before anything starts, with an error saying to use `hosted`.
 5. With `router` `local`, a `models` entry's `price` needs a release that takes caller prices; with one that doesn't, start fails naming each `models.<id>.price` to remove.
@@ -473,7 +473,8 @@ Only two files:
 ```
 ~/.rayline/
   bin/                          rayline, rayline-core, rayline-core-LICENSE;
-                                on macOS arm64 also rayline-arc-encoder,
+                                on macOS arm64 and Linux also
+                                rayline-arc-encoder,
                                 rayline-arc-encoder-LICENSE
   arc-verified/<sha256>         on macOS and Linux, owner-only: stamps of the
                                 cached ARC files already hashed (section 5.4)

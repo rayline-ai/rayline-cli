@@ -5,5 +5,13 @@
   "patches": {
     "0001-embeddings-skip-lm-head-and-honor-output-flags.patch": "c957cf5dd5d58133d8c0d6ff14299259a7cf9daeccdfbacba36d7495e256bd13"
   },
-  "min_macos": "13.0"
+  "min_macos": "13.0",
+  "linux_cuda": {
+    "image": "docker.io/nvidia/cuda:12.9.1-devel-rockylinux8@sha256:4d8e976b2af924722f4d6eedf8a5dcf107dd9a4f66e8198aeecb72c96e40420e",
+    "max_glibc": "2.28",
+    "cuda_arch": {
+      "x86_64": "75;80;86;89;90;120",
+      "aarch64": "90;121"
+    }
+  }
 }

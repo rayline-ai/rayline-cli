@@ -28,28 +28,34 @@ jobs:
   build:
     name: Build ${{ matrix.platform_tag }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    # Linux builds the CUDA encoder for every pinned architecture: hours on a 4-core runner.
+    timeout-minutes: ${{ matrix.timeout }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - platform_tag: linux_x86_64
+            timeout: 300
             os: ubuntu-latest
             exe_suffix: ""
             archive_ext: tar.gz
           - platform_tag: linux_aarch64
+            timeout: 150
             os: ubuntu-24.04-arm
             exe_suffix: ""
             archive_ext: tar.gz
           - platform_tag: macosx_10_12_x86_64
+            timeout: 45
             os: macos-15-intel
             exe_suffix: ""
             archive_ext: tar.gz
           - platform_tag: macosx_11_0_arm64
+            timeout: 45
             os: macos-15
             exe_suffix: ""
             archive_ext: tar.gz
           - platform_tag: windows_x86_64
+            timeout: 45
             os: windows-latest
             exe_suffix: ".exe"
             archive_ext: zip
@@ -108,16 +114,25 @@ jobs:
         shell: bash
         run: python3 scripts/build-hybrid-core.py --source-dir core-source --platform '${{ matrix.platform_tag }}' --output-dir dist
 
-      # macOS arm64 only: the local ARC encoder runs on Metal. Built from the
-      # llama.cpp commit and patches pinned in release/encoder-source.json.
+      # The local ARC encoder: Metal on macOS arm64, NVIDIA CUDA on Linux. Built from
+      # the llama.cpp commit and patches pinned in release/encoder-source.json; Linux
+      # builds in the pinned CUDA toolkit image and is smoke-tested on the CPU.
       - name: Build ARC encoder
-        if: matrix.platform_tag == 'macosx_11_0_arm64'
+        if: matrix.platform_tag == 'macosx_11_0_arm64' || startsWith(matrix.platform_tag, 'linux_')
         shell: bash
         env:
           PLATFORM_TAG: ${{ matrix.platform_tag }}
+          SMOKE_MODEL_URL: https://huggingface.co/ggml-org/models-moved/resolve/499bc8821c6b12b4e53c5bffcb21ec206f212d81/tinyllamas/stories260K.gguf
+          SMOKE_MODEL_SHA256: 270cba1bd5109f42d03350f60406024560464db173c0e387d91f0426d3bd256d
         run: |
           set -euo pipefail
-          encoder/build.sh --output-dir "$RUNNER_TEMP/encoder"
+          if [[ "$PLATFORM_TAG" == linux_* ]]; then
+            curl -sSfL --retry 3 -o "$RUNNER_TEMP/smoke.gguf" "$SMOKE_MODEL_URL"
+            echo "$SMOKE_MODEL_SHA256  $RUNNER_TEMP/smoke.gguf" | sha256sum -c -
+            encoder/build-linux-release.sh --output-dir "$RUNNER_TEMP/encoder" --smoke-model "$RUNNER_TEMP/smoke.gguf"
+          else
+            encoder/build.sh --output-dir "$RUNNER_TEMP/encoder"
+          fi
           cp "$RUNNER_TEMP/encoder/rayline-arc-encoder" "dist/rayline-arc-encoder-${PLATFORM_TAG}"
           cp "$RUNNER_TEMP/encoder/rayline-arc-encoder-LICENSE" dist/rayline-arc-encoder-LICENSE
 
@@ -277,7 +292,7 @@ jobs:
           Assets:
           - \`rayline-<platform>\` and \`rayline-core-<platform>\` are the bare binaries used by \`rayline update\` and the install scripts.
           - \`rayline-${version}-<platform>.tar.gz\` / \`.zip\` archives contain \`rayline\`, \`rayline-core\`, source provenance and license/readme files.
-          - \`rayline-arc-encoder-macosx_11_0_arm64\` is the local ARC encoder (macOS arm64 only; also in that archive), with its third-party licenses in \`rayline-arc-encoder-LICENSE\`.
+          - \`rayline-arc-encoder-<platform>\` is the local ARC encoder for macOS arm64 and Linux (NVIDIA CUDA; needs only the driver), also in those archives, with its third-party licenses in \`rayline-arc-encoder-LICENSE\`.
           - \`SHA256SUMS\` covers every uploaded binary, archive and provenance file.
           - \`SHA256SUMS.minisig\` is the minisign signature over \`SHA256SUMS\`.
           EOF
