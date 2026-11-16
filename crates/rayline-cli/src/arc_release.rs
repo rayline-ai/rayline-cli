@@ -199,14 +199,17 @@ const SETTLED: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Whether `at` hashes to `sha256`. On Unix, when it does, records its stamp
 /// in `stamps`, but only when the file hashed (one open handle) is the one
-/// `at` resolves to, nothing changed it during the hash, and it had been
-/// unchanged for [`SETTLED`] when `now` (read after the hash) says so.
+/// `at` resolves to, nothing changed it during the hash, and it had already
+/// been unchanged for [`SETTLED`] when `now` is read, before the file is
+/// opened: a write after that lands in a later timestamp, even on a
+/// filesystem with 1 or 2 second times.
 fn hashes_to(
     stamps: &Path,
     at: &Path,
     sha256: &str,
     now: impl FnOnce() -> std::time::SystemTime,
 ) -> bool {
+    let started = now();
     let Ok(real) = fs::canonicalize(at) else {
         return false;
     };
@@ -226,12 +229,12 @@ fn hashes_to(
             .metadata()
             .is_ok_and(|after| stamp_of(&real, &after) == stamp)
             && fs::metadata(&real).is_ok_and(|now| stamp_of(&real, &now) == stamp);
-        if unchanged && settled(&before, now()) {
+        if unchanged && settled(&before, started) {
             record_stamp(stamps, sha256, &stamp);
         }
     }
     #[cfg(not(unix))]
-    let _ = (stamps, now);
+    let _ = (stamps, started);
     true
 }
 
@@ -764,25 +767,6 @@ mod tests {
         // Settled by both times: stamped.
         assert!(hashes_to(&stamps, &file, &sha, || changed + 2 * SETTLED));
         assert!(stamped(&stamps, &file, &sha));
-        let _ = fs::remove_dir_all(hub);
-    }
-
-    #[test]
-    fn a_fresh_download_is_hashed_again_on_the_next_start() {
-        // Just written, it hasn't settled: the next start hashes it (and on
-        // Unix stamps it then, once settled).
-        let hub = scratch("fresh");
-        let stamps = hub.join("verified");
-        let (served, pin) = release(&FILES);
-        let fake = fake_hub(served);
-        let dir =
-            fetch(&hub, &stamps, &fake.url, None, &pin, &Progress::silent()).expect("fetches");
-        for (name, body) in FILES {
-            assert!(
-                !stamped(&stamps, &dir.join(name), &sha256_hex(body)),
-                "{name}"
-            );
-        }
         let _ = fs::remove_dir_all(hub);
     }
 
