@@ -334,11 +334,12 @@ async fn logout_from_home(hosted: &HostedEnvironment, home: &Path) -> Result<Str
             error,
         });
     }
-    credentials.remove_account(hosted.slot());
-    credentials::save(home, &credentials).map_err(AuthError::WriteFailed)?;
-    // Rayline wrote the key into the harness configs; cut it out of them too.
+    // Rayline wrote the key into the harness configs; cut it out of them
+    // before the stored account goes, so a failure here can be run again.
     crate::harness::remove_router_key(home, &account.router_key.api_key)
         .map_err(AuthError::WriteFailed)?;
+    credentials.remove_account(hosted.slot());
+    credentials::save(home, &credentials).map_err(AuthError::WriteFailed)?;
     match revoked {
         Err(RevokeError::Refused(error)) => Err(AuthError::RevokeRefused {
             env_name: hosted.name().to_owned(),
