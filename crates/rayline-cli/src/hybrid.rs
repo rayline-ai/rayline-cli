@@ -445,6 +445,24 @@ pub(crate) fn local_process_running() -> bool {
     crate::home().is_ok_and(|home| running_in(&state_dir(&home)))
 }
 
+/// Runs `act` when no local process of `home` runs or starts: none has
+/// state, or the runtime lock is free (taken without waiting, held while
+/// `act` runs) and none is running. Otherwise `act` doesn't run.
+pub(crate) fn while_no_local_process(home: &Path, act: impl FnOnce()) {
+    let paths = Paths {
+        dir: state_dir(home),
+    };
+    if !paths.dir.exists() {
+        act();
+        return;
+    }
+    if let Ok(Some(_lock)) = lock_file(&paths.lock(), false)
+        && !running_in(&paths.dir)
+    {
+        act();
+    }
+}
+
 fn running_in(dir: &Path) -> bool {
     matches!(
         running(&Paths {
@@ -981,17 +999,17 @@ fn local_arc(home: &Path, routing: &crate::config::Routing) -> io::Result<Option
     if routing.router == crate::config::Router::Hosted {
         return Ok(None);
     }
-    // The encoder is checked before anything is downloaded.
-    let encoder = match std::env::var_os("RAYLINE_ARC_ENCODER") {
-        Some(path) => PathBuf::from(path),
-        None => {
-            let executable = current_exe()?;
-            let directory = executable
-                .parent()
-                .ok_or_else(|| io::Error::other("rayline executable has no parent directory"))?;
-            arc_encoder_beside(directory, ENCODER_SHIPS)?
-        }
-    };
+    // The platform and the NVIDIA driver are checked before anything is
+    // downloaded. `RAYLINE_ARC_ENCODER` names a development encoder, which
+    // may run without them.
+    let encoder_override = std::env::var_os("RAYLINE_ARC_ENCODER").map(PathBuf::from);
+    if encoder_override.is_none() {
+        encoder_ships(ENCODER_SHIPS)?;
+        #[cfg(target_os = "linux")]
+        nvidia_driver("Linux", "libcuda.so.1", load_libcuda())?;
+        #[cfg(windows)]
+        nvidia_driver("Windows", "nvcuda.dll", find_nvcuda())?;
+    }
     // Development overrides: `RAYLINE_ARC_MODEL` and `RAYLINE_ARC_ENCODER`
     // name the encoder weights and binary, `RAYLINE_ARC_RELEASE` a release
     // directory. Without them, the
@@ -1018,6 +1036,18 @@ fn local_arc(home: &Path, routing: &crate::config::Routing) -> io::Result<Option
     if let (Some((hub, _)), None) = (&hub, &model) {
         crate::arc_release::expect_unless_cached(hub, &weights, &progress);
     }
+    // What was downloaded is checked again once it has settled, which
+    // records the stamps the next start reads instead of hashing.
+    let mut recheck: Vec<Box<dyn FnOnce() -> io::Result<()> + '_>> = Vec::new();
+    // The encoder of this version, fetched once, in the same transfer.
+    let encoder = match encoder_override {
+        Some(path) => path,
+        None => {
+            let encoder = version_encoder(home, &stamps, &progress)?;
+            recheck.push(Box::new(|| encoder_check(home, &stamps).map(drop)));
+            encoder
+        }
+    };
     let (release, source) = match (release_dir, &hub) {
         (Some(dir), _) => {
             let source = format!("release directory {}", dir.display());
@@ -1029,12 +1059,18 @@ fn local_arc(home: &Path, routing: &crate::config::Routing) -> io::Result<Option
                 .clone()
                 .unwrap_or_else(crate::arc_release::built_in);
             let token = rayline_hf::hf_token(home).map_err(io::Error::other)?;
-            let dir =
-                crate::arc_release::fetch(hub, &stamps, hub_url, token.as_deref(), &pin, &progress)
+            let source = format!("release {} at {}", pin.repo, pin.revision);
+            let stamps = &stamps;
+            let fetch = move |progress: &crate::start_progress::Progress| {
+                crate::arc_release::fetch(hub, stamps, hub_url, token.as_deref(), &pin, progress)
                     .map_err(|error| {
                         io::Error::other(format!("cannot load the ARC release: {error}"))
-                    })?;
-            let source = format!("release {} at {}", pin.repo, pin.revision);
+                    })
+            };
+            let dir = fetch(&progress)?;
+            recheck.push(Box::new(move || {
+                fetch(&crate::start_progress::Progress::silent()).map(drop)
+            }));
             (dir, source)
         }
         (None, None) => unreachable!("a release to download has a hub"),
@@ -1044,15 +1080,26 @@ fn local_arc(home: &Path, routing: &crate::config::Routing) -> io::Result<Option
     let model = match (model, &hub) {
         (Some(model), _) => model,
         (None, Some((hub, hub_url))) => {
-            let path =
-                crate::arc_release::fetch_file(hub, &stamps, hub_url, None, &weights, &progress)
+            let fetch = |progress: &crate::start_progress::Progress| {
+                crate::arc_release::fetch_file(hub, &stamps, hub_url, None, &weights, progress)
                     .map_err(|error| {
                         io::Error::other(format!("cannot load the ARC encoder: {error}"))
-                    })?;
+                    })
+            };
+            let path = fetch(&progress)?;
+            recheck.push(Box::new(move || {
+                fetch(&crate::start_progress::Progress::silent()).map(drop)
+            }));
             fs::canonicalize(path)?
         }
         (None, None) => unreachable!("weights to download have a hub"),
     };
+    if progress.downloaded() {
+        crate::arc_release::settle();
+        for check in recheck {
+            check()?;
+        }
+    }
     if hub.is_some() {
         progress.release_ready();
     }
@@ -1075,45 +1122,145 @@ const ENCODER_SHIPS: bool = cfg!(any(
     all(target_os = "windows", target_arch = "x86_64")
 ));
 
-/// The ARC encoder installed in `directory`, or an error saying why there is
-/// none: releases don't ship it for this platform (`ships` false), it isn't
-/// installed, or it can't be read.
-fn arc_encoder_beside(directory: &Path, ships: bool) -> io::Result<PathBuf> {
-    if !ships {
-        let os = match std::env::consts::OS {
-            "macos" => "macOS",
-            "linux" => "Linux",
-            "windows" => "Windows",
-            os => os,
-        };
-        return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            format!(
-                "`local` decisions need the ARC encoder, which Rayline releases ship only for \
-                 macOS arm64, and Linux (x86_64 and aarch64) and Windows x86_64 with an NVIDIA GPU, not for {os} {}; \
-                 set `routing.router` to `hosted`",
-                std::env::consts::ARCH
-            ),
-        ));
+/// Refuses `local` decisions where Rayline releases ship no encoder
+/// (`ships` false).
+fn encoder_ships(ships: bool) -> io::Result<()> {
+    if ships {
+        return Ok(());
     }
-    let path = directory.join(format!(
-        "rayline-arc-encoder{}",
-        std::env::consts::EXE_SUFFIX
-    ));
-    fs::canonicalize(&path).map_err(|error| {
-        let message = if error.kind() == io::ErrorKind::NotFound {
-            format!(
-                "`local` decisions need the ARC encoder, and it isn't installed: no {} beside \
-                 `rayline`; run `rayline update` to install it, or set `routing.router` to `hosted`",
-                path.display()
-            )
+    let os = match std::env::consts::OS {
+        "macos" => "macOS",
+        "linux" => "Linux",
+        "windows" => "Windows",
+        os => os,
+    };
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        format!(
+            "`local` decisions need the ARC encoder, which Rayline releases ship only for \
+             macOS arm64, and Linux (x86_64 and aarch64) and Windows x86_64 with an NVIDIA GPU, not for {os} {}; \
+             set `routing.router` to `hosted`",
+            std::env::consts::ARCH
+        ),
+    ))
+}
+
+/// This version's ARC encoder in `~/.rayline/arc/<version>/`, downloaded
+/// from its release (with the signed SHA256SUMS `rayline update` checks)
+/// when it isn't there or doesn't match, reporting to `progress`. Checked by
+/// sha256 with `stamps` like the release's files.
+fn version_encoder(
+    home: &Path,
+    stamps: &Path,
+    progress: &crate::start_progress::Progress,
+) -> io::Result<PathBuf> {
+    let platform = crate::update::detect_platform_tag().map_err(io::Error::other)?;
+    let version = crate::update::Version::parse(crate::RAYLINE_VERSION)
+        .map_err(|_| io::Error::other(format!("invalid version {}", crate::RAYLINE_VERSION)))?;
+    let dir = crate::update::encoder_dir(home, &version);
+    let keys = crate::MINISIGN_PUBLIC_KEYS;
+    let verified = |at: &Path, sha256: &str| crate::arc_release::verified(stamps, at, sha256);
+    // No local process runs while one starts: the other versions' encoders
+    // are no longer needed.
+    crate::update::remove_other_encoders(&dir);
+    if let Some(encoder) = crate::update::fetched_encoder(&dir, platform, keys, &verified) {
+        return Ok(encoder);
+    }
+    tokio::runtime::Handle::current()
+        .block_on(crate::update::fetch_encoder(
+            crate::UPDATE_BASE_URL,
+            &version,
+            platform,
+            &dir,
+            keys,
+            &crate::update::Report {
+                on_len: &|len| progress.expect(len),
+                on_bytes: &|bytes| progress.on_bytes(bytes),
+                on_done: &|| progress.file_done(),
+            },
+        ))
+        .map_err(|error| {
+            io::Error::other(format!(
+                "cannot download the ARC encoder of {} {}: {error}",
+                crate::DISPLAY_NAME,
+                crate::RAYLINE_VERSION
+            ))
+        })?;
+    // Each file matched before it was moved in; `local_arc` checks them
+    // again once they have settled.
+    Ok(dir.join(crate::update::encoder_file_name()))
+}
+
+/// This version's encoder in `~/.rayline/arc/<version>/`, checked against
+/// its signed SHA256SUMS with `stamps`.
+fn encoder_check(home: &Path, stamps: &Path) -> io::Result<PathBuf> {
+    let platform = crate::update::detect_platform_tag().map_err(io::Error::other)?;
+    let version = crate::update::Version::parse(crate::RAYLINE_VERSION)
+        .map_err(|_| io::Error::other(format!("invalid version {}", crate::RAYLINE_VERSION)))?;
+    let dir = crate::update::encoder_dir(home, &version);
+    let verified = |at: &Path, sha256: &str| crate::arc_release::verified(stamps, at, sha256);
+    crate::update::fetched_encoder(&dir, platform, crate::MINISIGN_PUBLIC_KEYS, &verified)
+        .ok_or_else(|| {
+            io::Error::other(format!(
+                "the ARC encoder downloaded into {} doesn't match its SHA256SUMS",
+                dir.display()
+            ))
+        })
+}
+
+/// On Linux the encoder runs on an NVIDIA GPU through the driver's
+/// `libcuda.so.1`. Loads it as the encoder will, so a machine without the
+/// driver is refused before anything is downloaded.
+#[cfg(target_os = "linux")]
+fn load_libcuda() -> Result<(), String> {
+    let name = c"libcuda.so.1";
+    // SAFETY: `name` is a NUL-terminated C string that outlives the call;
+    // dlopen returns a handle or null.
+    let handle = unsafe { libc::dlopen(name.as_ptr(), libc::RTLD_LAZY | libc::RTLD_LOCAL) };
+    if handle.is_null() {
+        // SAFETY: dlerror returns null or a NUL-terminated string that stays
+        // valid until the next dl* call on this thread; it is copied at once.
+        let error = unsafe { libc::dlerror() };
+        return Err(if error.is_null() {
+            "not found".to_owned()
         } else {
+            // SAFETY: non-null, NUL-terminated, see above.
+            unsafe { std::ffi::CStr::from_ptr(error) }
+                .to_string_lossy()
+                .into_owned()
+        });
+    }
+    // SAFETY: `handle` came from the dlopen above and is closed once.
+    unsafe { libc::dlclose(handle) };
+    Ok(())
+}
+
+/// On Windows the NVIDIA driver installs `nvcuda.dll` in System32, where
+/// the encoder loads it from.
+#[cfg(windows)]
+fn find_nvcuda() -> Result<(), String> {
+    let root = std::env::var_os("SystemRoot").ok_or("`SystemRoot` is not set")?;
+    let path = PathBuf::from(root).join("System32").join("nvcuda.dll");
+    if path.is_file() {
+        Ok(())
+    } else {
+        Err(format!("no {}", path.display()))
+    }
+}
+
+/// Refuses local decisions on `os` when the NVIDIA driver's `library`
+/// couldn't be loaded.
+#[cfg(any(target_os = "linux", windows, test))]
+fn nvidia_driver(os: &str, library: &str, loaded: Result<(), String>) -> io::Result<()> {
+    loaded.map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
             format!(
-                "`local` decisions need the ARC encoder, and {} can't be read: {error}",
-                path.display()
-            )
-        };
-        io::Error::new(error.kind(), message)
+                "`local` decisions on {os} need the NVIDIA driver, and its {library} can't be \
+                 loaded ({error}); install the NVIDIA driver, or use hosted decisions: \
+                 `rayline local start --router hosted`"
+            ),
+        )
     })
 }
 
@@ -1868,24 +2015,49 @@ fn force_stop_process_group(pid: i32) -> io::Result<()> {
 /// is released when the handle closes.
 #[cfg(unix)]
 fn acquire_lock(lock_path: &Path) -> io::Result<std::fs::File> {
+    lock_file(lock_path, true)?.ok_or_else(|| io::Error::other("the runtime lock is held"))
+}
+
+/// The lock file at `lock_path`, locked: waiting for it when `wait`,
+/// otherwise `None` when another process holds it.
+#[cfg(unix)]
+fn lock_file(lock_path: &Path, wait: bool) -> io::Result<Option<std::fs::File>> {
     use std::os::unix::io::AsRawFd;
     let file = std::fs::OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(false)
         .open(lock_path)?;
+    let operation = if wait {
+        libc::LOCK_EX
+    } else {
+        libc::LOCK_EX | libc::LOCK_NB
+    };
     // SAFETY: a valid file descriptor owned by `file` for this call.
-    let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+    let result = unsafe { libc::flock(file.as_raw_fd(), operation) };
     if result != 0 {
-        return Err(io::Error::last_os_error());
+        let error = io::Error::last_os_error();
+        if !wait && error.kind() == io::ErrorKind::WouldBlock {
+            return Ok(None);
+        }
+        return Err(error);
     }
-    Ok(file)
+    Ok(Some(file))
 }
 
 #[cfg(windows)]
 fn acquire_lock(lock_path: &Path) -> io::Result<std::fs::File> {
+    lock_file(lock_path, true)?.ok_or_else(|| io::Error::other("the runtime lock is held"))
+}
+
+/// The lock file at `lock_path`, locked: waiting for it when `wait`,
+/// otherwise `None` when another process holds it.
+#[cfg(windows)]
+fn lock_file(lock_path: &Path, wait: bool) -> io::Result<Option<std::fs::File>> {
     use std::os::windows::io::AsRawHandle;
-    use windows_sys::Win32::Storage::FileSystem::{LOCKFILE_EXCLUSIVE_LOCK, LockFileEx};
+    use windows_sys::Win32::Storage::FileSystem::{
+        LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY, LockFileEx,
+    };
     use windows_sys::Win32::System::IO::OVERLAPPED;
     let file = std::fs::OpenOptions::new()
         .create(true)
@@ -1899,7 +2071,11 @@ fn acquire_lock(lock_path: &Path) -> io::Result<std::fs::File> {
     let locked = unsafe {
         LockFileEx(
             file.as_raw_handle(),
-            LOCKFILE_EXCLUSIVE_LOCK,
+            if wait {
+                LOCKFILE_EXCLUSIVE_LOCK
+            } else {
+                LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY
+            },
             0,
             u32::MAX,
             u32::MAX,
@@ -1907,9 +2083,14 @@ fn acquire_lock(lock_path: &Path) -> io::Result<std::fs::File> {
         )
     };
     if locked == 0 {
-        return Err(io::Error::last_os_error());
+        let error = io::Error::last_os_error();
+        // ERROR_LOCK_VIOLATION: another process holds the lock.
+        if !wait && error.raw_os_error() == Some(33) {
+            return Ok(None);
+        }
+        return Err(error);
     }
-    Ok(file)
+    Ok(Some(file))
 }
 
 #[cfg(test)]
@@ -2006,9 +2187,39 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_encoder_says_whether_releases_ship_one_for_this_platform() {
-        let dir = temp_dir("encoder");
-        let unsupported = arc_encoder_beside(&dir, false).unwrap_err();
+    fn cleanup_waits_for_no_local_process_to_run_or_start() {
+        let home = temp_dir("idle");
+        let ran = std::cell::Cell::new(0);
+        // No local process state at all.
+        while_no_local_process(&home, || ran.set(ran.get() + 1));
+        assert_eq!(ran.get(), 1);
+        assert!(!state_dir(&home).exists());
+        let paths = Paths {
+            dir: state_dir(&home),
+        };
+        fs::create_dir_all(&paths.dir).unwrap();
+        while_no_local_process(&home, || ran.set(ran.get() + 1));
+        assert_eq!(ran.get(), 2);
+        // A start holds the runtime lock: nothing runs, and nothing waits.
+        let held = acquire_lock(&paths.lock()).unwrap();
+        while_no_local_process(&home, || ran.set(ran.get() + 1));
+        assert_eq!(ran.get(), 2);
+        drop(held);
+        // A running process.
+        fs::write(
+            paths.supervisor(),
+            json!({"pid": std::process::id(), "config": "/c.json"}).to_string(),
+        )
+        .unwrap();
+        while_no_local_process(&home, || ran.set(ran.get() + 1));
+        assert_eq!(ran.get(), 2);
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn local_decisions_need_a_platform_releases_ship_the_encoder_for() {
+        assert!(encoder_ships(true).is_ok());
+        let unsupported = encoder_ships(false).unwrap_err();
         assert_eq!(unsupported.kind(), io::ErrorKind::Unsupported);
         let message = unsupported.to_string();
         assert!(
@@ -2021,30 +2232,24 @@ mod tests {
             message.ends_with("set `routing.router` to `hosted`"),
             "{message}"
         );
-        assert!(!message.contains("update"), "{message}");
+    }
 
-        let missing = arc_encoder_beside(&dir, true).unwrap_err();
-        assert_eq!(missing.kind(), io::ErrorKind::NotFound);
-        let message = missing.to_string();
-        assert!(message.contains("it isn't installed"), "{message}");
-        assert!(
-            message.contains("run `rayline update` to install it"),
-            "{message}"
-        );
-        assert!(!message.contains("--force"), "{message}");
-
-        let path = dir.join(format!(
-            "rayline-arc-encoder{}",
-            std::env::consts::EXE_SUFFIX
-        ));
-        fs::write(&path, b"").unwrap();
+    #[test]
+    fn without_the_nvidia_driver_local_decisions_are_refused() {
+        assert!(nvidia_driver("Linux", "libcuda.so.1", Ok(())).is_ok());
+        let error = nvidia_driver(
+            "Linux",
+            "libcuda.so.1",
+            Err("libcuda.so.1: cannot open shared object file".to_owned()),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
         assert_eq!(
-            arc_encoder_beside(&dir, true).unwrap(),
-            fs::canonicalize(&path).unwrap()
+            error.to_string(),
+            "`local` decisions on Linux need the NVIDIA driver, and its libcuda.so.1 can't be \
+             loaded (libcuda.so.1: cannot open shared object file); install the NVIDIA driver, \
+             or use hosted decisions: `rayline local start --router hosted`"
         );
-        // Releases that don't ship one refuse even an encoder put there by hand.
-        assert!(arc_encoder_beside(&dir, false).is_err());
-        let _ = fs::remove_dir_all(&dir);
     }
 
     // The built-in prod takes no `--env`: `--env prod` selects a configured

@@ -9,12 +9,27 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 
 - **Local routing decisions on Windows with an NVIDIA GPU (preview).**
   Releases ship the ARC encoder for Windows x86_64 with the cuBLAS DLLs it
-  loads, and `install-rayline.ps1` and `rayline update` install them beside
-  `rayline`. It needs a GPU of compute capability 7.5, 8.x, 9.0 or 12.0 and
+  loads, and the first `local` start downloads them. It needs a GPU of compute capability 7.5, 8.x, 9.0 or 12.0 and
   NVIDIA driver 576 or later, and is about 1 GB. See
   [Local mode](docs/local-mode.md).
 - `rayline local start` with `local` decisions fails when the ARC encoder finds
   no GPU it can use, instead of running ARC on the CPU.
+
+### Changed
+
+- **Installing and updating Rayline no longer download the ARC encoder.** The
+  installers fetch only `rayline`, `rayline-core` and `rayline-core-LICENSE`.
+  The first `rayline local start` (or `rayline run ... --local` that starts
+  the local process) with `routing.router: "local"` downloads the encoder from
+  the same release into `~/.rayline/arc/<version>/`, checked against the
+  release's signed checksums and shown in the ARC release's download line.
+  `rayline update` fetches the new version's encoder only when
+  `~/.rayline/arc/` already holds one; older versions are removed by the next update or `rayline local start` while no local process runs.
+- `local` decisions on Linux and Windows need the NVIDIA driver: without it,
+  start fails before downloading anything and says to use `--router hosted`.
+- Rayline no longer uses an encoder installed beside `rayline` by 0.5.3 and
+  earlier. You can delete `rayline-arc-encoder`, `rayline-arc-encoder-LICENSE`
+  and, on Windows, the `cublas*.dll` files from the folder `rayline` is in.
 
 ## 0.5.3 (2026-11-16)
 

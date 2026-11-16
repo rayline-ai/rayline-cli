@@ -78,6 +78,20 @@ pub fn fetch(
     ))
 }
 
+/// Whether the file at `at` has the sha256 `sha256`: unchanged since its
+/// stamp in `stamps` says it last did, or hashed now (and stamped when
+/// settled), as a cached release file is.
+pub fn verified(stamps: &Path, at: &Path, sha256: &str) -> bool {
+    stamped(stamps, at, sha256) || hashes_to(stamps, at, sha256, std::time::SystemTime::now)
+}
+
+/// Waits until a file written now has settled, so hashing it then records
+/// its stamp. Nothing to wait for where there are no stamps.
+pub fn settle() {
+    #[cfg(unix)]
+    std::thread::sleep(SETTLED);
+}
+
 /// One file pinned by repo, commit, path and sha256, at most `max_bytes`
 /// long.
 pub struct Pinned<'a> {

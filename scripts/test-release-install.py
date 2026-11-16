@@ -98,7 +98,8 @@ def main():
         for name, data in expected.items():
             assert (installed / name).read_bytes() == data
 
-        # A release that lists the ARC encoder for this platform installs it and its license beside rayline.
+        # A release that lists the ARC encoder installs only rayline and the core: the first local start fetches
+        # the encoder.
         encoder, encoder_license = b"fixture encoder\n", b"fixture encoder license\n"
         (assets / f"rayline-arc-encoder-{platform}").write_bytes(encoder)
         (assets / "rayline-arc-encoder-LICENSE").write_bytes(encoder_license)
@@ -106,15 +107,11 @@ def main():
             (f"rayline-arc-encoder-{platform}", encoder), ("rayline-arc-encoder-LICENSE", encoder_license)))
         write_sums(encoder_sums)
         install(True)
-        assert (installed / "rayline-arc-encoder").read_bytes() == encoder
-        assert os.access(installed / "rayline-arc-encoder", os.X_OK)
-        assert (installed / "rayline-arc-encoder-LICENSE").read_bytes() == encoder_license
-        (assets / f"rayline-arc-encoder-{platform}").write_bytes(b"tampered")
-        install(False)
-        assert (installed / "rayline-arc-encoder").read_bytes() == encoder, "a tampered encoder was installed"
+        names = sorted(path.name for path in installed.iterdir())
+        assert not [name for name in names if "encoder" in name], names
     print("Release installation passed: Rayline CLI and core without minisign, "
           "--base-url/--version and v-prefixed --version refusal, tamper, binary-mode and missing-checksum refusal, "
-          "and the optional ARC encoder.")
+          "and no ARC encoder.")
 
 
 if __name__ == "__main__":
