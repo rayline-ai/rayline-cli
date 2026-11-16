@@ -1452,14 +1452,16 @@ impl StateFiles {
     }
 }
 impl Drop for StateFiles {
+    /// The ready file goes last: `rayline local stop` returns once it is
+    /// gone, so every other state file must already be removed by then.
     fn drop(&mut self) {
-        if let Some(path) = &self.ready {
-            let _ = std::fs::remove_file(path);
-        }
         if let Some(path) = &self.routes_token {
             let _ = std::fs::remove_file(path);
         }
         let _ = std::fs::remove_file(&self.token);
+        if let Some(path) = &self.ready {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }
 
