@@ -355,14 +355,35 @@ pub async fn run(args: Args) -> Result<()> {
     }
     .await;
     // Dropping serve aborts connection tasks before the core is stopped.
-    stop_child(&mut child, &mut parent_pipe)
-        .await
-        .context("stop execution core")?;
-    if let Some(encoder) = arc_encoder.as_mut() {
-        encoder.stop().await.context("stop the local ARC encoder")?;
-    }
+    let stopped = stop_both(
+        async {
+            stop_child(&mut child, &mut parent_pipe)
+                .await
+                .context("stop execution core")
+        },
+        async {
+            match arc_encoder.as_mut() {
+                Some(encoder) => encoder.stop().await.context("stop the local ARC encoder"),
+                None => Ok(()),
+            }
+        },
+    )
+    .await;
     drop(cleanup);
-    outcome
+    // The first error wins: the run's own, then the core's, then the encoder's.
+    outcome.and(stopped)
+}
+
+/// Stops the core, then the encoder, each whatever the other returned, so a
+/// core that fails to stop never leaves the encoder running. Returns the
+/// first error.
+async fn stop_both(
+    core: impl std::future::Future<Output = Result<()>>,
+    encoder: impl std::future::Future<Output = Result<()>>,
+) -> Result<()> {
+    let core = core.await;
+    let encoder = encoder.await;
+    core.and(encoder)
 }
 
 /// Decisions requests carry execution context and the router key, so the core
@@ -1542,6 +1563,20 @@ async fn stop_child(
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn the_encoder_is_stopped_even_when_the_core_fails_to_stop() {
+        let encoder_stopped = std::cell::Cell::new(false);
+        let result = stop_both(async { Err(anyhow::anyhow!("core")) }, async {
+            encoder_stopped.set(true);
+            Err(anyhow::anyhow!("encoder"))
+        })
+        .await;
+        assert!(encoder_stopped.get());
+        assert_eq!(result.expect_err("fails").to_string(), "core");
+        let result = stop_both(async { Ok(()) }, async { Err(anyhow::anyhow!("encoder")) }).await;
+        assert_eq!(result.expect_err("fails").to_string(), "encoder");
+    }
+
     use super::*;
 
     #[test]
