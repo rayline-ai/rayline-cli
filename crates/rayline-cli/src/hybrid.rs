@@ -225,7 +225,8 @@ fn canonical_config(settings: &Settings) -> io::Result<PathBuf> {
     let mut at = settings.file.as_path();
     loop {
         match fs::canonicalize(at) {
-            Ok(mut path) => {
+            Ok(path) => {
+                let mut path = without_verbatim_prefix(path);
                 path.extend(missing.iter().rev());
                 return Ok(path);
             }
@@ -239,6 +240,37 @@ fn canonical_config(settings: &Settings) -> io::Result<PathBuf> {
             Err(error) => return Err(failed(error)),
         }
     }
+}
+
+/// `path` without the `\\?\` prefix Windows' canonical paths carry, where
+/// the plain form names the same file: a drive path under `MAX_PATH`
+/// (`\\?\C:\x` is `C:\x`) or a UNC share (`\\?\UNC\host\share` is
+/// `\\host\share`). Shown to the user and compared between runs, so it
+/// reads as the user wrote it. Other paths, and every path elsewhere, are
+/// unchanged.
+fn without_verbatim_prefix(path: PathBuf) -> PathBuf {
+    if cfg!(windows) {
+        if let Some(plain) = path.to_str().and_then(plain_windows_path) {
+            return PathBuf::from(plain);
+        }
+    }
+    path
+}
+
+fn plain_windows_path(verbatim: &str) -> Option<String> {
+    // MAX_PATH less the terminating NUL.
+    const MAX_PLAIN: usize = 259;
+    let plain = if let Some(unc) = verbatim.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{unc}")
+    } else {
+        let rest = verbatim.strip_prefix(r"\\?\")?;
+        let bytes = rest.as_bytes();
+        if bytes.len() < 3 || !bytes[0].is_ascii_alphabetic() || &bytes[1..3] != br":\" {
+            return None;
+        }
+        rest.to_owned()
+    };
+    (plain.len() <= MAX_PLAIN).then_some(plain)
 }
 
 /// `rayline local start`: start the local process from `settings`.
@@ -1831,6 +1863,22 @@ mod tests {
         let after = "x".repeat(64 * 1024 - "Error: the real one\n".len() - 1);
         fs::write(&log, format!("INFO a\nError: the real one\n{after}\n")).unwrap();
         assert_eq!(exit_reason(&log, 0).as_deref(), Some("the real one"));
+    }
+
+    #[test]
+    fn a_windows_verbatim_path_reads_as_the_user_wrote_it() {
+        assert_eq!(
+            plain_windows_path(r"\\?\C:\Users\rltest\.config\rayline\settings.json").as_deref(),
+            Some(r"C:\Users\rltest\.config\rayline\settings.json")
+        );
+        assert_eq!(
+            plain_windows_path(r"\\?\UNC\host\share\settings.json").as_deref(),
+            Some(r"\\host\share\settings.json")
+        );
+        assert_eq!(plain_windows_path(r"C:\already\plain"), None);
+        assert_eq!(plain_windows_path(r"\\?\GLOBALROOT\Device\x"), None);
+        let long = format!(r"\\?\C:\{}", "a".repeat(300));
+        assert_eq!(plain_windows_path(&long), None);
     }
 
     #[test]
