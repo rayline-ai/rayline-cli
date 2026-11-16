@@ -977,6 +977,8 @@ fn local_arc(home: &Path, routing: &crate::config::Routing) -> io::Result<Option
             arc_encoder_beside(directory, ENCODER_SHIPS)?
         }
     };
+    #[cfg(target_os = "linux")]
+    nvidia_driver(load_libcuda())?;
     // Development overrides: `RAYLINE_ARC_MODEL` and `RAYLINE_ARC_ENCODER`
     // name the encoder weights and binary, `RAYLINE_ARC_RELEASE` a release
     // directory. Without them, the
@@ -1098,6 +1100,48 @@ fn arc_encoder_beside(directory: &Path, ships: bool) -> io::Result<PathBuf> {
             )
         };
         io::Error::new(error.kind(), message)
+    })
+}
+
+/// On Linux the encoder runs on an NVIDIA GPU through the driver's
+/// `libcuda.so.1`. Loads it as the encoder will, so a machine without the
+/// driver is refused before anything is downloaded.
+#[cfg(target_os = "linux")]
+fn load_libcuda() -> Result<(), String> {
+    let name = c"libcuda.so.1";
+    // SAFETY: `name` is a NUL-terminated C string that outlives the call;
+    // dlopen returns a handle or null.
+    let handle = unsafe { libc::dlopen(name.as_ptr(), libc::RTLD_LAZY | libc::RTLD_LOCAL) };
+    if handle.is_null() {
+        // SAFETY: dlerror returns null or a NUL-terminated string that stays
+        // valid until the next dl* call on this thread; it is copied at once.
+        let error = unsafe { libc::dlerror() };
+        return Err(if error.is_null() {
+            "not found".to_owned()
+        } else {
+            // SAFETY: non-null, NUL-terminated, see above.
+            unsafe { std::ffi::CStr::from_ptr(error) }
+                .to_string_lossy()
+                .into_owned()
+        });
+    }
+    // SAFETY: `handle` came from the dlopen above and is closed once.
+    unsafe { libc::dlclose(handle) };
+    Ok(())
+}
+
+/// Refuses local decisions when the NVIDIA driver couldn't be loaded.
+#[cfg(any(target_os = "linux", test))]
+fn nvidia_driver(loaded: Result<(), String>) -> io::Result<()> {
+    loaded.map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            format!(
+                "`local` decisions on Linux need the NVIDIA driver, and its libcuda.so.1 \
+                 can't be loaded ({error}); install the NVIDIA driver, or set \
+                 `routing.router` to `hosted`"
+            ),
+        )
     })
 }
 
@@ -2015,6 +2059,22 @@ mod tests {
         // Releases that don't ship one refuse even an encoder put there by hand.
         assert!(arc_encoder_beside(&dir, false).is_err());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn without_the_nvidia_driver_local_decisions_are_refused() {
+        assert!(nvidia_driver(Ok(())).is_ok());
+        let error = nvidia_driver(Err(
+            "libcuda.so.1: cannot open shared object file".to_owned()
+        ))
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        assert_eq!(
+            error.to_string(),
+            "`local` decisions on Linux need the NVIDIA driver, and its libcuda.so.1 can't be \
+             loaded (libcuda.so.1: cannot open shared object file); install the NVIDIA driver, \
+             or set `routing.router` to `hosted`"
+        );
     }
 
     // The built-in prod takes no `--env`: `--env prod` selects a configured
