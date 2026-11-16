@@ -142,8 +142,9 @@ macOS arm64 and Linux with an NVIDIA GPU (driver only). On Linux:
   (T4, A100, A10/L4/RTX 30 and 40, H100, RTX 50), and aarch64 one of 9.0 or
   12.1 or later (GH200, GB10). Compute capability 10.x (B200, GB200) isn't
   supported yet.
-- The encoder needs the NVIDIA driver for CUDA 12 (525.60.13 or later) and no
-  CUDA toolkit, glibc 2.28 or later (as `rayline` does), and AVX2 on x86_64.
+- The encoder needs an NVIDIA driver for CUDA 12 (525.60.13 or later, and at
+  least the version your GPU needs: 570 or later for Blackwell GPUs such as
+  RTX 50 and GB10) and no CUDA toolkit, glibc 2.28 or later (as `rayline` does), and AVX2 on x86_64.
   It is 0.6 to 0.8 GB.
 - There is no build for other GPUs (Vulkan) or for the CPU alone.
 
@@ -213,7 +214,7 @@ rayline local stop
 The [pi-arc](https://github.com/rayline-ai/pi-arc) extension can ask the
 local process for each turn's model while you keep using your own Pi, with
 its own extensions, keys and models. This is a preview with the same limits
-as `local` decisions: macOS on Apple Silicon only.
+as `local` decisions: macOS on Apple Silicon, or Linux with an NVIDIA GPU.
 
 ```bash
 rayline auth login
