@@ -442,12 +442,25 @@ fn exit_code(result: io::Result<()>) -> ExitCode {
 /// Whether a local process is running, for the note a cloud-mode run prints.
 /// Reads its state without creating anything; state it can't read is no.
 pub(crate) fn local_process_running() -> bool {
-    crate::home().is_ok_and(|home| local_process_running_in(&home))
+    crate::home().is_ok_and(|home| running_in(&state_dir(&home)))
 }
 
-/// Whether a local process of `home` is running; state it can't read is no.
-pub(crate) fn local_process_running_in(home: &Path) -> bool {
-    running_in(&state_dir(home))
+/// Runs `act` when no local process of `home` runs or starts: none has
+/// state, or the runtime lock is free (taken without waiting, held while
+/// `act` runs) and none is running. Otherwise `act` doesn't run.
+pub(crate) fn while_no_local_process(home: &Path, act: impl FnOnce()) {
+    let paths = Paths {
+        dir: state_dir(home),
+    };
+    if !paths.dir.exists() {
+        act();
+        return;
+    }
+    if let Ok(Some(_lock)) = lock_file(&paths.lock(), false)
+        && !running_in(&paths.dir)
+    {
+        act();
+    }
 }
 
 fn running_in(dir: &Path) -> bool {
@@ -1966,24 +1979,49 @@ fn force_stop_process_group(pid: i32) -> io::Result<()> {
 /// is released when the handle closes.
 #[cfg(unix)]
 fn acquire_lock(lock_path: &Path) -> io::Result<std::fs::File> {
+    lock_file(lock_path, true)?.ok_or_else(|| io::Error::other("the runtime lock is held"))
+}
+
+/// The lock file at `lock_path`, locked: waiting for it when `wait`,
+/// otherwise `None` when another process holds it.
+#[cfg(unix)]
+fn lock_file(lock_path: &Path, wait: bool) -> io::Result<Option<std::fs::File>> {
     use std::os::unix::io::AsRawFd;
     let file = std::fs::OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(false)
         .open(lock_path)?;
+    let operation = if wait {
+        libc::LOCK_EX
+    } else {
+        libc::LOCK_EX | libc::LOCK_NB
+    };
     // SAFETY: a valid file descriptor owned by `file` for this call.
-    let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+    let result = unsafe { libc::flock(file.as_raw_fd(), operation) };
     if result != 0 {
-        return Err(io::Error::last_os_error());
+        let error = io::Error::last_os_error();
+        if !wait && error.kind() == io::ErrorKind::WouldBlock {
+            return Ok(None);
+        }
+        return Err(error);
     }
-    Ok(file)
+    Ok(Some(file))
 }
 
 #[cfg(windows)]
 fn acquire_lock(lock_path: &Path) -> io::Result<std::fs::File> {
+    lock_file(lock_path, true)?.ok_or_else(|| io::Error::other("the runtime lock is held"))
+}
+
+/// The lock file at `lock_path`, locked: waiting for it when `wait`,
+/// otherwise `None` when another process holds it.
+#[cfg(windows)]
+fn lock_file(lock_path: &Path, wait: bool) -> io::Result<Option<std::fs::File>> {
     use std::os::windows::io::AsRawHandle;
-    use windows_sys::Win32::Storage::FileSystem::{LOCKFILE_EXCLUSIVE_LOCK, LockFileEx};
+    use windows_sys::Win32::Storage::FileSystem::{
+        LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY, LockFileEx,
+    };
     use windows_sys::Win32::System::IO::OVERLAPPED;
     let file = std::fs::OpenOptions::new()
         .create(true)
@@ -1997,7 +2035,11 @@ fn acquire_lock(lock_path: &Path) -> io::Result<std::fs::File> {
     let locked = unsafe {
         LockFileEx(
             file.as_raw_handle(),
-            LOCKFILE_EXCLUSIVE_LOCK,
+            if wait {
+                LOCKFILE_EXCLUSIVE_LOCK
+            } else {
+                LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY
+            },
             0,
             u32::MAX,
             u32::MAX,
@@ -2005,9 +2047,14 @@ fn acquire_lock(lock_path: &Path) -> io::Result<std::fs::File> {
         )
     };
     if locked == 0 {
-        return Err(io::Error::last_os_error());
+        let error = io::Error::last_os_error();
+        // ERROR_LOCK_VIOLATION: another process holds the lock.
+        if !wait && error.raw_os_error() == Some(33) {
+            return Ok(None);
+        }
+        return Err(error);
     }
-    Ok(file)
+    Ok(Some(file))
 }
 
 #[cfg(test)]
@@ -2101,6 +2148,36 @@ mod tests {
             message.ends_with("Reinstall the complete release with `rayline update --force`"),
             "{message}"
         );
+    }
+
+    #[test]
+    fn cleanup_waits_for_no_local_process_to_run_or_start() {
+        let home = temp_dir("idle");
+        let ran = std::cell::Cell::new(0);
+        // No local process state at all.
+        while_no_local_process(&home, || ran.set(ran.get() + 1));
+        assert_eq!(ran.get(), 1);
+        assert!(!state_dir(&home).exists());
+        let paths = Paths {
+            dir: state_dir(&home),
+        };
+        fs::create_dir_all(&paths.dir).unwrap();
+        while_no_local_process(&home, || ran.set(ran.get() + 1));
+        assert_eq!(ran.get(), 2);
+        // A start holds the runtime lock: nothing runs, and nothing waits.
+        let held = acquire_lock(&paths.lock()).unwrap();
+        while_no_local_process(&home, || ran.set(ran.get() + 1));
+        assert_eq!(ran.get(), 2);
+        drop(held);
+        // A running process.
+        fs::write(
+            paths.supervisor(),
+            json!({"pid": std::process::id(), "config": "/c.json"}).to_string(),
+        )
+        .unwrap();
+        while_no_local_process(&home, || ran.set(ran.get() + 1));
+        assert_eq!(ran.get(), 2);
+        let _ = fs::remove_dir_all(&home);
     }
 
     #[test]

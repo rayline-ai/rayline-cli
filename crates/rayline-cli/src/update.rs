@@ -225,11 +225,11 @@ async fn run_on(
                 replace_binary(&artifacts.core, &core_install_path)?;
                 replace_binary(&artifacts.launcher, &install_path)?;
                 // A running local process restarts its encoder from its own
-                // version's directory: other versions go only while none runs.
-                if let Some(dir) = &encoder_dir
-                    && !crate::hybrid::local_process_running_in(home)
-                {
-                    remove_other_encoders(dir);
+                // version's directory, and a starting one may have just
+                // fetched its own: other versions go only while none runs or
+                // starts, else at the next start.
+                if let Some(dir) = &encoder_dir {
+                    crate::hybrid::while_no_local_process(home, || remove_other_encoders(dir));
                 }
                 Ok(UpdateResult {
                     message: format!(
