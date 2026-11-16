@@ -63,7 +63,9 @@ pub struct LaunchRecord<'a> {
 
 impl LaunchPreflight<'_> {
     pub fn resolve(self) -> Result<PreflightOutcome, RunError> {
-        let state = if crate::claude::claude_agent_view_disabled() {
+        let state = if crate::claude::claude_agent_view_disabled()
+            || crate::claude::starts_no_session(self.request.args)
+        {
             None
         } else {
             inspect_running_daemon(self.config_dir, pid_is_alive).map_err(RunError::DaemonProbe)?
@@ -412,7 +414,9 @@ enum ConflictChoice {
 fn parse_conflict_choice(answer: &str, allow_isolated: bool) -> ConflictChoice {
     let answer = answer.trim();
     if allow_isolated
-        && (answer.eq_ignore_ascii_case("i") || answer.eq_ignore_ascii_case("isolated"))
+        && (answer.is_empty()
+            || answer.eq_ignore_ascii_case("i")
+            || answer.eq_ignore_ascii_case("isolated"))
     {
         return ConflictChoice::RunIsolated;
     }
@@ -475,7 +479,7 @@ fn conflict_prompt(pid: u32, home: &Path, allow_isolated: bool) -> String {
     if allow_isolated {
         let isolated_dir = crate::claude::isolated_cc_dir(home);
         format!(
-            "A conflicting Claude Code daemon is running (PID {pid}); it must be stopped or bypassed before this {brand} session can start.\n\n  [s] Stop it and start a {brand} daemon here  ({STOP_COMMAND})\n  [i] Run isolated  (separate daemon under {}; leaves the other running)\n  [c] Cancel\nChoose [s/i/c] (s): ",
+            "A conflicting Claude Code daemon is running (PID {pid}); it must be stopped or bypassed before this {brand} session can start.\n\n  [s] Stop it and start a {brand} daemon here  ({STOP_COMMAND})\n  [i] Run isolated  (separate daemon under {}; leaves the other running)\n  [c] Cancel\nChoose [s/i/c] (i): ",
             isolated_dir.display()
         )
     } else {
@@ -873,7 +877,41 @@ mod tests {
             )),
             "{prompt}"
         );
+        assert!(prompt.ends_with("Choose [s/i/c] (i): "), "{prompt}");
         assert!(!conflict_prompt(42, &home, false).contains("[i] Run isolated"));
+    }
+
+    #[test]
+    fn an_empty_answer_runs_isolated_where_offered_and_stops_otherwise() {
+        for answer in ["", "  \n", "i", "I", "isolated\n"] {
+            assert_eq!(
+                parse_conflict_choice(answer, true),
+                ConflictChoice::RunIsolated,
+                "{answer:?}"
+            );
+        }
+        for answer in ["s", "y", "YES\n"] {
+            assert_eq!(
+                parse_conflict_choice(answer, true),
+                ConflictChoice::StopAndContinue,
+                "{answer:?}"
+            );
+        }
+        for answer in ["", "\n", "y"] {
+            assert_eq!(
+                parse_conflict_choice(answer, false),
+                ConflictChoice::StopAndContinue,
+                "{answer:?}"
+            );
+        }
+        for answer in ["i", "c", "no"] {
+            assert_eq!(
+                parse_conflict_choice(answer, false),
+                ConflictChoice::Cancel,
+                "{answer:?}"
+            );
+        }
+        assert_eq!(parse_conflict_choice("c", true), ConflictChoice::Cancel);
     }
 
     #[test]
