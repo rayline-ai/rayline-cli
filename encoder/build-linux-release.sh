@@ -26,6 +26,8 @@ check_only=""
 if [ "${1:-}" = --in-container ]; then
   # Inside the pinned image, as root: the build tools, then build.sh. Outputs are handed back to the caller's user.
   arch="$2" owner="$3"
+  # Hand the outputs and the llama.cpp checkout back to the caller however the build ends.
+  trap 'chown -R "$owner" /out "$here/build" 2>/dev/null || true' EXIT
   dnf install -y -q git cmake python3 make findutils binutils gcc-toolset-12-gcc-c++ >/dev/null
   # shellcheck disable=SC1091
   source /opt/rh/gcc-toolset-12/enable
@@ -65,7 +67,6 @@ if [ "${1:-}" = --in-container ]; then
     "$(du -m /tmp/unpruned/rayline-arc-encoder | cut -f1) MB without"
   mkdir -p /out/stub
   cp /usr/local/cuda/lib64/stubs/libcuda.so /out/stub/libcuda.so.1
-  chown -R "$owner" /out "$here/build"
   exit 0
 fi
 
