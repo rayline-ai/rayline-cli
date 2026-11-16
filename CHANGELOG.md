@@ -17,6 +17,10 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 
 ### Changed
 
+- Sign-in hints name the exact command, including `--env <name>` for a
+  configured environment: "Not logged in" (from `rayline auth status` and
+  every launch) and the login timeout and expiry messages, which also say to
+  run it again.
 - **Installing and updating Rayline no longer download the ARC encoder.** The
   installers fetch only `rayline`, `rayline-core` and `rayline-core-LICENSE`.
   The first `rayline local start` (or `rayline run ... --local` that starts

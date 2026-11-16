@@ -72,7 +72,7 @@ pub enum AuthError {
         env_name: String,
         error: String,
     },
-    SignedOut(String),
+    SignedOut(HostedEnvironment),
     WriteFailed(io::Error),
 }
 
@@ -99,10 +99,11 @@ impl std::fmt::Display for AuthError {
                 formatter,
                 "Logged out of {env_name} on this machine, but revoking the session failed: {error}"
             ),
-            Self::SignedOut(env_name) => write!(
+            Self::SignedOut(hosted) => write!(
                 formatter,
-                "Not logged in to {env_name}. Run: {}",
-                auth_command()
+                "Not logged in to {}. Run: {}",
+                hosted.name(),
+                hosted.command("auth login")
             ),
             Self::WriteFailed(error) => write!(formatter, "failed to update credentials: {error}"),
         }
@@ -146,6 +147,18 @@ impl HostedEnvironment {
     pub(crate) fn slot(&self) -> credentials::Slot<'_> {
         self.env.as_deref()
     }
+
+    /// The `rayline` command line that runs `args` against this environment.
+    pub(crate) fn command(&self, args: &str) -> String {
+        format!("{} {}{args}", crate::CLI_BIN, env_flag(self.env.as_deref()))
+    }
+}
+
+/// The `--env` a command for `env` takes, with its trailing space: none for
+/// the built-in prod, since `--env prod` selects a configured
+/// `environments.prod` instead.
+pub(crate) fn env_flag(env: Option<&str>) -> String {
+    env.map(|env| format!("--env {env} ")).unwrap_or_default()
 }
 
 pub fn is_valid_root_env(value: &str) -> bool {
@@ -172,10 +185,7 @@ fn render_status_from_home(
 ) -> Result<String, AuthError> {
     let credentials = credentials::load(home)?;
     let Some(account) = credentials.account(hosted.slot()) else {
-        return Ok(format!(
-            "{}\n",
-            AuthError::SignedOut(hosted.name().to_owned())
-        ));
+        return Ok(format!("{}\n", AuthError::SignedOut(hosted.clone())));
     };
     let session = &account.session;
 
@@ -217,7 +227,7 @@ pub(crate) async fn auth_token(request: &AuthTokenRequest) -> Result<String, Aut
     let hosted = &request.hosted;
     access_token(hosted, &home)
         .await?
-        .ok_or_else(|| AuthError::SignedOut(hosted.name().to_owned()))
+        .ok_or_else(|| AuthError::SignedOut(hosted.clone()))
 }
 
 pub(crate) async fn access_token(
@@ -248,7 +258,7 @@ async fn access_token_at(
     // first: only the session of this slot changes.
     let mut credentials = credentials::load(home)?;
     let Some(account) = credentials.account_mut(hosted.slot()) else {
-        return Err(AuthError::SignedOut(hosted.name().to_owned()));
+        return Err(AuthError::SignedOut(hosted.clone()));
     };
     if account.session.refresh_token != used_refresh_token {
         return Err(AuthError::RefreshFailed(format!(
@@ -282,12 +292,12 @@ async fn router_key_with(
         return Ok(api_key);
     }
     if !interactive {
-        return Err(AuthError::SignedOut(hosted.name().to_owned()));
+        return Err(AuthError::SignedOut(hosted.clone()));
     }
     eprintln!("Signing in to {}...", crate::DISPLAY_NAME);
     let message = login(hosted, home, LoginFlow::Browser).await?;
     write_auth_message(&message).map_err(AuthError::WriteFailed)?;
-    stored_router_key(hosted, home)?.ok_or_else(|| AuthError::SignedOut(hosted.name().to_owned()))
+    stored_router_key(hosted, home)?.ok_or_else(|| AuthError::SignedOut(hosted.clone()))
 }
 
 /// The router key stored for `hosted`, without signing in.
@@ -443,7 +453,8 @@ async fn run_web_callback_code_flow(
 
     // The browser navigates the loopback to `/?code=...&state=...`; we receive a
     // one-time, PKCE-bound code (never a credential), then redeem it over TLS.
-    let code = tokio::task::spawn_blocking(move || wait_for_callback(listener, &state))
+    let retry = hosted.command("auth login");
+    let code = tokio::task::spawn_blocking(move || wait_for_callback(listener, &state, &retry))
         .await
         .map_err(|error| AuthError::LoginFailed(format!("Login callback failed: {error}")))??;
 
@@ -559,8 +570,8 @@ async fn poll_rayline_device_session(
     loop {
         if started.elapsed() >= timeout {
             return Err(AuthError::LoginFailed(format!(
-                "Login timed out before approval. Run `{} auth login --no-browser` to try again.",
-                crate::CLI_BIN
+                "Login timed out before approval. Run `{}` to try again.",
+                hosted.command("auth login --no-browser")
             )));
         }
 
@@ -600,8 +611,8 @@ async fn poll_rayline_device_session(
             }
             "expired" => {
                 return Err(AuthError::LoginFailed(format!(
-                    "Login code expired before approval. Run `{} auth login --no-browser` to try again.",
-                    crate::CLI_BIN
+                    "Login code expired before approval. Run `{}` to try again.",
+                    hosted.command("auth login --no-browser")
                 )));
             }
             other => {
@@ -726,7 +737,12 @@ fn parse_paste_callback_url(pasted: &str, expected_state: &str) -> Result<String
     Ok(code)
 }
 
-fn wait_for_callback(listener: TcpListener, expected_state: &str) -> Result<String, AuthError> {
+/// `retry` is the command the timeout message tells the user to run.
+fn wait_for_callback(
+    listener: TcpListener,
+    expected_state: &str,
+    retry: &str,
+) -> Result<String, AuthError> {
     listener.set_nonblocking(true).map_err(|error| {
         AuthError::LoginFailed(format!("Failed to configure login callback: {error}"))
     })?;
@@ -750,7 +766,7 @@ fn wait_for_callback(listener: TcpListener, expected_state: &str) -> Result<Stri
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                 if Instant::now() >= deadline {
                     return Err(AuthError::LoginFailed(format!(
-                        "Login timed out ({WEB_CALLBACK_TIMEOUT_SECONDS}s). Try again."
+                        "Login timed out ({WEB_CALLBACK_TIMEOUT_SECONDS}s). Run `{retry}` to try again."
                     )));
                 }
                 std::thread::sleep(Duration::from_millis(50));
@@ -1188,10 +1204,6 @@ fn json_value_for_message(value: &Value) -> String {
     }
 }
 
-fn auth_command() -> String {
-    format!("{} auth login", crate::CLI_BIN)
-}
-
 fn unix_now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1557,15 +1569,15 @@ mod tests {
         let home = temp_home("status");
         let prod = hosted(None, UNREACHABLE);
         let dev = hosted(Some("dev"), UNREACHABLE);
-        let signed_out = |env: &str| {
+        let signed_out = |env: &str, flag: &str| {
             format!(
-                "Not logged in to {env}. Run: {} auth login\n",
+                "Not logged in to {env}. Run: {} {flag}auth login\n",
                 crate::CLI_BIN
             )
         };
         assert_eq!(
             render_status_from_home(&prod, &home, NOW).unwrap(),
-            signed_out("prod")
+            signed_out("prod", "")
         );
 
         save_account(&home, None, account(LATER));
@@ -1586,7 +1598,7 @@ mod tests {
         );
         assert_eq!(
             render_status_from_home(&dev, &home, NOW).unwrap(),
-            signed_out("dev")
+            signed_out("dev", "--env dev ")
         );
 
         save_account(&home, Some("dev"), account(NOW - 1));
@@ -1850,6 +1862,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_expired_device_login_names_the_command_for_its_environment() {
+        let api = FakeApi::start(&[(
+            "/v1/auth/cli/device/poll",
+            200,
+            json!({ "status": "expired" }),
+        )]);
+        let device = RaylineDeviceSession {
+            session_id: "device-session".to_string(),
+            user_code: "ABCD-EFGH".to_string(),
+            verification_uri: "https://platform.example.test/device".to_string(),
+            expires_in_seconds: 60,
+        };
+        let Err(error) =
+            poll_rayline_device_session(&hosted(Some("dev"), &api.base_url), &device).await
+        else {
+            panic!("an expired device login signed in");
+        };
+        assert_eq!(
+            login_failure(error),
+            format!(
+                "Login code expired before approval. Run `{} --env dev auth login --no-browser` to try again.",
+                crate::CLI_BIN
+            )
+        );
+    }
+
+    #[tokio::test]
     async fn login_replaces_an_invalid_credentials_file() {
         let api = FakeApi::start(&device_login_routes(200, json!({ "apiKey": "rlk-new" })));
         let home = temp_home("login-replaces");
@@ -1959,7 +1998,7 @@ mod tests {
         let prod = hosted(None, UNREACHABLE);
         let error = router_key_with(&prod, &home, false).await.unwrap_err();
         assert!(
-            matches!(&error, AuthError::SignedOut(env) if env == "prod"),
+            matches!(&error, AuthError::SignedOut(hosted) if hosted.name() == "prod"),
             "{error:?}"
         );
         assert_eq!(

@@ -917,7 +917,7 @@ async fn probe_decisions(
     env: Option<&str>,
     say: &dyn Fn(String),
 ) -> io::Result<()> {
-    let env_flag = env_flag(env);
+    let env_flag = crate::status::env_flag(env);
     let url = config["decisions"]["url"]
         .as_str()
         .expect("core_config always names the Decisions URL");
@@ -991,12 +991,6 @@ fn models_url(decisions_url: &str) -> String {
 /// The readiness request: a bodiless `GET` with the router key.
 fn probe_request(client: &reqwest::Client, url: &str, key: &str) -> reqwest::RequestBuilder {
     client.get(url).bearer_auth(key)
-}
-
-/// The `--env` a command for `env` takes, with its trailing space: none for
-/// the built-in prod.
-fn env_flag(env: Option<&str>) -> String {
-    env.map(|env| format!("--env {env} ")).unwrap_or_default()
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -2316,8 +2310,8 @@ mod tests {
     // `environments.prod` instead.
     #[test]
     fn commands_for_an_environment_name_its_env() {
-        assert_eq!(env_flag(None), "");
-        assert_eq!(env_flag(Some("dev")), "--env dev ");
+        assert_eq!(crate::status::env_flag(None), "");
+        assert_eq!(crate::status::env_flag(Some("dev")), "--env dev ");
     }
 
     /// Serializes the tests that set a process-wide env var.
