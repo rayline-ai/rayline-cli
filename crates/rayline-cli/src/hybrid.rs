@@ -440,6 +440,9 @@ async fn run_harness(
             settings.file.display()
         )));
     }
+    if harness == "pi" {
+        require_local_pi(&endpoint_key_envs(settings))?;
+    }
     let (home, paths) = local_paths()?;
     {
         let _lock = acquire_lock(&paths.lock())?;
@@ -1265,10 +1268,6 @@ fn harness_command(
             let harness = crate::harness::Harness::from_command(name).ok_or_else(|| {
                 io::Error::other(format!("unsupported local-mode harness {name:?}"))
             })?;
-            if harness == crate::harness::Harness::Pi {
-                crate::harness::pi::require_local_version(withheld_command(&program, withheld))
-                    .map_err(io::Error::other)?;
-            }
             let major_version = harness
                 .major_version(withheld_command(&program, withheld))
                 .map_err(io::Error::other)?;
@@ -1301,6 +1300,22 @@ fn local_decisions(settings: &Settings) -> bool {
         .routing
         .as_ref()
         .is_some_and(|routing| routing.router == crate::config::Router::Local)
+}
+
+/// Refuse, before anything starts, a pi local mode can't run: none on
+/// `PATH`, or one older than [`crate::harness::pi::MIN_LOCAL_VERSION`]. The
+/// version probe runs without the router key or `withheld`.
+fn require_local_pi(withheld: &[&str]) -> io::Result<()> {
+    let pi = crate::harness::Harness::Pi;
+    let program = crate::harness::find_on_path(pi.binary()).ok_or_else(|| {
+        io::Error::other(format!(
+            "`{}` not found on PATH. {}",
+            pi.binary(),
+            pi.install_hint()
+        ))
+    })?;
+    crate::harness::pi::require_local_version(withheld_command(&program, withheld))
+        .map_err(io::Error::other)
 }
 
 /// Whether the harness speaks Anthropic Messages, the one request format

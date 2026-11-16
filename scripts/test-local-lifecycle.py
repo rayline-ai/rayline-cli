@@ -170,7 +170,10 @@ print('harness request reached execution core')
             assert str(settings) in refused and str(other) in refused, refused
             pi = harness_dir / "pi"
             pi.write_text("""#!/usr/bin/env python3
-import json, os, pathlib
+import json, os, pathlib, sys
+if sys.argv[1:] == ['--version']:
+    print('0.87.1')
+    sys.exit(0)
 assert 'RAYLINE_TEST_LOCAL_ALIAS' not in os.environ
 provider = json.loads((pathlib.Path(os.environ['PI_CODING_AGENT_DIR']) / 'models.json').read_text())['providers']['rayline']
 model = provider['models'][0]

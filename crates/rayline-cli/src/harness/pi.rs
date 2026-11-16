@@ -5,10 +5,10 @@
 //! `compat.sendSessionAffinityHeaders` makes pi send its session id as
 //! `x-session-affinity` on Messages (off by default for non-OpenRouter
 //! endpoints), which the gateway keys the episode on. `-c` and `--resume`
-//! reuse the session id, so a resumed session keeps its episode. Local mode
-//! refuses every turn without that id, so it refuses a pi older than
-//! [`MIN_LOCAL_VERSION`], the first release tested to send it, before it
-//! launches pi.
+//! reuse the session id, so a resumed session keeps its episode. A local-mode
+//! turn without that id fails, so local mode refuses a pi older than
+//! [`MIN_LOCAL_VERSION`], the first release tested to send it, before anything
+//! starts.
 //!
 //! `compat.allowEmptySignature` is not set, in any environment. pi then resends
 //! a thinking block that came back without a signature as a text block, which
@@ -39,12 +39,7 @@ pub(crate) fn require_local_version(mut command: Command) -> Result<(), String> 
     if !output.status.success() {
         return Err(format!("{shown} failed: {}", output.status));
     }
-    // pi prints its version on stdout, and some installs on stderr.
-    let printed = format!(
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let printed = String::from_utf8_lossy(&output.stdout);
     let version = super::omp::parse_version(&printed)
         .ok_or_else(|| format!("{shown} printed no version: {:?}", printed.trim()))?;
     local_version_error(version).map_or(Ok(()), Err)

@@ -316,7 +316,7 @@ impl Harness {
         self.name()
     }
 
-    fn install_hint(self) -> &'static str {
+    pub(crate) fn install_hint(self) -> &'static str {
         match self {
             Self::OpenCode => "Install opencode: https://opencode.ai/docs/",
             Self::Pi => "Install pi: npm install -g @earendil-works/pi-coding-agent",
