@@ -227,7 +227,7 @@ fn canonical_config(settings: &Settings) -> io::Result<PathBuf> {
         match fs::canonicalize(at) {
             Ok(mut path) => {
                 path.extend(missing.iter().rev());
-                return Ok(path);
+                return Ok(without_verbatim_prefix(path));
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 let (Some(parent), Some(name)) = (at.parent(), at.file_name()) else {
@@ -239,6 +239,41 @@ fn canonical_config(settings: &Settings) -> io::Result<PathBuf> {
             Err(error) => return Err(failed(error)),
         }
     }
+}
+
+/// `path` without the `\\?\` prefix Windows' canonical paths carry, where
+/// the plain form names the same file: a drive path (`\\?\C:\x` is `C:\x`)
+/// or a UNC share (`\\?\UNC\host\share` is `\\host\share`) within
+/// `MAX_PATH`, with no component ending in `.` or a space (which plain paths
+/// drop). Shown to the user and compared between runs, so it
+/// reads as the user wrote it. Other paths, and every path elsewhere, are
+/// unchanged.
+fn without_verbatim_prefix(path: PathBuf) -> PathBuf {
+    if cfg!(windows) {
+        if let Some(plain) = path.to_str().and_then(plain_windows_path) {
+            return PathBuf::from(plain);
+        }
+    }
+    path
+}
+
+fn plain_windows_path(verbatim: &str) -> Option<String> {
+    // MAX_PATH less the terminating NUL.
+    const MAX_PLAIN: usize = 259;
+    let plain = if let Some(unc) = verbatim.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{unc}")
+    } else {
+        let rest = verbatim.strip_prefix(r"\\?\")?;
+        let bytes = rest.as_bytes();
+        if bytes.len() < 3 || !bytes[0].is_ascii_alphabetic() || &bytes[1..3] != br":\" {
+            return None;
+        }
+        rest.to_owned()
+    };
+    let trimmed = plain
+        .split('\\')
+        .any(|component| component.ends_with('.') || component.ends_with(' '));
+    (plain.encode_utf16().count() <= MAX_PLAIN && !trimmed).then_some(plain)
 }
 
 /// `rayline local start`: start the local process from `settings`.
@@ -1834,6 +1869,28 @@ mod tests {
     }
 
     #[test]
+    fn a_windows_verbatim_path_reads_as_the_user_wrote_it() {
+        assert_eq!(
+            plain_windows_path(r"\\?\C:\Users\rltest\.config\rayline\settings.json").as_deref(),
+            Some(r"C:\Users\rltest\.config\rayline\settings.json")
+        );
+        assert_eq!(
+            plain_windows_path(r"\\?\UNC\host\share\settings.json").as_deref(),
+            Some(r"\\host\share\settings.json")
+        );
+        assert_eq!(plain_windows_path(r"C:\already\plain"), None);
+        assert_eq!(plain_windows_path(r"\\?\GLOBALROOT\Device\x"), None);
+        let long = format!(r"\\?\C:\{}", "a".repeat(300));
+        assert_eq!(plain_windows_path(&long), None);
+        // Length is in UTF-16 units, as MAX_PATH counts.
+        let wide = format!(r"\\?\C:\{}", "設".repeat(200));
+        assert!(plain_windows_path(&wide).is_some());
+        // A plain path would drop the trailing dot or space.
+        assert_eq!(plain_windows_path(r"\\?\C:\cfg\settings.json."), None);
+        assert_eq!(plain_windows_path(r"\\?\C:\cfg \settings.json"), None);
+    }
+
+    #[test]
     fn the_ready_file_s_skipped_models_become_one_warning_each() {
         let state = json!({"skipped_models": [
             {"id": "x/other", "reason": "not_in_release"},
@@ -2657,7 +2714,7 @@ mod tests {
         let started = local_settings(&dir, "a.json", None);
         let supervisor = Supervisor {
             pid: 7,
-            config: fs::canonicalize(&started.file).unwrap(),
+            config: canonical_config(&started).unwrap(),
             env: None,
             router: Some(RouterSource::of(&started)),
             decisions_model: None,
