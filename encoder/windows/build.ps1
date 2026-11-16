@@ -92,20 +92,18 @@ New-Item -ItemType Directory -Force $OutputDir | Out-Null
 Copy-Item (Join-Path $build "rayline-arc-encoder.exe") $OutputDir -Force
 foreach ($dll in $cuda.dlls) { Copy-Item (Join-Path $cudaRoot "bin\$dll") $OutputDir -Force }
 
-$license = @(
-  "rayline-arc-encoder bundles the third-party code below, built from llama.cpp $($pin.commit)"
-  "($($pin.repository)) with the patches in Rayline's encoder/patches/. Rayline's own code in it is"
-  "licensed under the Apache License 2.0 (see Rayline's LICENSE)."
-)
+# Byte for byte what build.sh writes (echo, printf and cat): every platform ships the same LICENSE asset.
+$license = "rayline-arc-encoder bundles the third-party code below, built from llama.cpp $($pin.commit)`n" +
+  "($($pin.repository)) with the patches in Rayline's encoder/patches/. Rayline's own code in it is`n" +
+  "licensed under the Apache License 2.0 (see Rayline's LICENSE).`n"
 foreach ($name in "LICENSE", "vendor/cpp-httplib/LICENSE", "licenses/LICENSE-jsonhpp") {
-  $license += ""; $license += "==> llama.cpp/$name <=="; $license += ""
-  $license += [IO.File]::ReadAllText((Join-Path $SourceDir $name)).TrimEnd("`n")
+  $license += "`n==> llama.cpp/$name <==`n`n" + [IO.File]::ReadAllText((Join-Path $SourceDir $name))
 }
-$license += ""; $license += "==> NVIDIA CUDA Toolkit <=="; $license += ""
-$license += "The Linux and Windows builds also contain the NVIDIA CUDA runtime, cuBLAS and cuBLASLt (on Windows, cuBLAS and"
-$license += "cuBLASLt are the DLLs beside the encoder), redistributed under the NVIDIA CUDA Toolkit End User License"
-$license += "Agreement: https://docs.nvidia.com/cuda/eula/"
-[IO.File]::WriteAllText((Join-Path $OutputDir "rayline-arc-encoder-LICENSE"), (($license -join "`n") + "`n"))
+$license += "`n==> NVIDIA CUDA Toolkit <==`n`n" +
+  "The Linux and Windows builds also contain the NVIDIA CUDA runtime, cuBLAS and cuBLASLt (on Windows, cuBLAS and`n" +
+  "cuBLASLt are the DLLs beside the encoder), redistributed under the NVIDIA CUDA Toolkit End User License`n" +
+  "Agreement: https://docs.nvidia.com/cuda/eula/`n"
+[IO.File]::WriteAllText((Join-Path $OutputDir "rayline-arc-encoder-LICENSE"), $license)
 
 # The exe must import nothing beyond Windows itself, the delay-loaded driver and the shipped cuBLAS DLLs.
 $allowed = @("kernel32.dll", "advapi32.dll", "ws2_32.dll", "nvcuda.dll") + $cuda.dlls
