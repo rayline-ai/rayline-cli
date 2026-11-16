@@ -56,15 +56,18 @@ struct TopSource {
 
 impl TopSource {
     async fn connect(state_dir: &Path) -> io::Result<Self> {
-        let (client, url, identity) =
-            crate::hybrid::top_connection(state_dir)
-                .await
-                .map_err(|error| {
-                    io::Error::new(
-                        io::ErrorKind::ConnectionRefused,
-                        format!("no local process is running: {error}"),
-                    )
-                })?;
+        Self::open(state_dir).await.map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::ConnectionRefused,
+                format!("no local process is running: {error}"),
+            )
+        })
+    }
+
+    /// [`Self::connect`] with `top_connection`'s error: `NotFound` when no
+    /// local process runs.
+    async fn open(state_dir: &Path) -> io::Result<Self> {
+        let (client, url, identity) = crate::hybrid::top_connection(state_dir).await?;
         Ok(Self {
             client,
             url,
@@ -92,39 +95,55 @@ impl TopSource {
 enum Refresh {
     Snapshot(Value),
     NotRunning,
-    Error(String),
+    /// The fetch failed. `same_instance`: the instance the last snapshot
+    /// came from still runs, so that snapshot stays on screen.
+    Error {
+        message: String,
+        same_instance: bool,
+    },
 }
 
 /// One refresh of the live view. Fetches from the instance `source` holds;
 /// when that fails, reads the state again and follows the instance it names
 /// now (a restarted local process), and holds none while none runs.
 async fn refresh(state_dir: &Path, source: &mut Option<TopSource>) -> Refresh {
-    match source.take() {
+    let fetch_error = match source.as_ref() {
         Some(current) => match current.fetch_snapshot().await {
-            Ok(snapshot) => {
-                *source = Some(current);
-                return Refresh::Snapshot(snapshot);
-            }
-            Err(error) => match TopSource::connect(state_dir).await {
-                Ok(next) if next.identity == current.identity => {
-                    *source = Some(current);
-                    return Refresh::Error(error.to_string());
+            Ok(snapshot) => return Refresh::Snapshot(snapshot),
+            Err(error) => Some(error.to_string()),
+        },
+        None => None,
+    };
+    let next = match TopSource::open(state_dir).await {
+        Ok(next) => next,
+        Err(error) => {
+            *source = None;
+            return if error.kind() == io::ErrorKind::NotFound {
+                Refresh::NotRunning
+            } else {
+                Refresh::Error {
+                    message: error.to_string(),
+                    same_instance: false,
                 }
-                Ok(next) => *source = Some(next),
-                Err(_) => return Refresh::NotRunning,
-            },
-        },
-        None => match TopSource::connect(state_dir).await {
-            Ok(next) => *source = Some(next),
-            Err(_) => return Refresh::NotRunning,
-        },
+            };
+        }
+    };
+    if let (Some(current), Some(message)) = (source.as_ref(), fetch_error)
+        && current.identity == next.identity
+    {
+        return Refresh::Error {
+            message,
+            same_instance: true,
+        };
     }
-    match source.as_ref() {
-        Some(current) => match current.fetch_snapshot().await {
-            Ok(snapshot) => Refresh::Snapshot(snapshot),
-            Err(error) => Refresh::Error(error.to_string()),
+    let fetched = next.fetch_snapshot().await;
+    *source = Some(next);
+    match fetched {
+        Ok(snapshot) => Refresh::Snapshot(snapshot),
+        Err(error) => Refresh::Error {
+            message: error.to_string(),
+            same_instance: false,
         },
-        None => Refresh::NotRunning,
     }
 }
 
@@ -275,9 +294,15 @@ async fn run_top_tui(state_dir: &Path) -> io::Result<()> {
                     not_running = true;
                     last_error = None;
                 }
-                Refresh::Error(error) => {
+                Refresh::Error {
+                    message,
+                    same_instance,
+                } => {
+                    if !same_instance {
+                        snapshot = None;
+                    }
                     not_running = false;
-                    last_error = Some(error);
+                    last_error = Some(message);
                 }
             }
             last_fetch = Some(Instant::now());
@@ -935,6 +960,22 @@ mod tests {
         };
         assert_eq!(snapshot["instance_id"], "second-core");
         assert_eq!(snapshot["totals"]["completed_requests"], 0);
+
+        // A running instance top can't authenticate to is an error, not
+        // "not running".
+        let token_path = state_dir.join("gateway-token");
+        fs::write(&token_path, "wrong-private-token").unwrap();
+        let mut fresh = None;
+        let Refresh::Error {
+            message,
+            same_instance: false,
+        } = refresh(&state_dir, &mut fresh).await
+        else {
+            panic!("an error on a running instance");
+        };
+        assert!(message.contains("health/authentication"), "{message}");
+        assert!(!message.contains("private-token"), "{message}");
+        fs::write(&token_path, "test-private-token").unwrap();
 
         // Stopped: the state is gone, and the view waits.
         second.abort();
