@@ -116,6 +116,9 @@ jobs:
           - platform: linux-x64
             os: ubuntu-latest
             allow_failure: false
+          - platform: linux-arm64
+            os: ubuntu-24.04-arm
+            allow_failure: false
           - platform: macos-arm64
             os: macos-15
             allow_failure: false
@@ -135,9 +138,16 @@ jobs:
           rustup toolchain install "$RUST_VERSION" --profile minimal --component clippy
           rustup default "$RUST_VERSION"
 
+      # Linux builds as releases do, in the encoder's pinned image, and checks the glibc floor.
       - name: Build release binaries
         shell: bash
-        run: cargo build --release -p rayline-cli --locked
+        run: |
+          set -euo pipefail
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            scripts/build-linux-cli.sh
+          else
+            cargo build --release -p rayline-cli --locked
+          fi
 
       - name: Clippy (Windows)
         if: runner.os == 'Windows'

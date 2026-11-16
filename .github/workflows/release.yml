@@ -143,13 +143,20 @@ jobs:
           rustup toolchain install "$RUST_VERSION" --profile minimal
           rustup default "$RUST_VERSION"
 
+      # Linux builds rayline in the encoder's pinned Rocky Linux 8 image, so it needs glibc 2.28 at most, as the
+      # encoder does; the script refuses a newer requirement.
       - name: Build release binaries
         shell: bash
         env:
+          PLATFORM_TAG: ${{ matrix.platform_tag }}
           RAYLINE_VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          cargo build --release -p rayline-cli --locked
+          if [[ "$PLATFORM_TAG" == linux_* ]]; then
+            scripts/build-linux-cli.sh
+          else
+            cargo build --release -p rayline-cli --locked
+          fi
 
       - name: Package release assets
         shell: bash

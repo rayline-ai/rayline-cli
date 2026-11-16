@@ -197,6 +197,13 @@ else or a newer glibc. Runners have no GPU, so its smoke test runs against the
 toolkit's `libcuda` stub, on which ggml falls back to the CPU. Building six
 CUDA architectures takes about 25 minutes on 8 cores.
 
+Linux `rayline` is built the same way, by `scripts/build-linux-cli.sh`: `cargo
+build` runs in that pinned Rocky Linux 8 image with the runner's Rust toolchain
+mounted, so `rayline` also needs glibc 2.28 at most, and the script refuses a
+newer requirement. `rayline-core` is built with `CGO_ENABLED=0`, so it is
+static and needs no glibc. CI builds Linux `rayline` this way on x86_64 and
+aarch64.
+
 The script fetches the pinned commit, refuses another commit, local changes or
 a patch whose sha256 differs from the pin, applies the patches and writes
 `rayline-arc-encoder` and `rayline-arc-encoder-LICENSE`. The install scripts and

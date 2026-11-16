@@ -136,9 +136,18 @@ Every entry works the same way. No setting marks a model as local.
 
 `local` decisions are a preview. They need the ARC encoder binary
 `rayline-arc-encoder` beside `rayline`, which releases ship for
-macOS arm64 and Linux with an NVIDIA GPU (driver only). The Linux encoder runs on the GPU with
-the NVIDIA driver alone (no CUDA toolkit), needs glibc 2.28 or later (and AVX2
-on x86_64), and is 0.6 to 0.8 GB. On first use, start downloads the
+macOS arm64 and Linux with an NVIDIA GPU (driver only). On Linux:
+
+- x86_64 needs an NVIDIA GPU of compute capability 7.5, 8.x, 9.0 or 12.x
+  (T4, A100, A10/L4/RTX 30 and 40, H100, RTX 50), and aarch64 one of 9.0 or
+  12.1 or later (GH200, GB10). Compute capability 10.x (B200, GB200) isn't
+  supported yet.
+- The encoder needs the NVIDIA driver for CUDA 12 (525.60.13 or later) and no
+  CUDA toolkit, glibc 2.28 or later (as `rayline` does), and AVX2 on x86_64.
+  It is 0.6 to 0.8 GB.
+- There is no build for other GPUs (Vulkan) or for the CPU alone.
+
+On first use, start downloads the
 release and about 1 GB of encoder weights into the Hugging Face cache and
 checks them against their pins. Later starts hash a cached file again only
 if it changed since it was last checked (a stamp in `~/.rayline/arc-verified/`);
