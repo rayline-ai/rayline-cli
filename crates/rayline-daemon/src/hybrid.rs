@@ -1574,20 +1574,6 @@ async fn stop_child(
 
 #[cfg(test)]
 mod tests {
-    #[tokio::test]
-    async fn the_encoder_is_stopped_even_when_the_core_fails_to_stop() {
-        let encoder_stopped = std::cell::Cell::new(false);
-        let result = stop_both(async { Err(anyhow::anyhow!("core")) }, async {
-            encoder_stopped.set(true);
-            Err(anyhow::anyhow!("encoder"))
-        })
-        .await;
-        assert!(encoder_stopped.get());
-        assert_eq!(result.expect_err("fails").to_string(), "core");
-        let result = stop_both(async { Ok(()) }, async { Err(anyhow::anyhow!("encoder")) }).await;
-        assert_eq!(result.expect_err("fails").to_string(), "encoder");
-    }
-
     use super::*;
 
     #[test]
@@ -2011,5 +1997,19 @@ mod tests {
         let message = value["error"]["message"].as_str().unwrap();
         assert!(message.contains("retryable"), "{message}");
         assert_eq!(value["error"]["code"], "decision_failed");
+    }
+
+    #[tokio::test]
+    async fn the_encoder_is_stopped_even_when_the_core_fails_to_stop() {
+        let encoder_stopped = std::cell::Cell::new(false);
+        let result = stop_both(async { Err(anyhow::anyhow!("core")) }, async {
+            encoder_stopped.set(true);
+            Err(anyhow::anyhow!("encoder"))
+        })
+        .await;
+        assert!(encoder_stopped.get());
+        assert_eq!(result.expect_err("fails").to_string(), "core");
+        let result = stop_both(async { Ok(()) }, async { Err(anyhow::anyhow!("encoder")) }).await;
+        assert_eq!(result.expect_err("fails").to_string(), "encoder");
     }
 }
