@@ -25,10 +25,10 @@ if [ "${1:-}" = --in-container ]; then
   exit 0
 fi
 
-check=""
+check="" check_only=""
 case "$#:${1:-}" in
   0:) ;;
-  2:--check) check="$2" ;;
+  2:--check) check="$2" check_only=1 ;;
   *) echo "usage: scripts/build-linux-cli.sh [--check BIN]" >&2; exit 2 ;;
 esac
 command -v objdump >/dev/null || { echo "missing objdump (binutils)" >&2; exit 1; }
@@ -56,7 +56,7 @@ check_glibc() {
   echo "$binary: needs glibc $glibc (at most $max_glibc)"
 }
 
-if [ -n "$check" ]; then
+if [ -n "$check_only" ]; then
   check_glibc "$check"
   exit 0
 fi
