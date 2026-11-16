@@ -371,7 +371,7 @@ pub async fn run(args: Args) -> Result<()> {
     .await;
     drop(cleanup);
     // The first error wins: the run's own, then the core's, then the encoder's.
-    outcome.and(stopped)
+    first_error(outcome, stopped)
 }
 
 /// Stops the core, then the encoder, each whatever the other returned, so a
@@ -383,7 +383,18 @@ async fn stop_both(
 ) -> Result<()> {
     let core = core.await;
     let encoder = encoder.await;
-    core.and(encoder)
+    first_error(core, encoder)
+}
+
+/// `first`'s error, else `second`'s. An error not returned is logged.
+fn first_error(first: Result<()>, second: Result<()>) -> Result<()> {
+    match (first, second) {
+        (Err(error), Err(dropped)) => {
+            tracing::warn!(error = format!("{dropped:#}"), "shutdown also failed");
+            Err(error)
+        }
+        (first, second) => first.and(second),
+    }
 }
 
 /// Decisions requests carry execution context and the router key, so the core
