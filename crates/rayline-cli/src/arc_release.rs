@@ -31,6 +31,7 @@ pub fn built_in() -> ArcRelease {
 /// private repo. `progress` is told what is downloaded.
 pub fn fetch(
     hub: &Path,
+    stamps: &Path,
     hub_url: &str,
     token: Option<&str>,
     release: &ArcRelease,
@@ -54,7 +55,7 @@ pub fn fetch(
     );
     // The manifest is small, and only once it is read is the release's
     // size known: it isn't shown.
-    let at = fetch_file(hub, hub_url, token, &manifest, &Progress::silent())?;
+    let at = fetch_file(hub, stamps, hub_url, token, &manifest, &Progress::silent())?;
     let files = fs::read(&at)
         .map_err(|e| e.to_string())
         .and_then(|raw| rayline_arc_decide::manifest_files(&raw).map_err(|e| e.to_string()))
@@ -67,7 +68,7 @@ pub fn fetch(
         expect_unless_cached(hub, file, progress);
     }
     for file in &files {
-        fetch_file(hub, hub_url, token, file, progress)?;
+        fetch_file(hub, stamps, hub_url, token, file, progress)?;
     }
     Ok(rayline_hf::hf_cache_snapshot_path(
         hub,
@@ -97,11 +98,13 @@ pub fn expect_unless_cached(hub: &Path, file: &Pinned<'_>, progress: &Progress) 
 }
 
 /// The pinned file's path in the cache at `hub`: the cached copy when it
-/// matches (hashed on every call: a blob's name doesn't prove its bytes),
-/// else downloaded, telling `progress`. A copy that doesn't match is
-/// removed; a download that doesn't match is refused.
+/// matches, else downloaded, telling `progress`. A copy that doesn't match is
+/// removed; a download that doesn't match is refused. A cached copy is
+/// hashed unless its stamp in `stamps` shows it unchanged since it last
+/// hashed to the pin (a blob's name doesn't prove its bytes).
 pub fn fetch_file(
     hub: &Path,
+    stamps: &Path,
     hub_url: &str,
     token: Option<&str>,
     file: &Pinned<'_>,
@@ -110,7 +113,8 @@ pub fn fetch_file(
     let (repo, revision, path) = (file.repo, file.revision, file.path.as_str());
     let matches = |at: &Path| {
         fs::metadata(at).is_ok_and(|meta| meta.len() <= file.max_bytes)
-            && file_sha256(at).is_some_and(|sha| sha == file.sha256)
+            && (stamped(stamps, at, &file.sha256)
+                || hashes_to(stamps, at, &file.sha256, std::time::SystemTime::now))
     };
     if let Some(cached) = rayline_hf::cached_hf_file(hub, repo, path, revision) {
         if matches(&cached) {
@@ -144,11 +148,144 @@ pub fn fetch_file(
     ))
 }
 
+/// What identifies the file at its real path `real`, as `meta` describes it:
+/// size, modification and inode change times, device and inode. On Unix any
+/// write, rename over or permission change alters it.
+#[cfg(unix)]
+fn stamp_of(real: &Path, meta: &fs::Metadata) -> String {
+    use std::os::unix::fs::MetadataExt as _;
+    format!(
+        "path {}\nbytes {}\nmtime {}.{}\nctime {}.{}\ndev {}\nino {}\n",
+        real.display(),
+        meta.len(),
+        meta.mtime(),
+        meta.mtime_nsec(),
+        meta.ctime(),
+        meta.ctime_nsec(),
+        meta.dev(),
+        meta.ino()
+    )
+}
+
+/// Whether `at` is unchanged since it last hashed to `sha256`: the stamp in
+/// `stamps` equals the file's now. Anything missing, unreadable or not a
+/// regular file is no. Only on Unix: elsewhere a file's metadata doesn't
+/// show every change, so it is always hashed.
+#[cfg(unix)]
+fn stamped(stamps: &Path, at: &Path, sha256: &str) -> bool {
+    let Ok(real) = fs::canonicalize(at) else {
+        return false;
+    };
+    let Ok(meta) = fs::metadata(&real) else {
+        return false;
+    };
+    let recorded = stamps.join(sha256);
+    meta.is_file()
+        && fs::symlink_metadata(&recorded).is_ok_and(|m| m.is_file())
+        && fs::read_to_string(&recorded).is_ok_and(|r| r == stamp_of(&real, &meta))
+}
+
+#[cfg(not(unix))]
+fn stamped(_stamps: &Path, _at: &Path, _sha256: &str) -> bool {
+    false
+}
+
+/// How long a file must have been unchanged, by both its modification and
+/// inode change times, before its stamp is recorded. A filesystem that keeps
+/// times to 1 or 2 seconds (FAT, exFAT, HFS+) would otherwise give a rewrite
+/// in the same second as the hash the stamp's times.
+#[cfg(unix)]
+const SETTLED: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Whether `at` hashes to `sha256`. On Unix, when it does, records its stamp
+/// in `stamps`, but only when the file hashed (one open handle) is the one
+/// `at` resolves to, nothing changed it during the hash, and it had already
+/// been unchanged for [`SETTLED`] when `now` is read, before the file is
+/// opened: a write after that lands in a later timestamp, even on a
+/// filesystem with 1 or 2 second times.
+fn hashes_to(
+    stamps: &Path,
+    at: &Path,
+    sha256: &str,
+    now: impl FnOnce() -> std::time::SystemTime,
+) -> bool {
+    let started = now();
+    let Ok(real) = fs::canonicalize(at) else {
+        return false;
+    };
+    let Ok(mut file) = fs::File::open(&real) else {
+        return false;
+    };
+    let Ok(before) = file.metadata() else {
+        return false;
+    };
+    if !before.is_file() || sha256_of(&mut file).is_none_or(|actual| actual != sha256) {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        let stamp = stamp_of(&real, &before);
+        let unchanged = file
+            .metadata()
+            .is_ok_and(|after| stamp_of(&real, &after) == stamp)
+            && fs::metadata(&real).is_ok_and(|now| stamp_of(&real, &now) == stamp);
+        if unchanged && settled(&before, started) {
+            record_stamp(stamps, sha256, &stamp);
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = (stamps, started);
+    true
+}
+
+/// Whether `meta`'s modification and inode change times are both at least
+/// [`SETTLED`] before `now`. A time that can't be read, or is in the future,
+/// is not.
+#[cfg(unix)]
+fn settled(meta: &fs::Metadata, now: std::time::SystemTime) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    let Ok(now) = now.duration_since(std::time::UNIX_EPOCH) else {
+        return false;
+    };
+    let at = |secs: i64, nanos: i64| {
+        Some(std::time::Duration::new(
+            u64::try_from(secs).ok()?,
+            u32::try_from(nanos).ok()?,
+        ))
+    };
+    [
+        at(meta.mtime(), meta.mtime_nsec()),
+        at(meta.ctime(), meta.ctime_nsec()),
+    ]
+    .into_iter()
+    .all(|time| time.is_some_and(|time| now.checked_sub(time).is_some_and(|age| age >= SETTLED)))
+}
+
+/// Writes a stamp into `stamps` (created owner-only), replacing any before
+/// it. A stamp that can't be written only means hashing again next time.
+#[cfg(unix)]
+fn record_stamp(stamps: &Path, sha256: &str, stamp: &str) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let tmp = stamps.join(format!(".{sha256}.{}.tmp", std::process::id()));
+    let written = fs::create_dir_all(stamps)
+        .and_then(|()| fs::set_permissions(stamps, fs::Permissions::from_mode(0o700)))
+        .and_then(|()| fs::write(&tmp, stamp))
+        .and_then(|()| fs::rename(&tmp, stamps.join(sha256)));
+    if written.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+}
+
 /// The SHA-256 of the file at `path`, read in chunks.
 fn file_sha256(path: &Path) -> Option<String> {
+    sha256_of(&mut fs::File::open(path).ok()?)
+}
+
+/// The SHA-256 of what `file` reads from here on, in chunks.
+fn sha256_of(file: &mut fs::File) -> Option<String> {
     use sha2::Digest as _;
     let mut hasher = sha2::Sha256::new();
-    std::io::copy(&mut fs::File::open(path).ok()?, &mut hasher).ok()?;
+    std::io::copy(file, &mut hasher).ok()?;
     Some(format!("{:x}", hasher.finalize()))
 }
 
@@ -343,7 +480,15 @@ mod tests {
         let fake = serve_paced(served, false, Some(std::time::Duration::from_millis(30)));
         let out = crate::start_progress::tests::Captured::default();
         let progress = Progress::new(Box::new(out.clone()), false);
-        fetch(&hub, &fake.url, None, &pin, &progress).expect("fetches");
+        fetch(
+            &hub,
+            &hub.join("verified"),
+            &fake.url,
+            None,
+            &pin,
+            &progress,
+        )
+        .expect("fetches");
         progress.release_ready();
         let text = out.text();
         assert!(!text.contains('\r'), "{text}");
@@ -367,7 +512,15 @@ mod tests {
 
         let out = crate::start_progress::tests::Captured::default();
         let progress = Progress::new(Box::new(out.clone()), false);
-        fetch(&hub, &fake.url, None, &pin, &progress).expect("cached");
+        fetch(
+            &hub,
+            &hub.join("verified"),
+            &fake.url,
+            None,
+            &pin,
+            &progress,
+        )
+        .expect("cached");
         progress.release_ready();
         assert_eq!(out.text(), "ARC release cached\n");
         let _ = fs::remove_dir_all(hub);
@@ -378,7 +531,15 @@ mod tests {
         let hub = scratch("good");
         let (served, pin) = release(&FILES);
         let fake = fake_hub(served);
-        let dir = fetch(&hub, &fake.url, None, &pin, &Progress::silent()).expect("fetches");
+        let dir = fetch(
+            &hub,
+            &hub.join("verified"),
+            &fake.url,
+            None,
+            &pin,
+            &Progress::silent(),
+        )
+        .expect("fetches");
         for (name, body) in FILES {
             assert_eq!(fs::read(dir.join(name)).expect("cached"), body);
         }
@@ -389,7 +550,15 @@ mod tests {
         let offline_url = format!("http://{}", offline.local_addr().expect("addr"));
         drop(offline);
         assert_eq!(
-            fetch(&hub, &offline_url, None, &pin, &Progress::silent()).expect("cached"),
+            fetch(
+                &hub,
+                &hub.join("verified"),
+                &offline_url,
+                None,
+                &pin,
+                &Progress::silent()
+            )
+            .expect("cached"),
             dir
         );
         let _ = fs::remove_dir_all(hub);
@@ -439,7 +608,15 @@ mod tests {
             b"other".to_vec(),
         );
         let fake = fake_hub(served.clone());
-        let error = fetch(&hub, &fake.url, None, &pin, &Progress::silent()).expect_err("refused");
+        let error = fetch(
+            &hub,
+            &hub.join("verified"),
+            &fake.url,
+            None,
+            &pin,
+            &Progress::silent(),
+        )
+        .expect_err("refused");
         assert!(error.contains("runtime/heads.safetensors"), "{error}");
         assert!(error.contains("not the pinned file"), "{error}");
         let path = format!("{RELEASE_DIR}/heads.safetensors");
@@ -448,7 +625,15 @@ mod tests {
         // A manifest that is not the pinned one is refused before any file.
         let mut other = pin.clone();
         other.manifest_sha256 = "f".repeat(64);
-        let error = fetch(&hub, &fake.url, None, &other, &Progress::silent()).expect_err("refused");
+        let error = fetch(
+            &hub,
+            &hub.join("verified"),
+            &fake.url,
+            None,
+            &other,
+            &Progress::silent(),
+        )
+        .expect_err("refused");
         assert!(error.contains("runtime/manifest.json"), "{error}");
         let _ = fs::remove_dir_all(hub);
     }
@@ -458,14 +643,130 @@ mod tests {
         let hub = scratch("repair");
         let (served, pin) = release(&FILES);
         let fake = fake_hub(served);
-        let dir = fetch(&hub, &fake.url, None, &pin, &Progress::silent()).expect("fetches");
+        let dir = fetch(
+            &hub,
+            &hub.join("verified"),
+            &fake.url,
+            None,
+            &pin,
+            &Progress::silent(),
+        )
+        .expect("fetches");
         let heads = fs::canonicalize(dir.join("heads.safetensors")).expect("blob");
         fs::write(&heads, b"changed").expect("tamper");
-        fetch(&hub, &fake.url, None, &pin, &Progress::silent()).expect("repaired");
+        fetch(
+            &hub,
+            &hub.join("verified"),
+            &fake.url,
+            None,
+            &pin,
+            &Progress::silent(),
+        )
+        .expect("repaired");
         assert_eq!(
             fs::read(dir.join("heads.safetensors")).expect("read"),
             b"heads"
         );
+        let _ = fs::remove_dir_all(hub);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_hashed_file_is_stamped_and_any_change_since_voids_the_stamp() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let hub = scratch("stamp");
+        fs::create_dir_all(&hub).expect("hub");
+        let stamps = hub.join("verified");
+        let file = hub.join("blob");
+        fs::write(&file, b"heads").expect("write");
+        let sha = sha256_hex(b"heads");
+        let other = sha256_hex(b"other");
+        // A clock past the settling time; a just-written file at the real
+        // time isn't stamped (see the next test).
+        let later = || std::time::SystemTime::now() + 2 * SETTLED;
+        assert!(!stamped(&stamps, &file, &sha), "no stamp before a hash");
+        assert!(!hashes_to(&stamps, &file, &other, later));
+        assert!(
+            !stamped(&stamps, &file, &other),
+            "a failed hash records nothing"
+        );
+        assert!(hashes_to(&stamps, &file, &sha, later));
+        assert!(stamped(&stamps, &file, &sha));
+        assert_eq!(
+            fs::metadata(&stamps).expect("stamps").permissions().mode() & 0o777,
+            0o700
+        );
+        // The stamp is for this sha256 only.
+        assert!(!stamped(&stamps, &file, &other));
+
+        // The same length rewritten, with its modification time put back:
+        // the inode change time moved.
+        let modified = fs::metadata(&file)
+            .and_then(|m| m.modified())
+            .expect("mtime");
+        fs::write(&file, b"HEADS").expect("rewrite");
+        fs::File::options()
+            .write(true)
+            .open(&file)
+            .and_then(|f| f.set_modified(modified))
+            .expect("set mtime");
+        assert!(!stamped(&stamps, &file, &sha));
+
+        // Another file with the same bytes isn't the stamped one, nor is a
+        // link that now resolves elsewhere.
+        fs::write(&file, b"heads").expect("restore");
+        assert!(hashes_to(&stamps, &file, &sha, later));
+        let copy = hub.join("copy");
+        fs::copy(&file, &copy).expect("copy");
+        assert!(!stamped(&stamps, &copy, &sha));
+        let link = hub.join("link");
+        std::os::unix::fs::symlink(&file, &link).expect("link");
+        assert!(stamped(&stamps, &link, &file_sha256(&file).expect("sha")));
+        fs::remove_file(&link).expect("unlink");
+        std::os::unix::fs::symlink(&copy, &link).expect("relink");
+        assert!(!stamped(&stamps, &link, &sha));
+
+        // A garbage stamp, or a stamp that is a link, is no stamp.
+        let recorded = stamps.join(&sha);
+        let good = fs::read_to_string(&recorded).expect("stamp");
+        fs::write(&recorded, b"garbage").expect("stamp");
+        assert!(!stamped(&stamps, &file, &sha));
+        let elsewhere = hub.join("forged");
+        fs::write(&elsewhere, good).expect("forged");
+        fs::remove_file(&recorded).expect("remove");
+        std::os::unix::fs::symlink(&elsewhere, &recorded).expect("link stamp");
+        assert!(!stamped(&stamps, &file, &sha));
+        let _ = fs::remove_dir_all(hub);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_changed_within_the_settling_time_is_not_stamped() {
+        let hub = scratch("settle");
+        fs::create_dir_all(&hub).expect("hub");
+        let stamps = hub.join("verified");
+        let file = hub.join("blob");
+        fs::write(&file, b"heads").expect("write");
+        let sha = sha256_hex(b"heads");
+        let written = fs::metadata(&file)
+            .and_then(|m| m.modified())
+            .expect("mtime");
+        // Hashed, but too fresh by either time: no stamp.
+        assert!(hashes_to(&stamps, &file, &sha, || written + SETTLED / 2));
+        assert!(!stamped(&stamps, &file, &sha));
+        // An old modification time doesn't help when the inode changed
+        // just now (a chmod, or a rewrite with the time put back).
+        fs::File::options()
+            .write(true)
+            .open(&file)
+            .and_then(|f| f.set_modified(written - 10 * SETTLED))
+            .expect("set mtime");
+        let changed = std::time::SystemTime::now();
+        assert!(hashes_to(&stamps, &file, &sha, || changed));
+        assert!(!stamped(&stamps, &file, &sha));
+        // Settled by both times: stamped.
+        assert!(hashes_to(&stamps, &file, &sha, || changed + 2 * SETTLED));
+        assert!(stamped(&stamps, &file, &sha));
         let _ = fs::remove_dir_all(hub);
     }
 
@@ -476,13 +777,29 @@ mod tests {
         let hub = scratch("copied");
         let (served, pin) = release(&FILES);
         let fake = fake_hub(served);
-        let dir = fetch(&hub, &fake.url, None, &pin, &Progress::silent()).expect("fetches");
+        let dir = fetch(
+            &hub,
+            &hub.join("verified"),
+            &fake.url,
+            None,
+            &pin,
+            &Progress::silent(),
+        )
+        .expect("fetches");
         let snapshot = dir.join("heads.safetensors");
         let blob = fs::canonicalize(&snapshot).expect("blob");
         fs::write(&blob, b"changed").expect("tamper");
         fs::remove_file(&snapshot).expect("unlink");
         fs::write(&snapshot, b"changed").expect("copy");
-        fetch(&hub, &fake.url, None, &pin, &Progress::silent()).expect("repaired");
+        fetch(
+            &hub,
+            &hub.join("verified"),
+            &fake.url,
+            None,
+            &pin,
+            &Progress::silent(),
+        )
+        .expect("repaired");
         assert_eq!(fs::read(&blob).expect("blob"), b"heads");
         assert_eq!(fs::read(&snapshot).expect("snapshot"), b"heads");
         let _ = fs::remove_dir_all(hub);
@@ -494,7 +811,15 @@ mod tests {
         let (mut served, pin) = release(&FILES);
         served.remove(&format!("{RELEASE_DIR}/prices.json"));
         let fake = fake_hub(served);
-        let error = fetch(&hub, &fake.url, None, &pin, &Progress::silent()).expect_err("missing");
+        let error = fetch(
+            &hub,
+            &hub.join("verified"),
+            &fake.url,
+            None,
+            &pin,
+            &Progress::silent(),
+        )
+        .expect_err("missing");
         assert!(
             error.contains("cannot download runtime/prices.json"),
             "{error}"
@@ -508,7 +833,15 @@ mod tests {
         let hub = scratch("outside");
         let (served, pin) = release(&[("../escape", b"x")]);
         let fake = fake_hub(served);
-        let error = fetch(&hub, &fake.url, None, &pin, &Progress::silent()).expect_err("refused");
+        let error = fetch(
+            &hub,
+            &hub.join("verified"),
+            &fake.url,
+            None,
+            &pin,
+            &Progress::silent(),
+        )
+        .expect_err("refused");
         assert!(error.contains("outside the release"), "{error}");
         let _ = fs::remove_dir_all(hub);
     }
@@ -518,21 +851,38 @@ mod tests {
         let hub = scratch("private");
         let (served, pin) = release_in(None, &FILES);
         let fake = serve(served, true);
-        let error = fetch(&hub, &fake.url, None, &pin, &Progress::silent()).expect_err("401");
+        let error = fetch(
+            &hub,
+            &hub.join("verified"),
+            &fake.url,
+            None,
+            &pin,
+            &Progress::silent(),
+        )
+        .expect_err("401");
         assert!(error.contains("401"), "{error}");
         assert!(error.contains("set HF_TOKEN"), "{error}");
         assert!(fake.served.lock().expect("lock").is_empty());
 
-        let dir =
-            fetch(&hub, &fake.url, Some(TOKEN), &pin, &Progress::silent()).expect("with the token");
+        let dir = fetch(
+            &hub,
+            &hub.join("verified"),
+            &fake.url,
+            Some(TOKEN),
+            &pin,
+            &Progress::silent(),
+        )
+        .expect("with the token");
         // A release at the repo root is the snapshot itself.
         assert!(dir.ends_with(REVISION));
         for (name, body) in FILES {
             assert_eq!(fs::read(dir.join(name)).expect("cached"), body);
         }
 
+        let wrong = scratch("private-wrong");
         let error = fetch(
-            &scratch("private-wrong"),
+            &wrong,
+            &wrong.join("verified"),
             &fake.url,
             Some("hf_other"),
             &pin,
