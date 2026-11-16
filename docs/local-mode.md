@@ -138,7 +138,10 @@ Every entry works the same way. No setting marks a model as local.
 `rayline-arc-encoder` beside `rayline`, which only macOS arm64 releases
 ship. On first use, start downloads the
 release and about 1 GB of encoder weights into the Hugging Face cache and
-checks them against their pins. With `routing.router: "local"`, every
+checks them against their pins. Later starts hash a cached file again only
+if it changed since it was last checked (a stamp in `~/.rayline/arc-verified/`);
+on Windows, where a file's metadata doesn't show every change, every start
+hashes the whole release again. With `routing.router: "local"`, every
 turn routes by a local ARC decision, with no fallback: a turn ARC can't
 decide fails. Only Anthropic Messages harnesses (Claude Code, OpenCode, Pi,
 omp) are decided locally, so `rayline run` refuses Codex, Hermes and
