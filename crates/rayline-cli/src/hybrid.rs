@@ -2705,7 +2705,7 @@ mod tests {
         let started = local_settings(&dir, "a.json", None);
         let supervisor = Supervisor {
             pid: 7,
-            config: fs::canonicalize(&started.file).unwrap(),
+            config: canonical_config(&started).unwrap(),
             env: None,
             router: Some(RouterSource::of(&started)),
             decisions_model: None,
