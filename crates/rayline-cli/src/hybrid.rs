@@ -1979,8 +1979,7 @@ mod tests {
 
     #[test]
     fn a_missing_encoder_says_whether_releases_ship_one_for_this_platform() {
-        let dir = std::env::temp_dir().join(format!("rayline-encoder-{}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
+        let dir = temp_dir("encoder");
         let unsupported = arc_encoder_beside(&dir, false).unwrap_err();
         assert_eq!(unsupported.kind(), io::ErrorKind::Unsupported);
         let message = unsupported.to_string();
