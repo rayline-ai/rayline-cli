@@ -34,6 +34,14 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 - Rayline no longer uses an encoder installed beside `rayline` by 0.5.3 and
   earlier. You can delete `rayline-arc-encoder`, `rayline-arc-encoder-LICENSE`
   and, on Windows, the `cublas*.dll` files from the folder `rayline` is in.
+- When the installed `rayline` is newer than the channel's latest release (such
+  as a dev build on `prod`), `rayline update` and `rayline update --check` say
+  so and name the command that installs that release, instead of "Already on
+  latest".
+
+### Rollback
+
+To go back to 0.5.3: `curl -fsSL https://get.rayline.ai/install.sh | bash -s -- --version 0.5.3`, then, for `local` decisions, `rayline update --version 0.5.3+3bc25bc98f31` to install its ARC encoder. Plain `rayline update` would install 0.5.4 again.
 
 ## 0.5.3 (2026-11-16)
 
