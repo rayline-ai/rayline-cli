@@ -2,7 +2,7 @@
 #
 #   encoder\windows\build.ps1 -OutputDir DIR [-CudaArch LIST] [-SourceDir DIR] [-Jobs N]
 #
-# Needs Visual Studio 2022 or its Build Tools (the VCTools workload, which brings CMake and Ninja) and Git. No GPU.
+# Needs Visual Studio 2022 (not a later version: CUDA 12.9 refuses it) or its Build Tools (the VCTools workload, which brings CMake and Ninja) and Git. No GPU.
 # release/encoder-source.json pins llama.cpp, the patches and, under windows_cuda, the CUDA toolkit: the NVIDIA redist
 # archives (each checked against its sha256), the cuBLAS DLLs that ship beside the encoder and the
 # CMAKE_CUDA_ARCHITECTURES list (-CudaArch replaces it; CI builds one architecture to stay fast). The build is static
@@ -29,9 +29,10 @@ if (-not $CudaArch) { $CudaArch = $cuda.cuda_arch }
 
 function Get-Sha256([string]$Path) { (Get-FileHash $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
 
-# The MSVC x64 environment, imported from vcvars64.bat.
+# The MSVC x64 environment of Visual Studio 2022, imported from vcvars64.bat: CUDA 12.9's nvcc refuses newer MSVC
+# versions, which a host may also have installed.
 $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
-$vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+$vs = & $vswhere -latest -products * -version "[17.0,18.0)" -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
 if (-not $vs) { throw "missing Visual Studio 2022 with the VC++ x64 tools" }
 $vcvars = Join-Path $vs "VC\Auxiliary\Build\vcvars64.bat"
 foreach ($line in (cmd /c "`"$vcvars`" >nul && set")) {
