@@ -1523,12 +1523,15 @@ fn write_private_json(path: &Path, value: &Value, pretty: bool) -> io::Result<()
 }
 
 /// The error the local process printed before it exited: the last
-/// `Error: ` line it wrote to the log at or after `start`. `None` when it
-/// printed none, or the log can't be read.
+/// `Error: ` line in the log at or after `start`, read from at most its last
+/// 64 KiB. `None` when it printed none, or the log can't be read.
 fn exit_reason(log: &Path, start: u64) -> Option<String> {
     use std::io::{Read, Seek, SeekFrom};
+    const TAIL: u64 = 64 * 1024;
     let mut file = fs::File::open(log).ok()?;
-    file.seek(SeekFrom::Start(start)).ok()?;
+    let end = file.metadata().ok()?.len();
+    file.seek(SeekFrom::Start(start.max(end.saturating_sub(TAIL))))
+        .ok()?;
     let mut tail = Vec::new();
     file.read_to_end(&mut tail).ok()?;
     String::from_utf8_lossy(&tail)
