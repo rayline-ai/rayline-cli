@@ -28,7 +28,9 @@ if [ "${1:-}" = --in-container ]; then
   arch="$2" owner="$3"
   # Hand the outputs and the llama.cpp checkout back to the caller however the build ends.
   trap 'chown -R "$owner" /out "$here/build" 2>/dev/null || true' EXIT
-  dnf install -y -q git cmake python3 make findutils binutils gcc-toolset-12-gcc-c++ >/dev/null
+  # --nobest: when the mirrors are mid-sync (a new gcc in AppStream before its libgcc reaches BaseOS), install the
+  # newest build that resolves instead of failing.
+  dnf install -y -q --nobest git cmake python3 make findutils binutils gcc-toolset-12-gcc-c++ >/dev/null
   # shellcheck disable=SC1091
   source /opt/rh/gcc-toolset-12/enable
   # A rerun finds the llama.cpp checkout owned by the caller (chowned below).

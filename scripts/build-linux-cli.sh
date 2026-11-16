@@ -21,7 +21,9 @@ if [ "${1:-}" = --in-container ]; then
   # Hand target/ and the cargo home back to the caller however the build ends, so a failed build leaves no
   # root-owned files on the host.
   trap 'chown -R "$owner" "$repo/target" "$cargo_home" 2>/dev/null || true' EXIT
-  dnf install -y -q gcc gcc-c++ make >/dev/null
+  # --nobest: when the mirrors are mid-sync (a new gcc in AppStream before its libgcc reaches BaseOS), install the
+  # newest build that resolves instead of failing.
+  dnf install -y -q --nobest gcc gcc-c++ make >/dev/null
   cd "$repo"
   mkdir -p "$repo/target"
   cargo build --release -p rayline-cli --locked
