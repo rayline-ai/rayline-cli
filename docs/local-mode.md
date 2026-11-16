@@ -334,7 +334,13 @@ pi-arc finds the local Routes API with `rayline local status --json`:
   request.
 - You can offer any model the ARC release knows, including your own local
   models such as `z-ai/glm-5.3-flash` priced at zero. A model it doesn't know
-  is refused.
+  is never picked, and the request still gets an answer: an offered action
+  outside the release is left out and listed in the answer's
+  `receipt.excluded` with the reason `unknown_action`, and a priced model that
+  no offered action runs is listed in `routing.prices.unused`. With no offered
+  action the release knows, there is nothing to pick and the request fails.
+  An action outside the release named in `routing.execution.history`,
+  `last_served` or `hold` is refused (400, `execution_unknown_action`).
 - There is no fallback: when the local process isn't running or can't
   decide, the turn fails.
 
