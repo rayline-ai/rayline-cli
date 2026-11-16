@@ -227,6 +227,14 @@ so `rayline run pi --local` refuses it.
   is an error. To use another file, run `rayline local stop`, then start again
   with that file.
 
+### Models
+
+The model local mode declares to each harness is `rayline-auto`. A model you
+name with the harness's own flag, such as `--model` or `-m`, is a request, and
+ARC decides which model runs. OpenClaw works only with the declared model. A
+model pinned in the harness's own config, such as a subagent model in Claude
+Code's `settings.json`, overrides the models Rayline sets.
+
 ## Local decisions for your own Pi
 
 The [pi-arc](https://github.com/rayline-ai/pi-arc) extension can ask the

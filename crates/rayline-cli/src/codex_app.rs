@@ -1,8 +1,7 @@
 //! `rayline run codex app`: launch the Codex desktop app on ARC through the
 //! Rayline router.
 //!
-//! Takes the same `--model` flag as `rayline run codex` and points the app at
-//! the same `rayline` provider. The desktop app-server differs from the
+//! Points the app at the same `rayline` provider as `rayline run codex`. The desktop app-server differs from the
 //! CLI in two ways that shape this module:
 //!
 //! 1. It reads persistent config only from its `CODEX_HOME`, so the provider
@@ -29,7 +28,6 @@ use toml_edit::{DocumentMut, Item, Table, TomlError, Value};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AppRunRequest {
-    pub model: Option<String>,
     /// Extra args passed through to `codex app` (e.g. a workspace path).
     pub codex_args: Vec<OsString>,
     /// The hosted environment the loaded config selects, whose router the
@@ -38,14 +36,13 @@ pub struct AppRunRequest {
 }
 
 pub async fn run(request: AppRunRequest) -> ExitCode {
-    let provider =
-        match crate::codex::resolve_provider(request.model.as_deref(), &request.hosted).await {
-            Ok(provider) => provider,
-            Err(error) => {
-                eprintln!("Error: {error}");
-                return ExitCode::from(1);
-            }
-        };
+    let provider = match crate::codex::resolve_provider(&request.hosted).await {
+        Ok(provider) => provider,
+        Err(error) => {
+            eprintln!("Error: {error}");
+            return ExitCode::from(1);
+        }
+    };
 
     // 1. Compute the config to write. Nothing changes on disk yet, so a
     //    declined restart below leaves everything untouched.
@@ -126,7 +123,7 @@ const MODEL_PROVIDERS_TABLE: &str = "model_providers";
 const RAYLINE_PROVIDER: &str = "rayline";
 
 /// True when the existing `config.toml` does not already carry the Rayline
-/// settings of the `generated` snippet (a changed `--model`, key or base URL,
+/// settings of the `generated` snippet (a changed model, key or base URL,
 /// a missing table, …). Compared on content, not text: the desktop app
 /// re-serialises this file (line endings, trailing newline, spacing, key order)
 /// and none of that is a setting. An unparsable file also differs — rewriting
@@ -330,8 +327,8 @@ enum ReconcileOutcome {
 /// loaded config — the `config.toml` in *its* `CODEX_HOME` (which the app wrote
 /// to its home at launch), not our isolated file. Restart when the app is on a
 /// different home, or on our home but its loaded config no longer matches what
-/// we'd generate; otherwise a rerun with a new `--model` would silently keep
-/// the old config.
+/// we'd generate; otherwise a rerun with a new model, key or base URL would
+/// silently keep the old config.
 #[cfg(unix)]
 fn reconcile_running_app(home: &Path, config: &str) -> ReconcileOutcome {
     let Some(app) = find_running_app_server() else {

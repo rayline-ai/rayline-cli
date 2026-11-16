@@ -1,0 +1,8 @@
+{
+  "routing": {
+    "router": "hosted",
+    "decisions_model": "arc-swift-1.0",
+    "classifier_model": "anthropic/claude-haiku-5.5",
+    "policy": { "preset": "arc-policy.prefer-local.v1" }
+  }
+}

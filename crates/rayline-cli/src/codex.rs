@@ -12,8 +12,6 @@ use std::process::{Command, ExitCode};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RunRequest {
-    /// The `--model` the user picked. `None` runs the key's main model.
-    pub model: Option<String>,
     pub codex_args: Vec<OsString>,
     /// The hosted environment the loaded config selects, whose router Codex
     /// talks to.
@@ -22,8 +20,6 @@ pub struct RunRequest {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConfigureRequest {
-    /// See [`RunRequest::model`].
-    pub model: Option<String>,
     /// The hosted environment the loaded config selects, whose router Codex
     /// talks to.
     pub hosted: crate::status::HostedEnvironment,
@@ -41,9 +37,8 @@ pub(crate) struct Provider {
 
 /// Resolve the provider for a Codex launch: the environment's router, the
 /// stored `rlk-` router key (see [`crate::status::router_key`]) and the
-/// model (`--model`, else the key's main model).
+/// key's main model.
 pub(crate) async fn resolve_provider(
-    model: Option<&str>,
     hosted: &crate::status::HostedEnvironment,
 ) -> Result<Provider, String> {
     let home = crate::home().map_err(|error| error.to_string())?;
@@ -51,14 +46,9 @@ pub(crate) async fn resolve_provider(
     let key = crate::status::router_key(hosted, &home)
         .await
         .map_err(|error| error.to_string())?;
-    let model = match model {
-        Some(model) => model.to_owned(),
-        None => {
-            crate::harness::fetch_hosted_models(router_url, &key)
-                .await?
-                .main
-        }
-    };
+    let model = crate::harness::fetch_hosted_models(router_url, &key)
+        .await?
+        .main;
     Ok(Provider {
         base_url: format!("{router_url}/v1"),
         key,
@@ -74,7 +64,7 @@ fn codex_home(home: &Path) -> PathBuf {
 }
 
 pub async fn run(request: RunRequest) -> ExitCode {
-    let provider = match resolve_provider(request.model.as_deref(), &request.hosted).await {
+    let provider = match resolve_provider(&request.hosted).await {
         Ok(provider) => provider,
         Err(error) => {
             eprintln!("Error: {error}");
@@ -142,7 +132,7 @@ pub(crate) fn provider_config_toml(provider: &Provider) -> String {
 /// Write the `rayline` profile to `$CODEX_HOME/rayline.config.toml` (Codex's
 /// default home is `~/.codex`), owner-only since it holds the router key.
 pub async fn configure(request: &ConfigureRequest) -> io::Result<String> {
-    let provider = resolve_provider(request.model.as_deref(), &request.hosted)
+    let provider = resolve_provider(&request.hosted)
         .await
         .map_err(io::Error::other)?;
     let codex_home = match crate::harness::exported_dir("CODEX_HOME")? {

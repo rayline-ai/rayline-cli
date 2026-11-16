@@ -199,7 +199,6 @@ fn local_mode_refuses_the_kept_options_it_does_not_run() {
             &["run", "codex", "configure", "--local"],
             "`run codex configure`",
         ),
-        (&["run", "codex", "--local", "--model", "m"], "`--model`"),
     ] {
         assert_fails(
             &home.run(args),

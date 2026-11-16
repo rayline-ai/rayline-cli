@@ -1,52 +1,52 @@
 #!/usr/bin/env bash
-# Acceptance matrix: real turns per harness x mode x model x case.
-#   modes:  cloud (`rayline run <harness>`), local (`rayline run <harness> --local`)
-#   models: one id per provider the harness should drive (default: a Claude,
-#           a GPT and an open model); the local process may route elsewhere,
-#           so local cells also report the model that executed
-#   cases:  plain  one turn, a fixed answer
-#           tool   the model must read a file and add, with reasoning on
-#           heavy  an MCP tool set whose schemas carry top-level oneOf/anyOf/
-#                  allOf (scripts/acceptance/mcp_tools.py); the model must call
-#                  one of those tools
-#           multi  two turns in one session: the second answer needs what the
-#                  first turn read and reasoned about
-# Usage: [MODES="cloud local"] [MODELS="<id> ..."] [CASES="plain tool heavy multi"]
-#        [CONFIG=<file>] [TIMEOUT=<secs>] [WORK=<dir>] scripts/acceptance.sh [HARNESS...]
+# Acceptance matrix: real turns per harness x config profile x case.
+#   profiles: config files, each passed as `rayline run <harness> --config
+#             <file>`. A file with a `routing` section runs in local mode,
+#             one without runs in cloud mode. Default: the committed profiles
+#             in scripts/acceptance/profiles/ (cloud; local with the hosted
+#             router and ARC Swift decisions; local with the hosted router
+#             and ARC Sage decisions; local with the local router). ARC picks
+#             the model of every turn, so local cells also report the models
+#             that executed.
+#   cases:    plain  one turn, a fixed answer
+#             tool   the model must read a file and add
+#             heavy  an MCP tool set whose schemas carry top-level oneOf/anyOf/
+#                    allOf (scripts/acceptance/mcp_tools.py); the model must
+#                    call one of those tools
+#             multi  two turns in one session: the second answer needs what
+#                    the first turn read and reasoned about
+# Usage: [PROFILES="<file> ..."] [CASES="plain tool heavy multi"]
+#        [TIMEOUT=<secs>] [WORK=<dir>] scripts/acceptance.sh [HARNESS...]
 #   (default: every harness; a harness that isn't installed fails)
-# Local mode uses ~/.config/rayline/settings.json, or <file> when CONFIG is
-# set; either must have a `routing` section. With CONFIG, local mode runs
-# `rayline local start --config <file>` and `rayline run <harness> --config
-# <file>`; cloud mode always uses the default file. The script writes no
-# config outside WORK (a fresh temporary directory by default). If a local
-# process is already running, or `rayline local status` fails, it exits 1
-# before any turn.
-# It starts the local process with `rayline local start` and runs
-# `rayline local stop` once on exit, including on Ctrl-C, TERM and HUP. If
-# `rayline local start` fails, it stops nothing: a process it didn't start is
-# left alone.
-# A cell a harness cannot run (no per-run MCP config, no model flag) or that
-# `rayline run` refuses by design (a resumed session in local mode) is
-# reported as SKIP with the reason and does not count as a failure.
+# For each local profile the script runs `rayline local start --config
+# <file>`, that profile's cells, then `rayline local stop`. It writes no config
+# outside WORK (a fresh temporary directory by default). If a local process is
+# already running, or `rayline local status` fails, it exits 1 before any
+# turn. It runs `rayline local stop` on exit, including on Ctrl-C, TERM and
+# HUP, while a local process it started may be running. If `rayline local
+# start` fails, it stops nothing: a process it didn't start is left alone.
+# A cell a harness cannot run (no per-run MCP config) or that `rayline run`
+# refuses by design (a resumed session in local mode, a harness local ARC
+# decisions don't read) is reported as SKIP with the reason and does not count
+# as a failure.
 # Exit: 0 when no cell failed, 1 when one did, 2 on a usage or config error.
 # See docs/acceptance-testing.md.
 set -uo pipefail
 
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+PROFILE_DIR=$SCRIPT_DIR/acceptance/profiles
 RAYLINE=${RAYLINE:-rayline}
-CONFIG=${CONFIG:-}
 TIMEOUT=${TIMEOUT:-600}
-MODES=${MODES:-"cloud local"}
-MODELS=${MODELS:-"anthropic/claude-sonnet-5.5 openai/gpt-6.1-sol z-ai/glm-5.3-flash"}
+PROFILES=${PROFILES:-}
 CASES=${CASES:-"plain tool heavy multi"}
 HARNESSES=(claude codex opencode pi omp hermes openclaw)
-ALL_MODES=(cloud local)
 ALL_CASES=(plain tool heavy multi)
-MCP_SERVER=$(cd "$(dirname "$0")" && pwd)/acceptance/mcp_tools.py
+MCP_SERVER=$SCRIPT_DIR/acceptance/mcp_tools.py
 RUN_TOKEN=$RANDOM$RANDOM
 
 usage() {
-  echo "usage: [MODES=...] [MODELS=...] [CASES=...] [CONFIG=<file>] $0 [HARNESS...]" >&2
-  echo "harnesses: ${HARNESSES[*]}; modes: ${ALL_MODES[*]}; cases: ${ALL_CASES[*]}" >&2
+  echo "usage: [PROFILES=...] [CASES=...] $0 [HARNESS...]" >&2
+  echo "harnesses: ${HARNESSES[*]}; cases: ${ALL_CASES[*]}" >&2
   exit 2
 }
 
@@ -74,39 +74,13 @@ harness_cmd() {
     # Prompt first: --mcp-config and --allowedTools take several values.
     claude) cmd=(-p "$prompt" "$@") ;;
     # Flags after the args: a resumed turn's `resume <id>` must follow `exec`
-    # directly, where Codex and `rayline run --local` both look for it.
+    # directly, where Codex and `rayline run --config` both look for it.
     codex) cmd=(exec "$@" --skip-git-repo-check "$prompt") ;;
     opencode) cmd=(run "$@" "$prompt") ;;
     pi | omp) cmd=(-p "$@" "$prompt") ;;
     # Not -Q: quiet mode hides the "Session:" line the multi case resumes.
     hermes) cmd=(chat "$@" -q "$prompt") ;;
     openclaw) cmd=(agent "$@" -m "$prompt") ;;
-  esac
-}
-
-# harness_env <harness>: sets `turn_env` to the environment one turn needs.
-harness_env() {
-  turn_env=()
-  # Claude Code reasons only when given a thinking budget.
-  [ "$1" = claude ] && turn_env=(MAX_THINKING_TOKENS=8000)
-}
-
-# model_args <harness> <model>: sets `args` to the flags that pick <model> and
-# turn its reasoning on. Returns 1 for a harness with no per-run model flag.
-model_args() {
-  local harness=$1 model=$2
-  case $harness in
-    claude) args=(--model "$model") ;;
-    codex) args=(-m "$model" -c model_reasoning_effort=high) ;;
-    opencode) args=(-m "rayline/$model" --thinking) ;;
-    pi) args=(--model "rayline/$model" --thinking high) ;;
-    omp) return 1 ;; # omp only runs models in its catalog, which Rayline writes
-    hermes) args=(-m "$model" --reasoning high) ;;
-    # OpenClaw sends the session header the router keys the episode on only
-    # for a model its config declares, and Rayline declares the ARC models
-    # (cloud) or the local process's own (local), which pick their own
-    # thinking effort (OpenClaw refuses a level for them).
-    openclaw) return 1 ;;
   esac
 }
 
@@ -174,33 +148,6 @@ session_args() {
   esac
 }
 
-# write_opencode_config <dir>: OpenCode only runs models its config declares,
-# and only takes a project config from the working directory, so every
-# OpenCode cell gets one that declares the selected models with thinking on.
-# It sets no limits: OpenCode runs without them, and the router and the local
-# process enforce their own.
-write_opencode_config() {
-  python3 - "$1/opencode.json" "${models[@]}" <<'EOF'
-import json, sys
-path, *models = sys.argv[1:]
-config = {
-    "$schema": "https://opencode.ai/config.json",
-    "provider": {"rayline": {"models": {
-        model: {
-            "name": model,
-            "tool_call": True,
-            "reasoning": True,
-            "options": {"thinking": {"type": "enabled", "budgetTokens": 4000}},
-        }
-        for model in models
-    }}},
-}
-with open(path, "w") as f:
-    json.dump(config, f, indent=2)
-    f.write("\n")
-EOF
-}
-
 # ----------------------------------------------------------------- running
 
 pass=0
@@ -238,19 +185,16 @@ with_timeout() {
 }
 
 # run_turn <harness> <cwd> <log> <prompt> [args...]: one harness turn in
-# <cwd>; output (router keys redacted) goes to <log> and `out`, exit status to
-# `status`. In local mode `executed` collects the models the local process
-# ran for this turn.
+# <cwd> with the current profile; output (router keys redacted) goes to <log>
+# and `out`, exit status to `status`. In local mode `executed` collects the
+# models the local process ran for this turn.
 run_turn() {
   local harness=$1 cwd=$2 log=$3 prompt=$4 offset=0
   shift 4
-  # Session args before model flags: Codex's `resume <id>` comes first.
-  harness_cmd "$harness" "$prompt" "$@" ${cell_flags[@]+"${cell_flags[@]}"} \
-    ${model_flags[@]+"${model_flags[@]}"}
-  harness_env "$harness"
+  # Session args first: Codex's `resume <id>` comes right after `exec`.
+  harness_cmd "$harness" "$prompt" "$@" ${cell_flags[@]+"${cell_flags[@]}"}
   [ "$mode" = local ] && offset=$(wc -l <"$RUNTIME_LOG")
-  out=$(cd "$cwd" && with_timeout "$TIMEOUT" env ${turn_env[@]+"${turn_env[@]}"} \
-    "$RAYLINE" run "$harness" ${mode_flags[@]+"${mode_flags[@]}"} -- "${cmd[@]}" </dev/null 2>&1 |
+  out=$(cd "$cwd" && with_timeout "$TIMEOUT" "$RAYLINE" run "$harness" --config "$profile_file" -- "${cmd[@]}" </dev/null 2>&1 |
     sed -E 's/rlk-[A-Za-z0-9_-]+/rlk-<redacted>/g')
   status=${PIPESTATUS[0]}
   printf '%s\n' "$out" >"$log"
@@ -277,13 +221,13 @@ cause() {
 }
 
 record() {
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$harness" "$mode" "$model" "$case" "$1" "${executed:-}" "$2" >>"$RESULTS"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$harness" "$profile" "$case" "$1" "${executed:-}" "$2" >>"$RESULTS"
 }
 
 report_pass() {
   local detail=
   [ "$mode" = local ] && detail=" (executed ${executed:-none})"
-  echo "PASS    $harness $mode $model $case$detail"
+  echo "PASS    $harness $profile $case$detail"
   pass=$((pass + 1))
   record PASS ""
   # A turn that passed but logged an error or a 4xx still has a story.
@@ -293,23 +237,36 @@ report_pass() {
 report_fail() {
   local why=$1 detail=
   [ "$mode" = local ] && detail=" (executed ${executed:-none})"
-  echo "FAIL    $harness $mode $model $case$detail: $why"
+  echo "FAIL    $harness $profile $case$detail: $why"
   tail -n 15 <<<"$out" | sed 's/^/        /'
   fail=$((fail + 1))
   record FAIL "$why"
 }
 
 report_skip() {
-  echo "SKIP    $harness $mode $model $case: $1"
+  echo "SKIP    $harness $profile $case: $1"
   skipped=$((skipped + 1))
   record SKIP "$1"
 }
 
-# run_cell: one cell for the current `harness`, `mode`, `model`, `case`. The
-# harness runs in <cell dir>/work; the turn logs stay in <cell dir>, where the
-# harness has no reason to look.
+# fail_or_skip <cause>: a failed turn is a SKIP when `rayline run` itself
+# refused it by design before the harness started: local mode refuses a
+# resumed session for some harnesses, and local ARC decisions refuse a harness
+# they don't read. Anything else is a FAIL.
+fail_or_skip() {
+  local refusal
+  if refusal=$(grep -m 1 -E 'local mode requires a fresh harness session|local ARC decisions read only' <<<"$out"); then
+    report_skip "$refusal"
+  else
+    report_fail "$1"
+  fi
+}
+
+# run_cell: one cell for the current `harness`, `profile`, `case`. The harness
+# runs in <cell dir>/work; the turn logs stay in <cell dir>, where the harness
+# has no reason to look.
 run_cell() {
-  local dir=$WORK/$harness-$mode-${model//\//_}-$case cwd a b log
+  local dir=$WORK/$harness-$profile-$case cwd a b log
   local -a args
   cwd=$dir/work
   mkdir -p "$cwd"
@@ -319,13 +276,6 @@ run_cell() {
   # use; a session per cell keeps cells independent (the local process refuses
   # a session with history it did not record).
   [ "$harness" = openclaw ] && cell_flags=(--session-id "acceptance-$RUN_TOKEN-$RANDOM")
-  model_flags=()
-  if ! model_args "$harness" "$model"; then
-    [ "$model" = default ] || { report_skip "$harness has no model flag"; return; }
-  else
-    model_flags=(${args[@]+"${args[@]}"})
-  fi
-  [ "$harness" = opencode ] && write_opencode_config "$cwd"
   a=$((RANDOM % 90 + 10))
   b=$((RANDOM % 90 + 10))
   printf '%s\n%s\n' "$a" "$b" >"$cwd/answer.txt"
@@ -354,76 +304,57 @@ run_cell() {
       run_turn "$harness" "$cwd" "$dir/turn-1.log" \
         "Read the file $cwd/answer.txt, which holds two integers, one per line, and remember them. Reply with the word OK and nothing else." \
         ${args[@]+"${args[@]}"}
-      [ "$status" -eq 0 ] || { multi_fail "turn 1: $(cause OK)"; return; }
+      [ "$status" -eq 0 ] || { fail_or_skip "turn 1: $(cause OK)"; return; }
       session_out=$out
       session_args "$harness" 2 "$dir" || { report_fail "turn 1 printed no session id"; return; }
-      # Hermes refuses model and reasoning flags on resume: the session keeps its own.
-      [ "$harness" = hermes ] && model_flags=()
       # Without the file, turn 2 can only get the integers from the session.
       rm "$cwd/answer.txt"
       run_turn "$harness" "$cwd" "$dir/turn-2.log" \
         "Reply with the word ACCEPT immediately followed by the sum of the two integers from the file you read earlier, with no space and nothing else." \
         ${args[@]+"${args[@]}"}
-      [ "$status" -eq 0 ] || { multi_fail "$(cause "ACCEPT$((a + b))")"; return; }
+      [ "$status" -eq 0 ] || { fail_or_skip "$(cause "ACCEPT$((a + b))")"; return; }
       check "ACCEPT$((a + b))"
       ;;
   esac
-}
-
-# multi_fail <cause>: a failed multi turn is a SKIP when `rayline run` itself
-# refused the session flags, which local mode does by design for some
-# harnesses (it says so before the harness starts).
-multi_fail() {
-  local refusal
-  if refusal=$(grep -m 1 -F 'local mode requires a fresh harness session' <<<"$out"); then
-    report_skip "$refusal"
-  else
-    report_fail "$1"
-  fi
 }
 
 # check <expected>: PASS when the last turn exited 0 and printed <expected>.
 check() {
   if [ "$status" -eq 0 ] && grep -q -F "$1" <<<"$out"; then
     report_pass
+  elif [ "$status" -ne 0 ]; then
+    fail_or_skip "$(cause "$1")"
   else
     report_fail "$(cause "$1")"
   fi
 }
 
-# run_mode: every selected cell in the current `mode`.
-run_mode() {
-  local -a harness_models
+# run_profile: every selected cell with the current `profile`.
+run_profile() {
   for harness in "${selected[@]}"; do
     if ! installed "$harness"; then
-      for model in "${models[@]}"; do
-        for case in "${cases[@]}"; do
-          executed=
-          out=
-          status=127
-          report_fail "not installed"
-        done
+      for case in "${cases[@]}"; do
+        executed=
+        out=
+        status=127
+        report_fail "not installed"
       done
       continue
     fi
-    harness_models=("${models[@]}")
-    model_args "$harness" "${models[0]}" || harness_models=(default)
-    for model in "${harness_models[@]}"; do
-      for case in "${cases[@]}"; do
-        run_cell
-      done
+    for case in "${cases[@]}"; do
+      run_cell
     done
   done
 }
 
-# stop_local: runs `rayline local stop` the first time it is called; a failed
-# stop is a FAIL.
-stopped=false
+# stop_local: runs `rayline local stop` once per started local process; a
+# failed stop is a FAIL.
+stopped=true
 stop_local() {
   $stopped && return
   stopped=true
   if ! "$RAYLINE" local stop; then
-    echo "FAIL    rayline local stop"
+    echo "FAIL    rayline local stop ($profile)"
     fail=$((fail + 1))
   fi
 }
@@ -435,15 +366,17 @@ selected=("$@")
 for harness in "${selected[@]}"; do
   one_of "$harness" "${HARNESSES[@]}" || { echo "unknown harness: $harness" >&2; usage; }
 done
-read -r -a modes <<<"$MODES"
-read -r -a models <<<"$MODELS"
+# The default profiles are an array, so a checkout path with spaces stays one
+# file each; only a PROFILES value given by the caller is split on spaces.
+if [ -n "$PROFILES" ]; then
+  read -r -a profile_files <<<"$PROFILES"
+else
+  profile_files=("$PROFILE_DIR/cloud.json" "$PROFILE_DIR/local-hosted-arc-swift.json"
+    "$PROFILE_DIR/local-hosted-arc-sage.json" "$PROFILE_DIR/local-router-local.json")
+fi
 read -r -a cases <<<"$CASES"
-[ ${#modes[@]} -gt 0 ] || { echo "MODES is empty" >&2; usage; }
-[ ${#models[@]} -gt 0 ] || { echo "MODELS is empty" >&2; usage; }
+[ ${#profile_files[@]} -gt 0 ] || { echo "PROFILES is empty" >&2; usage; }
 [ ${#cases[@]} -gt 0 ] || { echo "CASES is empty" >&2; usage; }
-for mode in "${modes[@]}"; do
-  one_of "$mode" "${ALL_MODES[@]}" || { echo "unknown mode: $mode" >&2; usage; }
-done
 for case in "${cases[@]}"; do
   one_of "$case" "${ALL_CASES[@]}" || { echo "unknown case: $case" >&2; usage; }
 done
@@ -455,29 +388,35 @@ installed python3 || { echo "python3 is needed (MCP tool server, session ids)" >
 case $RAYLINE in
   */*) RAYLINE=$(cd "$(dirname "$RAYLINE")" && pwd)/$(basename "$RAYLINE") || exit 2 ;;
 esac
-# `rayline run --config <file>` is in local mode only when <file> has a
-# `routing` section, so a CONFIG without one would run no local turn.
-local_start=("$RAYLINE" local start)
-local_run=(--local)
-if [ -n "$CONFIG" ]; then
-  CONFIG=$(cd "$(dirname "$CONFIG")" && pwd)/$(basename "$CONFIG") || exit 2
-  perl -MJSON::PP -e '
+# Each profile's name is its file name without `.json`, and its mode follows
+# `rayline run --config`: local when the file has a `routing` section, cloud
+# when it doesn't.
+profile_names=()
+profile_modes=()
+for i in "${!profile_files[@]}"; do
+  file=${profile_files[$i]}
+  file=$(cd "$(dirname "$file")" && pwd)/$(basename "$file") || exit 2
+  profile_files[$i]=$file
+  name=$(basename "$file" .json)
+  one_of "$name" ${profile_names[@]+"${profile_names[@]}"} &&
+    { echo "two profiles are named $name" >&2; usage; }
+  kind=$(perl -MJSON::PP -e '
     my $file = shift;
-    open my $fh, "<", $file or die "CONFIG=$file: $!\n";
+    open my $fh, "<", $file or die "profile $file: $!\n";
     my $config = eval { JSON::PP->new->decode(do { local $/; <$fh> }) };
-    ref $config eq "HASH" or die "CONFIG=$file: not a JSON object\n";
-    exists $config->{routing} or die "CONFIG=$file has no routing section, which local mode needs\n";
-  ' "$CONFIG" || exit 2
-  local_start+=(--config "$CONFIG")
-  local_run=(--config "$CONFIG")
-fi
+    ref $config eq "HASH" or die "profile $file: not a JSON object\n";
+    print exists $config->{routing} ? "local" : "cloud";
+  ' "$file") || exit 2
+  profile_names+=("$name")
+  profile_modes+=("$kind")
+done
 RUNTIME_LOG=$HOME/.rayline/local/runtime.log
 
 WORK=${WORK:-$(mktemp -d)}
 mkdir -p "$WORK" || exit 2
 WORK=$(cd "$WORK" && pwd) || exit 2
 RESULTS=$WORK/results.tsv
-printf 'harness\tmode\tmodel\tcase\tresult\texecuted\tcause\n' >"$RESULTS"
+printf 'harness\tprofile\tcase\tresult\texecuted\tcause\n' >"$RESULTS"
 echo "== work dir: $WORK"
 
 echo "== versions"
@@ -489,12 +428,14 @@ for harness in "${selected[@]}"; do
     echo "$harness: not installed"
   fi
 done
-echo "== models: ${models[*]}"
+for i in "${!profile_files[@]}"; do
+  echo "== profile ${profile_names[$i]} (${profile_modes[$i]}): ${profile_files[$i]}"
+done
 echo "== cases: ${cases[*]}"
 
 # The cleanup trap below stops the local process, so the script must not run
 # while one it didn't start is running, or when it can't tell.
-if one_of local "${modes[@]}"; then
+if one_of local "${profile_modes[@]}"; then
   if ! status_out=$("$RAYLINE" local status 2>&1); then
     echo "$status_out" >&2
     echo "rayline local status failed" >&2
@@ -508,47 +449,45 @@ fi
 
 # -------------------------------------------------------------------- runs
 
-if one_of cloud "${modes[@]}"; then
-  echo "== cloud mode"
-  mode=cloud
-  mode_flags=()
-  run_mode
-fi
-
-if one_of local "${modes[@]}"; then
-  echo "== local mode"
+trap stop_local EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+for i in "${!profile_files[@]}"; do
+  profile=${profile_names[$i]}
+  profile_file=${profile_files[$i]}
+  mode=${profile_modes[$i]}
+  echo "== $profile ($mode mode)"
+  if [ "$mode" = cloud ]; then
+    run_profile
+    continue
+  fi
   # Set before `rayline local start`, so a signal during start still stops it.
-  trap stop_local EXIT
-  trap 'exit 129' HUP
-  trap 'exit 130' INT
-  trap 'exit 143' TERM
-  if "${local_start[@]}"; then
+  stopped=false
+  if "$RAYLINE" local start --config "$profile_file"; then
     # After a start, status must exit 0 and report the process running.
     status_out=$("$RAYLINE" local status 2>&1)
     status=$?
     echo "$status_out"
     if [ "$status" -ne 0 ] || ! grep -q '^Local process: running' <<<"$status_out"; then
-      echo "FAIL    rayline local status (exit $status)"
+      echo "FAIL    rayline local status ($profile, exit $status)"
       fail=$((fail + 1))
     fi
     if [ -f "$RUNTIME_LOG" ]; then
-      mode=local
-      mode_flags=("${local_run[@]}")
-      run_mode
+      run_profile
     else
-      echo "FAIL    $RUNTIME_LOG missing after rayline local start; local cells need it"
+      echo "FAIL    $RUNTIME_LOG missing after rayline local start ($profile); local cells need it"
       fail=$((fail + 1))
     fi
     stop_local
   else
     # A refused start (say, a process is already running) must not stop a
     # process this script didn't start.
-    trap - EXIT
     stopped=true
-    echo "FAIL    rayline local start"
+    echo "FAIL    rayline local start ($profile)"
     fail=$((fail + 1))
   fi
-fi
+done
 
 echo "== pass=$pass fail=$fail skip=$skipped"
 echo "== results: $RESULTS"

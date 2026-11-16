@@ -19,10 +19,6 @@ const SUBAGENT_MODEL_FORCE_ENV: &str = "CLAUDE_CODE_SUBAGENT_MODEL_FORCE";
 /// Claude Code's model for its `haiku` alias, which its background tasks
 /// (titles, summaries) use.
 const HAIKU_MODEL_ENV: &str = "ANTHROPIC_DEFAULT_HAIKU_MODEL";
-/// Claude Code's `--model` aliases (each may also carry a `[1m]` suffix).
-const CLAUDE_CODE_MODEL_ALIASES: [&str; 7] = [
-    "default", "best", "opus", "sonnet", "haiku", "fable", "opusplan",
-];
 pub(crate) const AUTO_COMPACT_WINDOW_ENV: &str = "CLAUDE_CODE_AUTO_COMPACT_WINDOW";
 /// Removed from every Claude Code launch, cloud and local: the token Rayline
 /// sets is the only credential, and a vendor switch would send requests
@@ -68,59 +64,24 @@ pub struct RunRequest {
     pub isolated: bool,
 }
 
-/// What decides the subagent and background models of a launch
-/// ([`role_model_env_switches`]).
-#[derive(Clone, Copy, Debug)]
-struct RoleModelInputs<'a> {
-    /// The models the hosted router lists for the key.
-    hosted: &'a crate::harness::LaunchModels,
-    /// The main-agent model the user chose: Claude Code's own `--model` after
-    /// `--`.
-    chosen_main_model: Option<&'a str>,
-}
-
 /// The subagent and background-task models, as `(env var, value)`: the child
 /// runs with each `Some` and without each `None`, and a reused Claude Code
 /// daemon must hold the same.
 ///
-/// Rayline CLI decides them: subagents and background tasks run on the main model
-/// the user chose (`--model X` puts everything on X), else ARC Swift (the key's
-/// id for it). `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` makes the model reach every
-/// subagent: Claude Code's built-in Explore and Plan agents (defined with
-/// `inherit`), a custom agent's own `model`, and a model the main agent names
-/// when it spawns one. A Claude Code alias (`opus`, `sonnet[1m]`, ...) is not a
-/// model id, so the haiku model is then unset.
-fn role_model_env_switches(inputs: RoleModelInputs<'_>) -> Vec<(&'static str, Option<String>)> {
-    let subagents = inputs
-        .chosen_main_model
-        .unwrap_or(&inputs.hosted.background)
-        .to_owned();
-    let haiku = Some(subagents.clone()).filter(|model| !is_claude_code_model_alias(model));
+/// Subagents and background tasks run on ARC Swift (the key's id for it, the
+/// hosted router's background model). `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` makes
+/// the model reach every subagent: Claude Code's built-in Explore and Plan
+/// agents (defined with `inherit`), a custom agent's own `model`, and a model
+/// the main agent names when it spawns one. Claude Code's own config pins (a
+/// subagent model in its settings.json) win over this env.
+fn role_model_env_switches(
+    hosted: &crate::harness::LaunchModels,
+) -> Vec<(&'static str, Option<String>)> {
     vec![
-        (SUBAGENT_MODEL_ENV, Some(subagents)),
+        (SUBAGENT_MODEL_ENV, Some(hosted.background.clone())),
         (SUBAGENT_MODEL_FORCE_ENV, Some("1".to_owned())),
-        (HAIKU_MODEL_ENV, haiku),
+        (HAIKU_MODEL_ENV, Some(hosted.background.clone())),
     ]
-}
-
-/// The model a Claude Code argument list selects with `--model X` or
-/// `--model=X` (the last one wins), up to Claude Code's own `--` separator.
-/// `rayline run claude -- --model X` forwards the flag to Claude Code, which makes
-/// it the user's choice.
-fn forwarded_model_arg(args: &[OsString]) -> Option<String> {
-    let mut found = None;
-    let mut args = args.iter().map(|arg| arg.to_string_lossy());
-    while let Some(arg) = args.next() {
-        if arg == "--" {
-            break;
-        }
-        if arg == "--model" {
-            found = args.next().map(|value| value.into_owned());
-        } else if let Some(value) = arg.strip_prefix("--model=") {
-            found = Some(value.to_owned());
-        }
-    }
-    found.filter(|model| !model.trim().is_empty())
 }
 
 #[derive(Debug)]
@@ -200,36 +161,23 @@ async fn run_command_from_home(
     let router_url = hosted.base_url.clone();
     let key = crate::status::router_key(hosted, home).await?;
 
-    // The main model the user chose: Claude Code's own `--model` (after `--`).
-    let chosen_main_model = forwarded_model_arg(&request.args);
-    // A hosted launch's ARC defaults are the ids the router lists for the
-    // key, which follow the account's data mode.
+    // A hosted launch's ARC models are the ids the router lists for the key,
+    // which follow the account's data mode.
     let hosted_models = crate::harness::fetch_hosted_models(&router_url, &key)
         .await
         .map_err(RunError::Router)?;
-    let model = chosen_main_model
-        .clone()
-        .unwrap_or_else(|| hosted_models.main.clone());
-    // Claude Code sizes the session itself unless the hosted router knows a
-    // window for a launch model Claude Code doesn't (an ARC id, another
-    // provider's model). A Claude Code alias (`opus`, `sonnet[1m]`, ...) is
-    // Claude Code's own, so it skips the lookup. A window in the user's
-    // environment is not read: the child gets the router's or none.
-    let auto_compact_window = if is_claude_code_model_alias(&model) {
-        None
-    } else {
-        router_auto_compact_window(&router_url, &key, &model).await?
-    };
+    let model = hosted_models.main.clone();
+    // The auto-compact window is the router's window for the main ARC model,
+    // or none, so Claude Code sizes the session itself. A window in the
+    // user's environment is not read.
+    let auto_compact_window = router_auto_compact_window(&router_url, &key, &model).await?;
 
     // `--isolated` (or choosing `[i]` at the conflict prompt) targets a private
     // config dir. Inspect the matching config dir for a daemon conflict.
     let mut isolated = request.isolated;
     let mut inspect_dir = claude_config_dir(home, isolated).map_err(RunError::ConfigDir)?;
     let mut launch_switches = launch_env_switches();
-    launch_switches.extend(role_model_env_switches(RoleModelInputs {
-        hosted: &hosted_models,
-        chosen_main_model: chosen_main_model.as_deref(),
-    }));
+    launch_switches.extend(role_model_env_switches(&hosted_models));
     let daemon_request = RequestSpec {
         env_name: &env_name,
         env_flag: hosted.env.as_deref(),
@@ -351,15 +299,6 @@ pub(crate) fn remove_claude_env(command: &mut Command) {
     }
 }
 
-/// Whether `model` is a Claude Code model alias (`opus`, `sonnet[1m]`,
-/// `opusplan`, ...) rather than a concrete model id. Claude Code resolves these
-/// itself, so the hosted router's catalog cannot answer for them.
-fn is_claude_code_model_alias(model: &str) -> bool {
-    let model = model.trim().to_ascii_lowercase();
-    let base = model.strip_suffix("[1m]").unwrap_or(&model);
-    CLAUDE_CODE_MODEL_ALIASES.contains(&base)
-}
-
 /// Pin `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, or clear it so Claude Code applies
 /// its own window for the model.
 fn set_auto_compact_window_env(command: &mut Command, auto_compact_window: Option<&str>) {
@@ -369,7 +308,7 @@ fn set_auto_compact_window_env(command: &mut Command, auto_compact_window: Optio
     };
 }
 
-/// The hosted router's auto-compact window for the launch model:
+/// The hosted router's auto-compact window for the main ARC model:
 /// `GET /v1/settings?model=<model>&client_sizes=1` returns the window of the model serving a
 /// launch id Claude Code doesn't know, and a null or absent `autoCompactWindow`
 /// for one Claude Code sizes itself, which is `None` here. A failed request or a
@@ -931,19 +870,19 @@ mod router_auto_compact_window_tests {
         body: &'static str,
     ) -> (Result<Option<String>, String>, String) {
         let (base, served) = settings_stub(status, body).await;
-        let window = router_auto_compact_window(&base, "key", "arc-sage-1.0[1m]")
+        let window = router_auto_compact_window(&base, "key", "arc-sage-1.0")
             .await
             .map_err(|error| error.to_string());
         (window, served.await.unwrap())
     }
 
     #[tokio::test]
-    async fn asks_the_router_with_the_launch_model_and_returns_its_window() {
+    async fn asks_the_router_with_the_main_model_and_returns_its_window() {
         let (window, request) =
             window("200 OK", r#"{"settings":{},"autoCompactWindow":262144}"#).await;
         assert_eq!(window, Ok(Some("262144".to_owned())));
         assert!(
-            request.starts_with("GET /v1/settings?model=arc-sage-1.0%5B1m%5D&client_sizes=1 "),
+            request.starts_with("GET /v1/settings?model=arc-sage-1.0&client_sizes=1 "),
             "{request}"
         );
         assert!(
@@ -1065,43 +1004,8 @@ mod claude_command_tests {
 }
 
 #[cfg(test)]
-mod claude_code_model_alias_tests {
+mod auto_compact_window_env_tests {
     use super::*;
-
-    #[test]
-    fn recognizes_claude_code_aliases() {
-        for model in [
-            "opus",
-            "sonnet",
-            "haiku",
-            "fable",
-            "best",
-            "default",
-            "opusplan",
-            "opus[1m]",
-            "sonnet[1m]",
-            "fable[1m]",
-            "opusplan[1m]",
-            " Opus ",
-            "SONNET[1M]",
-        ] {
-            assert!(is_claude_code_model_alias(model), "{model}");
-        }
-    }
-
-    #[test]
-    fn concrete_and_virtual_models_are_not_aliases() {
-        for model in [
-            "claude-opus-4-8",
-            "claude-opus-4-8[1m]",
-            "claude-sonnet-5",
-            "rayline-auto",
-            "opus-4",
-            "",
-        ] {
-            assert!(!is_claude_code_model_alias(model), "{model}");
-        }
-    }
 
     #[test]
     fn unpinned_window_clears_an_inherited_env_value() {
@@ -1343,23 +1247,13 @@ mod isolated_seed_tests {
 mod arc_default_tests {
     use super::*;
 
-    #[derive(Default)]
-    struct Launch<'a> {
-        /// The key's data mode (`None`: standard).
-        mode: Option<&'a str>,
-        chosen: Option<&'a str>,
-    }
-
-    /// `(subagent model, force, haiku model)` for a launch.
-    fn roles(launch: Launch<'_>) -> (Option<String>, Option<String>, Option<String>) {
-        let models = crate::harness::LaunchModels::from_listing(&crate::harness::tests::listing(
-            launch.mode,
-        ))
-        .unwrap();
-        let switches = role_model_env_switches(RoleModelInputs {
-            hosted: &models,
-            chosen_main_model: launch.chosen,
-        });
+    /// `(subagent model, force, haiku model)` for a key's data mode (`None`:
+    /// standard).
+    fn roles(mode: Option<&str>) -> (Option<String>, Option<String>, Option<String>) {
+        let models =
+            crate::harness::LaunchModels::from_listing(&crate::harness::tests::listing(mode))
+                .unwrap();
+        let switches = role_model_env_switches(&models);
         let value = |key: &str| {
             switches
                 .iter()
@@ -1385,69 +1279,14 @@ mod arc_default_tests {
     // included, hence the force) and background task.
     #[test]
     fn default_launch_puts_subagents_and_background_on_arc_swift() {
-        assert_eq!(roles(Launch::default()), all("arc-swift-1.0"));
+        assert_eq!(roles(None), all("arc-swift-1.0"));
         // A contributor or ZDR key gets ARC Swift under its mode's id.
         for mode in ["contributor", "zdr"] {
-            assert_eq!(
-                roles(Launch {
-                    mode: Some(mode),
-                    ..Launch::default()
-                }),
-                all(&format!("arc-swift-{mode}-1.0"))
-            );
+            assert_eq!(roles(Some(mode)), all(&format!("arc-swift-{mode}-1.0")));
         }
-        let models = crate::harness::tests::hosted_models();
-        let switches = role_model_env_switches(RoleModelInputs {
-            hosted: &models,
-            chosen_main_model: None,
-        });
+        let switches = role_model_env_switches(&crate::harness::tests::hosted_models());
         assert_eq!(switches.len(), 3);
         assert!(switches.iter().all(|(_, value)| value.is_some()));
-    }
-
-    // Claude Code's `--model X` (after `--`) puts
-    // subagents and background tasks on X too.
-    #[test]
-    fn chosen_main_model_applies_to_subagents_and_background() {
-        assert_eq!(
-            roles(Launch {
-                chosen: Some("z-ai/glm-5.2"),
-                ..Launch::default()
-            }),
-            all("z-ai/glm-5.2")
-        );
-        // A Claude Code alias is no model id for the haiku slot.
-        assert_eq!(
-            roles(Launch {
-                chosen: Some("opus[1m]"),
-                ..Launch::default()
-            }),
-            (Some("opus[1m]".to_owned()), Some("1".to_owned()), None)
-        );
-    }
-
-    #[test]
-    fn forwarded_model_flags_are_explicit_choices() {
-        let args = |list: &[&str]| list.iter().map(OsString::from).collect::<Vec<_>>();
-        assert_eq!(
-            forwarded_model_arg(&args(&["--model", "arc-swift-1.0", "-p", "hi"])).as_deref(),
-            Some("arc-swift-1.0")
-        );
-        assert_eq!(
-            forwarded_model_arg(&args(&["-p", "--model=opus", "hi"])).as_deref(),
-            Some("opus")
-        );
-        assert_eq!(
-            forwarded_model_arg(&args(&["--model", "a", "--model=b"])).as_deref(),
-            Some("b")
-        );
-        // After Claude Code's own `--`, `--model` is prompt text.
-        assert_eq!(
-            forwarded_model_arg(&args(&["-p", "--", "--model", "x"])),
-            None
-        );
-        assert_eq!(forwarded_model_arg(&args(&["-p", "hi"])), None);
-        assert_eq!(forwarded_model_arg(&args(&["--model="])), None);
     }
 }
 
