@@ -137,7 +137,11 @@ impl Progress {
                 let due = state
                     .shown
                     .is_some_and(|shown| now - shown >= if self.tty { REDRAW } else { EVERY });
-                if due || (!self.tty && tenths > state.tenths) {
+                // A terminal draws the report that first completes the
+                // download, so its line ends at 100%; elsewhere the last
+                // tenth's line does.
+                let completes = self.tty && !state.verifying && got >= total;
+                if due || completes || (!self.tty && tenths > state.tenths) {
                     state.shown = Some(now);
                     state.tenths = tenths;
                     Some(format!(
@@ -272,6 +276,31 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_terminal_line_ends_at_100_percent_and_never_reads_it_early() {
+        let out = Captured::default();
+        let progress = Progress::new(Box::new(out.clone()), true);
+        let total = 1_112_400_000;
+        progress.expect(total);
+        progress.on_bytes(0);
+        // Within a redraw interval of the first frame: drawn only once complete.
+        progress.on_bytes(total - 100_000);
+        progress.on_bytes(total);
+        let text = out.text();
+        let frames: Vec<&str> = text.split("\r\x1b[K").filter(|f| !f.is_empty()).collect();
+        assert_eq!(
+            frames[frames.len() - 2],
+            "Downloading ARC release: 1,112 / 1,112 MB (100%)",
+            "{text}"
+        );
+        assert_eq!(frames[frames.len() - 1], "Verifying the ARC release...");
+        // A repeated report of the last bytes doesn't draw over verifying.
+        progress.on_bytes(total);
+        assert_eq!(out.text(), text);
+        let started = Instant::now();
+        assert!(fraction(total - 100_000, total, 0, started).ends_with("(99%)"));
+    }
+
+    #[test]
     fn megabytes_have_thousands_separators() {
         assert_eq!(megabytes(999_999), "0");
         assert_eq!(megabytes(1_018_125_184), "1,018");
@@ -296,6 +325,15 @@ pub(crate) mod tests {
         assert!(lines[10].starts_with("Downloading ARC release: 100 / 100 MB (100%)"));
         assert_eq!(lines[11], "Verifying the ARC release...");
         assert!(lines[12].starts_with("ARC release downloaded: 100 MB in "));
+
+        // A repeated report of the last bytes prints nothing more.
+        let out = Captured::default();
+        let progress = Progress::new(Box::new(out.clone()), false);
+        progress.expect(100);
+        for bytes in [0, 100, 100] {
+            progress.on_bytes(bytes);
+        }
+        assert_eq!(out.text().lines().count(), 3, "{}", out.text());
     }
 
     #[test]

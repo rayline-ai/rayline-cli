@@ -343,6 +343,7 @@ fn load_from(
             });
         }
     };
+    let absent = text.is_none();
     let root = match text {
         Some(text) => parse_json(&text).map_err(|failure| match failure {
             JsonFailure::Syntax(error) => ConfigError::Parse {
@@ -389,7 +390,15 @@ fn load_from(
         Mode::File(_) => routing.is_some(),
     };
     if local && routing.is_none() {
-        return Err(doc.err("routing", "is required in local mode"));
+        return Err(doc.err(
+            "routing",
+            if absent {
+                "is required in local mode, and this file doesn't exist: create it with a \
+                 `routing` section (to run Claude Code, include `routing.classifier_model`)"
+            } else {
+                "is required in local mode"
+            },
+        ));
     }
     for (id, model) in &raw.models {
         if !raw.endpoints.contains_key(&model.endpoint) {
@@ -2071,7 +2080,13 @@ mod tests {
             );
         }
         let empty = temp_home();
-        assert_eq!(key_error(load(&empty, opts(Mode::Local))).0, "routing");
+        let error = load(&empty, opts(Mode::Local)).unwrap_err().to_string();
+        assert!(
+            error.starts_with(&format!("{}: `routing`", settings_file(&empty).display())),
+            "{error}"
+        );
+        assert!(error.contains("doesn't exist: create it"), "{error}");
+        assert!(error.contains("routing.classifier_model"), "{error}");
     }
 
     #[test]
