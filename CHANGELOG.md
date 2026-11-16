@@ -3,7 +3,7 @@
 User-facing changes in each Rayline release. Install commands and signed
 assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock/releases).
 
-## Unreleased
+## 0.5.3 (2026-11-16)
 
 ### Added
 
@@ -17,10 +17,40 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   Other GPUs (Vulkan) and CPU-only machines aren't supported. See
   [Local mode](docs/local-mode.md).
 
+- **`rayline top` says where routing decisions are made**: `Router: local ARC
+  (<model>) on this machine` or `Router: hosted ARC (<model>) in Rayline
+  Platform`, with each request's decision time and event.
+
 ### Changed
 
 - **The Linux `rayline` binary runs on glibc 2.28 or later** (RHEL 8, Debian
   10, Ubuntu 18.10 and newer). It needed glibc 2.39 before.
+- **Starting local decisions is faster with a cached release.** A cached ARC
+  release file that hasn't changed since it was verified isn't hashed again
+  (macOS and Linux; Windows still hashes every start). A cached start on an
+  M-series Mac took about 3.1 s and now takes about 1.2 s.
+- **Local decisions check for the ARC encoder before downloading anything**,
+  and the error says whether releases ship an encoder for your platform (use
+  `hosted`) or it just isn't installed (run `rayline update`).
+- **A failed `rayline local start` shows the error the local process printed**,
+  not only a pointer to its log.
+- **Local mode refuses a Pi older than 0.87.1**, whose turns all failed, with
+  a message saying to update Pi.
+- **A missing `settings.json` in local mode says to create it**, and which
+  `routing` keys Claude Code needs.
+
+### Fixed
+
+- **`rayline local stop` could return before the local process had removed
+  its state**, leaving a `gateway-token` that made every later `start`,
+  `stop` and `status` fail until it was deleted by hand. `stop` now returns
+  only once the process's state is gone. If you hit this on 0.5.2, delete
+  `~/.rayline/local/gateway-token`, then run `rayline local start`.
+- **The ARC encoder is stopped even when the execution core fails to stop.**
+- **The download progress line ends at 100%**, and an output rate is shown
+  only after half a second of output.
+- **On Windows, `rayline local status` shows the config path without the
+  `\\?\` prefix.**
 
 ## 0.5.2 (2026-11-15)
 
