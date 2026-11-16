@@ -974,11 +974,13 @@ fn local_arc(home: &Path, routing: &crate::config::Routing) -> io::Result<Option
             let directory = executable
                 .parent()
                 .ok_or_else(|| io::Error::other("rayline executable has no parent directory"))?;
-            arc_encoder_beside(directory, ENCODER_SHIPS)?
+            let encoder = arc_encoder_beside(directory, ENCODER_SHIPS)?;
+            // The shipped Linux encoder runs on CUDA; an override may not.
+            #[cfg(target_os = "linux")]
+            nvidia_driver(load_libcuda())?;
+            encoder
         }
     };
-    #[cfg(target_os = "linux")]
-    nvidia_driver(load_libcuda())?;
     // Development overrides: `RAYLINE_ARC_MODEL` and `RAYLINE_ARC_ENCODER`
     // name the encoder weights and binary, `RAYLINE_ARC_RELEASE` a release
     // directory. Without them, the
