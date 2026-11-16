@@ -627,6 +627,8 @@ async fn launch(
         probe_decisions(&config, &router_key, settings.env.as_deref(), say).await?;
     }
     let log = private_log(&paths.log())?;
+    // Where this start's lines begin in the append-only log.
+    let log_start = log.metadata()?.len();
     let mut command = Command::new(current_exe()?);
     command
         .arg(crate::cli::LOCAL_PROCESS)
@@ -695,10 +697,16 @@ async fn launch(
         let started = Instant::now();
         loop {
             if let Some(status) = child.try_wait()? {
-                return Err(io::Error::other(format!(
+                let exited = format!(
                     "the local process exited ({status}); see {}",
                     paths.log().display()
-                )));
+                );
+                return Err(io::Error::other(
+                    match exit_reason(&paths.log(), log_start) {
+                        Some(reason) => format!("{reason}\n{exited}"),
+                        None => exited,
+                    },
+                ));
             }
             if paths.ready().exists() {
                 let state = ready(paths)?;
@@ -1514,6 +1522,36 @@ fn write_private_json(path: &Path, value: &Value, pretty: bool) -> io::Result<()
     Ok(())
 }
 
+/// The error the local process printed before it exited: the last
+/// `Error: ` line in the log at or after `start`, read from at most its last
+/// 64 KiB. `None` when it printed none, or the log can't be read.
+fn exit_reason(log: &Path, start: u64) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    const TAIL: u64 = 64 * 1024;
+    let mut file = fs::File::open(log).ok()?;
+    let end = file.metadata().ok()?.len();
+    let from = start.max(end.saturating_sub(TAIL));
+    // A cut after `start` reads from the byte before it and drops through the
+    // first newline, so it never takes part of a line for a whole one.
+    let cut = from > start;
+    file.seek(SeekFrom::Start(if cut { from - 1 } else { from }))
+        .ok()?;
+    let mut tail = Vec::new();
+    file.read_to_end(&mut tail).ok()?;
+    let lines = if cut {
+        let newline = tail.iter().position(|&byte| byte == b'\n')?;
+        &tail[newline + 1..]
+    } else {
+        &tail[..]
+    };
+    String::from_utf8_lossy(lines)
+        .lines()
+        .rev()
+        .find_map(|line| line.trim_end().strip_prefix("Error: "))
+        .filter(|reason| !reason.is_empty())
+        .map(str::to_owned)
+}
+
 /// Open the append-only runtime log owner-only: never through a symlink, and
 /// narrowed to 0600 even when an older file was looser.
 fn private_log(path: &Path) -> io::Result<fs::File> {
@@ -1746,6 +1784,35 @@ fn acquire_lock(lock_path: &Path) -> io::Result<std::fs::File> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failed_start_shows_the_error_the_local_process_printed() {
+        let log = temp_dir("exit-reason").join("runtime.log");
+        fs::write(&log, "Error: an earlier start failed\n").unwrap();
+        let start = fs::metadata(&log).unwrap().len();
+        let mut file = fs::OpenOptions::new().append(true).open(&log).unwrap();
+        std::io::Write::write_all(
+            &mut file,
+            b"\x1b[2m2026-11-16T13:00:00Z\x1b[0m INFO starting\r\nError: the ARC encoder found no GPU it can use\r\n",
+        )
+        .unwrap();
+        assert_eq!(
+            exit_reason(&log, start).as_deref(),
+            Some("the ARC encoder found no GPU it can use")
+        );
+        // Only this start's lines count.
+        fs::write(&log, "Error: an earlier start failed\nINFO starting\n").unwrap();
+        assert_eq!(exit_reason(&log, start), None);
+        // Past 64 KiB, a line the cut lands in is dropped, not read from the cut.
+        let line = "INFO quoted: Error: not a reason\n";
+        let filler = "x".repeat(64 * 1024 - line.len() + "INFO quoted: ".len() - 1);
+        fs::write(&log, format!("{line}{filler}\n")).unwrap();
+        assert_eq!(exit_reason(&log, 0), None);
+        // A line that starts exactly at the cut is kept whole.
+        let after = "x".repeat(64 * 1024 - "Error: the real one\n".len() - 1);
+        fs::write(&log, format!("INFO a\nError: the real one\n{after}\n")).unwrap();
+        assert_eq!(exit_reason(&log, 0).as_deref(), Some("the real one"));
+    }
 
     #[test]
     fn the_ready_file_s_skipped_models_become_one_warning_each() {
