@@ -2631,6 +2631,20 @@ mod tests {
     }
 
     #[test]
+    fn clearing_state_removes_a_stale_routes_token() {
+        let dir = temp_dir("stale-routes-token");
+        let paths = Paths { dir: dir.clone() };
+        fs::write(paths.routes_token(), "stale").unwrap();
+        fs::write(paths.ready(), "{}").unwrap();
+        clear_state(&paths).unwrap();
+        assert!(!paths.routes_token().exists());
+        assert!(!paths.ready().exists());
+        // Nothing to clear is not an error.
+        clear_state(&paths).unwrap();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn running_reads_the_record_of_a_live_process_only() {
         let dir = temp_dir("running");
         let paths = Paths { dir: dir.clone() };

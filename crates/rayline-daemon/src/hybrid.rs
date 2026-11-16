@@ -230,9 +230,7 @@ pub async fn run(args: Args) -> Result<()> {
         tracing::info!(url = %encoder.url, pid = ?encoder.pid(), "local ARC encoder ready");
         let access = crate::hybrid_arc::RoutesAccess::for_core(&core_config)?;
         arc_routes_token = Some(access.token.clone());
-        let decide_token_file = args.ready_file.with_file_name(ROUTES_TOKEN_FILE);
-        write_private_new(&decide_token_file, access.decide_token.as_bytes())?;
-        cleanup.routes_token = Some(decide_token_file);
+        cleanup.publish_routes_token(&args.ready_file, &access.decide_token)?;
         let (routes_url, task) = crate::hybrid_arc::serve_routes(
             release_dir,
             &args.arc_alias,
@@ -1439,6 +1437,16 @@ struct StateFiles {
     ready: Option<PathBuf>,
     routes_token: Option<PathBuf>,
 }
+impl StateFiles {
+    /// Writes the decide-only token beside the ready file, owner-only, and
+    /// removes it with the other state files.
+    fn publish_routes_token(&mut self, ready_file: &Path, token: &str) -> Result<()> {
+        let path = ready_file.with_file_name(ROUTES_TOKEN_FILE);
+        write_private_new(&path, token.as_bytes())?;
+        self.routes_token = Some(path);
+        Ok(())
+    }
+}
 impl Drop for StateFiles {
     fn drop(&mut self) {
         if let Some(path) = &self.ready {
@@ -1531,6 +1539,69 @@ async fn stop_child(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_routes_token_is_published_beside_the_ready_file_and_removed_with_it() {
+        let dir = std::env::temp_dir().join(format!("rayline-routes-token-{}", token()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ready_file = dir.join("ready.json");
+        let path = dir.join(ROUTES_TOKEN_FILE);
+        let mut cleanup = StateFiles {
+            token: dir.join("gateway-token"),
+            ready: None,
+            routes_token: None,
+        };
+        cleanup
+            .publish_routes_token(&ready_file, "decide-token")
+            .unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "decide-token");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        // An existing file is never replaced.
+        let mut other = StateFiles {
+            token: dir.join("other-token"),
+            ready: None,
+            routes_token: None,
+        };
+        assert!(other.publish_routes_token(&ready_file, "other").is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "decide-token");
+        drop(other);
+        assert!(path.exists());
+        drop(cleanup);
+        assert!(!path.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_ready_file_names_the_routes_url_with_local_decisions_only() {
+        let ready = |routes_url: Option<&str>| {
+            serde_json::to_value(Ready {
+                contract_version: CONTRACT_VERSION,
+                ready: true,
+                listen_url: "http://127.0.0.1:5000".to_owned(),
+                pid: 1,
+                core_pid: 2,
+                instance_id: "i".to_owned(),
+                capabilities: ModelCapabilities {
+                    context_window: 2,
+                    max_output_tokens: 1,
+                    input_modalities: vec!["text".to_owned()],
+                },
+                routes_url: routes_url.map(str::to_owned),
+                skipped_models: Vec::new(),
+            })
+            .unwrap()
+        };
+        assert_eq!(
+            ready(Some("http://127.0.0.1:5001/v1/routes"))["routes_url"],
+            "http://127.0.0.1:5001/v1/routes"
+        );
+        assert!(ready(None).get("routes_url").is_none());
+    }
 
     #[test]
     fn response_observation_requires_identity_encoding_and_exact_sse_media_type() {
