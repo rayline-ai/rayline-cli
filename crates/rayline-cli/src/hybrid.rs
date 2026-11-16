@@ -225,10 +225,9 @@ fn canonical_config(settings: &Settings) -> io::Result<PathBuf> {
     let mut at = settings.file.as_path();
     loop {
         match fs::canonicalize(at) {
-            Ok(path) => {
-                let mut path = without_verbatim_prefix(path);
+            Ok(mut path) => {
                 path.extend(missing.iter().rev());
-                return Ok(path);
+                return Ok(without_verbatim_prefix(path));
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 let (Some(parent), Some(name)) = (at.parent(), at.file_name()) else {
@@ -243,9 +242,10 @@ fn canonical_config(settings: &Settings) -> io::Result<PathBuf> {
 }
 
 /// `path` without the `\\?\` prefix Windows' canonical paths carry, where
-/// the plain form names the same file: a drive path under `MAX_PATH`
-/// (`\\?\C:\x` is `C:\x`) or a UNC share (`\\?\UNC\host\share` is
-/// `\\host\share`). Shown to the user and compared between runs, so it
+/// the plain form names the same file: a drive path (`\\?\C:\x` is `C:\x`)
+/// or a UNC share (`\\?\UNC\host\share` is `\\host\share`) within
+/// `MAX_PATH`, with no component ending in `.` or a space (which plain paths
+/// drop). Shown to the user and compared between runs, so it
 /// reads as the user wrote it. Other paths, and every path elsewhere, are
 /// unchanged.
 fn without_verbatim_prefix(path: PathBuf) -> PathBuf {
@@ -270,7 +270,10 @@ fn plain_windows_path(verbatim: &str) -> Option<String> {
         }
         rest.to_owned()
     };
-    (plain.len() <= MAX_PLAIN).then_some(plain)
+    let trimmed = plain
+        .split('\\')
+        .any(|component| component.ends_with('.') || component.ends_with(' '));
+    (plain.encode_utf16().count() <= MAX_PLAIN && !trimmed).then_some(plain)
 }
 
 /// `rayline local start`: start the local process from `settings`.
@@ -1879,6 +1882,12 @@ mod tests {
         assert_eq!(plain_windows_path(r"\\?\GLOBALROOT\Device\x"), None);
         let long = format!(r"\\?\C:\{}", "a".repeat(300));
         assert_eq!(plain_windows_path(&long), None);
+        // Length is in UTF-16 units, as MAX_PATH counts.
+        let wide = format!(r"\\?\C:\{}", "設".repeat(200));
+        assert!(plain_windows_path(&wide).is_some());
+        // A plain path would drop the trailing dot or space.
+        assert_eq!(plain_windows_path(r"\\?\C:\cfg\settings.json."), None);
+        assert_eq!(plain_windows_path(r"\\?\C:\cfg \settings.json"), None);
     }
 
     #[test]
