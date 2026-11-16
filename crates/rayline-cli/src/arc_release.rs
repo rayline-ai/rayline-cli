@@ -97,9 +97,10 @@ pub fn expect_unless_cached(hub: &Path, file: &Pinned<'_>, progress: &Progress) 
 }
 
 /// The pinned file's path in the cache at `hub`: the cached copy when it
-/// matches (hashed on every call: a blob's name doesn't prove its bytes),
-/// else downloaded, telling `progress`. A copy that doesn't match is
-/// removed; a download that doesn't match is refused.
+/// matches, else downloaded, telling `progress`. A copy that doesn't match is
+/// removed; a download that doesn't match is refused. A cached copy is
+/// hashed unless its verified stamp still matches (a blob's name doesn't
+/// prove its bytes; see [`verified_stamp`]).
 pub fn fetch_file(
     hub: &Path,
     hub_url: &str,
@@ -110,7 +111,7 @@ pub fn fetch_file(
     let (repo, revision, path) = (file.repo, file.revision, file.path.as_str());
     let matches = |at: &Path| {
         fs::metadata(at).is_ok_and(|meta| meta.len() <= file.max_bytes)
-            && file_sha256(at).is_some_and(|sha| sha == file.sha256)
+            && (stamped(hub, at, &file.sha256) || hashes_to(hub, at, &file.sha256))
     };
     if let Some(cached) = rayline_hf::cached_hf_file(hub, repo, path, revision) {
         if matches(&cached) {
@@ -142,6 +143,91 @@ pub fn fetch_file(
     Err(format!(
         "{path} from {repo} at {revision} is not the pinned file; it was removed from the cache"
     ))
+}
+
+/// Where the stamps of files already hashed are kept: one per sha256.
+fn stamps(hub: &Path) -> PathBuf {
+    hub.join(".rayline-verified")
+}
+
+/// What identifies the file `at` resolves to, as it is now: its real path,
+/// size, modification and (on Unix) inode change times, device and inode.
+/// Any write, rename over or permission change since alters it. `None` when
+/// any part can't be read.
+fn verified_stamp(at: &Path) -> Option<String> {
+    let real = fs::canonicalize(at).ok()?;
+    let meta = fs::metadata(&real).ok()?;
+    if !meta.is_file() {
+        return None;
+    }
+    #[cfg(unix)]
+    let identity = {
+        use std::os::unix::fs::MetadataExt as _;
+        format!(
+            "mtime {}.{}\nctime {}.{}\ndev {}\nino {}",
+            meta.mtime(),
+            meta.mtime_nsec(),
+            meta.ctime(),
+            meta.ctime_nsec(),
+            meta.dev(),
+            meta.ino()
+        )
+    };
+    #[cfg(not(unix))]
+    let identity = {
+        let since = |time: std::io::Result<std::time::SystemTime>| {
+            time.ok()?
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .map(|d| d.as_nanos())
+        };
+        format!(
+            "mtime {}\ncreated {}",
+            since(meta.modified())?,
+            since(meta.created())?
+        )
+    };
+    Some(format!(
+        "path {}\nbytes {}\n{identity}\n",
+        real.display(),
+        meta.len()
+    ))
+}
+
+/// Whether `at` is unchanged since it last hashed to `sha256`: its stamp
+/// equals the one recorded then. Anything missing or unreadable is no.
+fn stamped(hub: &Path, at: &Path, sha256: &str) -> bool {
+    let Some(now) = verified_stamp(at) else {
+        return false;
+    };
+    fs::read_to_string(stamps(hub).join(sha256)).is_ok_and(|recorded| recorded == now)
+}
+
+/// Whether `at` hashes to `sha256`; when it does, records its stamp. The
+/// stamp is taken before hashing, so a change during the hash leaves a stamp
+/// the next check doesn't match.
+fn hashes_to(hub: &Path, at: &Path, sha256: &str) -> bool {
+    let before = verified_stamp(at);
+    if file_sha256(at).is_none_or(|actual| actual != sha256) {
+        return false;
+    }
+    if let Some(stamp) = before {
+        record_stamp(hub, sha256, &stamp);
+    }
+    true
+}
+
+/// Writes a stamp, replacing any before it. A stamp that can't be written
+/// only means the file is hashed again next time.
+fn record_stamp(hub: &Path, sha256: &str, stamp: &str) {
+    let dir = stamps(hub);
+    let tmp = dir.join(format!(".{sha256}.{}.tmp", std::process::id()));
+    let written = fs::create_dir_all(&dir)
+        .and_then(|()| fs::write(&tmp, stamp))
+        .and_then(|()| fs::rename(&tmp, dir.join(sha256)));
+    if written.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
 }
 
 /// The SHA-256 of the file at `path`, read in chunks.
@@ -466,6 +552,62 @@ mod tests {
             fs::read(dir.join("heads.safetensors")).expect("read"),
             b"heads"
         );
+        let _ = fs::remove_dir_all(hub);
+    }
+
+    #[test]
+    fn a_hashed_file_is_stamped_and_any_change_since_voids_the_stamp() {
+        let hub = scratch("stamp");
+        fs::create_dir_all(&hub).expect("hub");
+        let file = hub.join("blob");
+        fs::write(&file, b"heads").expect("write");
+        let sha = sha256_hex(b"heads");
+        assert!(!stamped(&hub, &file, &sha), "no stamp before a hash");
+        assert!(!hashes_to(&hub, &file, &sha256_hex(b"other")));
+        assert!(
+            !stamped(&hub, &file, &sha256_hex(b"other")),
+            "a failed hash records nothing"
+        );
+        assert!(hashes_to(&hub, &file, &sha));
+        assert!(stamped(&hub, &file, &sha));
+        // The stamp is for this sha256 only.
+        assert!(!stamped(&hub, &file, &sha256_hex(b"other")));
+
+        // The same length rewritten, with its modification time put back.
+        let modified = fs::metadata(&file)
+            .and_then(|m| m.modified())
+            .expect("mtime");
+        fs::write(&file, b"HEADS").expect("rewrite");
+        fs::File::options()
+            .write(true)
+            .open(&file)
+            .and_then(|f| f.set_modified(modified))
+            .expect("set mtime");
+        #[cfg(unix)]
+        assert!(!stamped(&hub, &file, &sha), "the inode change time moved");
+
+        // Another file with the same bytes isn't the stamped one.
+        fs::write(&file, b"heads").expect("restore");
+        assert!(hashes_to(&hub, &file, &sha));
+        let copy = hub.join("copy");
+        fs::copy(&file, &copy).expect("copy");
+        assert!(!stamped(&hub, &copy, &sha));
+
+        // An unreadable or unparseable stamp is no stamp.
+        fs::write(stamps(&hub).join(&sha), b"garbage").expect("stamp");
+        assert!(!stamped(&hub, &file, &sha));
+        let _ = fs::remove_dir_all(hub);
+    }
+
+    #[test]
+    fn a_cached_release_is_stamped_once_verified() {
+        let hub = scratch("stamped");
+        let (served, pin) = release(&FILES);
+        let fake = fake_hub(served);
+        let dir = fetch(&hub, &fake.url, None, &pin, &Progress::silent()).expect("fetches");
+        for (name, body) in FILES {
+            assert!(stamped(&hub, &dir.join(name), &sha256_hex(body)), "{name}");
+        }
         let _ = fs::remove_dir_all(hub);
     }
 
