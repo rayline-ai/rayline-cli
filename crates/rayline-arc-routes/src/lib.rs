@@ -29,14 +29,14 @@ pub use catalog::{Action, Catalog, CatalogError};
 pub use digest::{jcs, offer_sha256, price_sha256, sha256_hex};
 pub use error::Refusal;
 pub use execution::{
-    ActionCache, Attribution, CapacityFact, Compaction, Event, PinStatus, Pinned, Turn,
+    ActionCache, Attribution, CapacityFact, Compaction, EVENT_KINDS, Event, PinStatus, Pinned, Turn,
 };
 pub use parse::{
     CacheContext, DecideInput, Legs, OperatingPoint, PackageRef, ParseContext, Parsed,
     RequestHeaders, RequestText, Restate, RoutingPrices, Selection, Tier, parse, serves_model,
 };
 pub use policy::{Overrides, Policy, Schedule, Selection as SelectionThresholds};
-pub use server::{DecideFuture, Decider, Router, RouterConfig, RouterError};
+pub use server::{DecideFuture, Decider, DecisionHook, Router, RouterConfig, RouterError};
 pub use shape::shape;
 
 /// The price legs of one model, in USD per million tokens, in contract order.

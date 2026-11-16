@@ -73,6 +73,10 @@ fn origin(url: &str, what: &str) -> Result<String, RouterError> {
     Ok(parsed.origin().ascii_serialization())
 }
 
+/// Called with each answered decision's route id and how long it took, in
+/// milliseconds.
+pub type DecisionHook = Arc<dyn Fn(&str, u64) + Send + Sync>;
+
 pub struct RouterConfig {
     pub catalog: Catalog,
     /// Where every path but `/v1/routes` is forwarded: an origin such as
@@ -95,6 +99,7 @@ pub struct RouterConfig {
     /// caller's header then holds the local token, not an upstream
     /// credential). `None` forwards without one.
     pub upstream_authorization: Option<String>,
+    pub on_decision: Option<DecisionHook>,
 }
 
 impl RouterConfig {
@@ -107,6 +112,7 @@ impl RouterConfig {
             access_token: None,
             decide_token: None,
             upstream_authorization: None,
+            on_decision: None,
         }
     }
 }
@@ -121,6 +127,7 @@ pub struct Router {
     access_token: Option<String>,
     decide_token: Option<String>,
     upstream_authorization: Option<HeaderValue>,
+    on_decision: Option<DecisionHook>,
 }
 
 /// What an admitted caller may ask.
@@ -210,6 +217,7 @@ impl Router {
                 })?),
                 None => None,
             },
+            on_decision: config.on_decision,
         })
     }
 
@@ -238,8 +246,13 @@ impl Router {
         .await;
         match result {
             Ok((out, kind)) => {
+                let ms = elapsed();
+                if let (Some(hook), Some(route_id)) = (&self.on_decision, out["route_id"].as_str())
+                {
+                    hook(route_id, ms);
+                }
                 tracing::info!(
-                    ms = elapsed(),
+                    ms,
                     route_id = out["route_id"].as_str(),
                     model = out["model"].as_str(),
                     worker = out["worker"].as_str(),

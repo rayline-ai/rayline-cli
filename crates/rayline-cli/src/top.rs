@@ -275,6 +275,9 @@ fn draw_top(
 
     let mut y = 0;
     y = draw_title(stdout, y, width, "Rayline CLI Top")?;
+    if let Some(router) = router_line(snapshot) {
+        y = draw_colored_line(stdout, y, width, Color::DarkCyan, &router)?;
+    }
     y = draw_top_summary(stdout, y, width, snapshot, paused, sort)?;
     if let Some(error) = last_error {
         y = draw_colored_line(
@@ -486,44 +489,87 @@ fn top_sort_value(row: &Value, sort: TopSort) -> f64 {
     }
 }
 
+/// The router that decides, from the snapshot's `router`: `None` from a
+/// local process that doesn't say.
+fn router_line(snapshot: &Value) -> Option<String> {
+    let router = snapshot.get("router")?;
+    let model = router
+        .get("model")
+        .and_then(Value::as_str)
+        .map(|model| format!(" ({model})"))
+        .unwrap_or_default();
+    match router.get("kind").and_then(Value::as_str)? {
+        "local" => Some(format!("Router: local ARC{model} on this machine")),
+        "hosted" => Some(format!("Router: hosted ARC{model} in Rayline Platform")),
+        _ => None,
+    }
+}
+
+/// The router that decided a row, with how long a local decision took.
+fn router_cell(row: &Value) -> String {
+    match (
+        value_str(row, "router"),
+        row.get("decision_ms").and_then(Value::as_u64),
+    ) {
+        (made, Some(ms)) => format!("{made} {}", format_ms(ms)),
+        (made, None) => made.to_owned(),
+    }
+}
+
+/// Terminals at least this wide show every column; narrower ones leave out
+/// input tokens, cache %, age, prefill rate and the decision's event, so the
+/// model stays in view.
+const WIDE_TOP: u16 = 140;
+
 fn top_table_header(width: u16) -> String {
-    if width < 120 {
+    if width < WIDE_TOP {
         format!(
-            "{:<14} {:<7} {:<10} {:>7} {:>7} {:>7} {:>6} {:>6} MODEL",
-            "REQ", "TARGET", "STATE", "OUT", "CACHE %", "TTFT", "PF", "TG"
+            "{:<14} {:<7} {:<10} {:>7} {:>7} {:>6} {:<11} MODEL",
+            "REQ", "TARGET", "STATE", "OUT", "TTFT", "TG", "ROUTER"
         )
     } else {
         format!(
-            "{:<18} {:<8} {:<10} {:>7} {:>7} {:>7} {:>8} {:>8} {:>6} {:>6} MODEL / POLICY",
-            "REQ", "TARGET", "STATE", "IN", "OUT", "CACHE %", "AGE", "TTFT", "PF", "TG"
+            "{:<18} {:<8} {:<10} {:>7} {:>7} {:>7} {:>8} {:>8} {:>6} {:>6} {:<11} {:<11} MODEL / POLICY",
+            "REQ",
+            "TARGET",
+            "STATE",
+            "IN",
+            "OUT",
+            "CACHE %",
+            "AGE",
+            "TTFT",
+            "PF",
+            "TG",
+            "ROUTER",
+            "EVENT"
         )
     }
 }
 
 fn top_table_row(row: &Value, width: u16) -> String {
-    let request_id = truncate_cell(
-        value_str(row, "request_id"),
-        if width < 120 { 14 } else { 18 },
-    );
     let target = truncate_cell(top_target_cell(row), 8);
     let state = truncate_cell(value_str(row, "state"), 10);
     let output_tokens = count_cell(row, "output_tokens");
     let ttft = ms_cell(row, "ttft_ms");
-    let prefill_tps = rate_cell(row, "prefill_tps");
     let generation_tps = rate_cell(row, "output_tps");
-    let cache_hit = percent_cell(row, "cache_hit_ratio");
+    let router = truncate_cell(&router_cell(row), 11);
     let model = top_model_cell(row);
 
-    if width < 120 {
+    if width < WIDE_TOP {
+        let request_id = truncate_cell(value_str(row, "request_id"), 14);
         return format!(
-            "{request_id:<14} {target:<7} {state:<10} {output_tokens:>7} {cache_hit:>7} {ttft:>7} {prefill_tps:>6} {generation_tps:>6} {model}"
+            "{request_id:<14} {target:<7} {state:<10} {output_tokens:>7} {ttft:>7} {generation_tps:>6} {router:<11} {model}"
         );
     }
 
+    let request_id = truncate_cell(value_str(row, "request_id"), 18);
+    let event = truncate_cell(value_str(row, "decision_event"), 11);
     let input_tokens = count_cell(row, "input_tokens");
+    let cache_hit = percent_cell(row, "cache_hit_ratio");
     let age = ms_cell(row, "duration_ms");
+    let prefill_tps = rate_cell(row, "prefill_tps");
     format!(
-        "{request_id:<18} {target:<8} {state:<10} {input_tokens:>7} {output_tokens:>7} {cache_hit:>7} {age:>8} {ttft:>8} {prefill_tps:>6} {generation_tps:>6} {model}"
+        "{request_id:<18} {target:<8} {state:<10} {input_tokens:>7} {output_tokens:>7} {cache_hit:>7} {age:>8} {ttft:>8} {prefill_tps:>6} {generation_tps:>6} {router:<11} {event:<11} {model}"
     )
 }
 
@@ -531,11 +577,16 @@ fn format_top_snapshot(snapshot: &Value) -> String {
     let active = row_count(snapshot, "active");
     let recent = row_count(snapshot, "recent");
     let totals = &snapshot["totals"];
-    let mut output = format!(
-        "Rayline CLI top snapshot\nactive: {active}  recent: {recent}  completed: {}  errors: {}\n",
+    let mut output = "Rayline CLI top snapshot\n".to_owned();
+    if let Some(router) = router_line(snapshot) {
+        output.push_str(&router);
+        output.push('\n');
+    }
+    output.push_str(&format!(
+        "active: {active}  recent: {recent}  completed: {}  errors: {}\n",
         totals_u64(totals, "completed_requests"),
         totals_u64(totals, "errored_requests"),
-    );
+    ));
     for row in rows(snapshot, "active") {
         output.push_str(&format_top_row(row));
     }
@@ -555,8 +606,10 @@ fn format_top_row(row: &Value) -> String {
     let prefill_tps = rate_cell(row, "prefill_tps");
     let generation_tps = rate_cell(row, "output_tps");
     let cache_hit = percent_cell(row, "cache_hit_ratio");
+    let router = router_cell(row);
+    let event = value_str(row, "decision_event");
     format!(
-        "{request_id:<22} {target:<10} {state:<10} out={output_tokens:<7} cache%={cache_hit:<7} ttft={ttft:<8} pf={prefill_tps:<6} tg={generation_tps:<6} {model}\n"
+        "{request_id:<22} {target:<10} {state:<10} out={output_tokens:<7} cache%={cache_hit:<7} ttft={ttft:<8} pf={prefill_tps:<6} tg={generation_tps:<6} router={router:<12} event={event:<11} {model}\n"
     )
 }
 
@@ -946,6 +999,9 @@ mod tests {
             "request_id": "req",
             "target": "local",
             "state": "done",
+            "router": "local",
+            "decision_ms": 38,
+            "decision_event": "task_start",
             "executed_model": "model",
             "input_tokens": 10_200,
             "output_tokens": 1_200_000,
@@ -963,9 +1019,63 @@ mod tests {
         assert_eq!(
             cells,
             [
-                "req", "local", "done", "10.2k", "1.2M", "88%", "10.2s", "999ms", "12.0k", "1.2M",
+                "req",
+                "local",
+                "done",
+                "10.2k",
+                "1.2M",
+                "88%",
+                "10.2s",
+                "999ms",
+                "12.0k",
+                "1.2M",
+                "local",
+                "38ms",
+                "task_start",
                 "model"
             ]
+        );
+        // The model starts where its header does, and in view, at every width.
+        for width in [80, 119, 120, 139, 140, 200] {
+            let header = top_table_header(width);
+            let model = header.find("MODEL").expect("model column");
+            assert!(model + 10 <= usize::from(width), "{width}: {header}");
+            let line = top_table_row(&row, width);
+            assert_eq!(line.find("model"), Some(model), "{width}: {line}");
+            assert!(line.contains("local 38ms "), "{width}: {line}");
+            assert_eq!(line.contains("task_start"), width >= WIDE_TOP, "{width}");
+        }
+    }
+
+    #[test]
+    fn top_names_the_router_that_decides() {
+        let snapshot = |router: Value| serde_json::json!({ "router": router });
+        assert_eq!(
+            router_line(&snapshot(
+                serde_json::json!({"kind": "local", "model": "arc-swift-1.0"})
+            )),
+            Some("Router: local ARC (arc-swift-1.0) on this machine".to_owned())
+        );
+        assert_eq!(
+            router_line(&snapshot(
+                serde_json::json!({"kind": "hosted", "model": "arc-sage-1.0"})
+            )),
+            Some("Router: hosted ARC (arc-sage-1.0) in Rayline Platform".to_owned())
+        );
+        assert_eq!(
+            router_line(&snapshot(
+                serde_json::json!({"kind": "hosted", "model": null})
+            )),
+            Some("Router: hosted ARC in Rayline Platform".to_owned())
+        );
+        assert_eq!(router_line(&serde_json::json!({})), None);
+
+        let row = serde_json::json!({"router": "hosted", "decision_event": "tool_result"});
+        assert_eq!(router_cell(&row), "hosted");
+        assert_eq!(router_cell(&serde_json::json!({})), "-");
+        assert_eq!(
+            router_cell(&serde_json::json!({"router": "local", "decision_ms": 1_250})),
+            "local 1.2s"
         );
     }
 
