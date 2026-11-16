@@ -223,6 +223,7 @@ mod tests {
             env: None,
             harness_protocol: None,
             router: None,
+            routing_defaults: false,
         })
         .unwrap();
         let _ = std::fs::remove_dir_all(&dir);

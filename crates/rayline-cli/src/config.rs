@@ -141,6 +141,35 @@ pub struct Routing {
     pub policy: Policy,
     pub router: Router,
     pub arc_release: Option<ArcRelease>,
+    /// The file has no `routing`: this is the `--router local` defaults.
+    pub defaults: bool,
+}
+
+impl Routing {
+    /// The `settings.json` that runs Claude Code with this routing: it with
+    /// `classifier_model`, which has no default.
+    pub fn with_classifier_model(&self) -> String {
+        let string = |value: &str| Value::from(value).to_string();
+        [
+            "{".to_owned(),
+            "  \"routing\": {".to_owned(),
+            format!("    \"router\": {},", string(self.router.as_str())),
+            format!(
+                "    \"decisions_model\": {},",
+                string(&self.decisions_model)
+            ),
+            format!(
+                "    \"policy\": {{\"preset\": {}}},",
+                string(&self.policy.preset)
+            ),
+            "    \"classifier_model\": \"<model id>\"".to_owned(),
+            "  }".to_owned(),
+            "}".to_owned(),
+        ]
+        .iter()
+        .map(|line| format!("  {line}\n"))
+        .collect()
+    }
 }
 
 /// `environments.<name>`: an internal environment selected with `--env`.
@@ -231,6 +260,9 @@ pub struct LoadOptions<'a> {
     /// `rayline local start --router`: `routing.router`, over the
     /// file's and the env's.
     pub router: Option<Router>,
+    /// `rayline run --local` while a local process started from the
+    /// `--router local` defaults runs: a file without `routing` uses them.
+    pub routing_defaults: bool,
 }
 
 /// `rayline local start --router local` with no `routing` in the file:
@@ -363,13 +395,18 @@ fn load_from(
     let raw = doc.root(&root)?;
     // `--router local` without `routing` starts from its defaults, which
     // env overrides refine like a file's; the flag itself wins over both.
-    let raw_routing = match (raw.routing, options.router) {
-        (None, Some(Router::Local)) => Some(RawRouting {
-            decisions_model: Some(LOCAL_DECISIONS_MODEL.to_owned()),
-            preset: Some(LOCAL_POLICY_PRESET.to_owned()),
-            ..RawRouting::default()
-        }),
-        (routing, _) => routing,
+    // A run on a local process started that way uses them too.
+    let raw_routing = match raw.routing {
+        None if options.router == Some(Router::Local) || options.routing_defaults => {
+            Some(RawRouting {
+                decisions_model: Some(LOCAL_DECISIONS_MODEL.to_owned()),
+                preset: Some(LOCAL_POLICY_PRESET.to_owned()),
+                router: Some(Router::Local),
+                defaults: true,
+                ..RawRouting::default()
+            })
+        }
+        routing => routing,
     };
     // A command that uses no `routing` neither reads nor checks it: its
     // required keys may come from env overrides only a run reads.
@@ -498,6 +535,7 @@ struct RawRouting {
     overrides: Option<Map<String, Value>>,
     router: Option<Router>,
     arc_release: Option<ArcRelease>,
+    defaults: bool,
 }
 
 fn apply_routing_overrides(
@@ -879,6 +917,7 @@ impl<'a> Doc<'a> {
             },
             router,
             arc_release: routing.arc_release,
+            defaults: routing.defaults,
         }))
     }
 
@@ -1261,6 +1300,7 @@ mod tests {
             env: None,
             harness_protocol: None,
             router: None,
+            routing_defaults: false,
         }
     }
 
@@ -2033,6 +2073,24 @@ mod tests {
         assert_eq!(routing.decisions_model, LOCAL_DECISIONS_MODEL);
         assert_eq!(routing.policy.preset, LOCAL_POLICY_PRESET);
         assert_eq!(routing.classifier_model, None);
+        assert!(routing.defaults);
+        // A run on a process started from them loads the same routing.
+        let run = LoadOptions {
+            routing_defaults: true,
+            ..opts(Mode::Local)
+        };
+        assert_eq!(
+            load(&empty, run).expect("run").routing,
+            Some(routing.clone())
+        );
+        // Claude Code's snippet: this routing, with `classifier_model`.
+        let snippet: Value =
+            serde_json::from_str(&routing.with_classifier_model()).expect("snippet is JSON");
+        assert_eq!(
+            snippet,
+            json!({"routing": {"router": "local", "decisions_model": LOCAL_DECISIONS_MODEL,
+                "policy": {"preset": LOCAL_POLICY_PRESET}, "classifier_model": "<model id>"}})
+        );
         // `hosted` has no defaults: it still needs `routing`.
         assert_eq!(key_error(load(&empty, with(Router::Hosted))).0, "routing");
         // Over a file's `routing`, only `router` changes.
@@ -2050,6 +2108,13 @@ mod tests {
         assert_eq!(flagged.decisions_model, file.decisions_model);
         assert_eq!(flagged.policy, file.policy);
         assert_eq!(flagged.classifier_model, file.classifier_model);
+        assert!(!flagged.defaults);
+        // A file's `routing` wins over the defaults a run would use.
+        let run = LoadOptions {
+            routing_defaults: true,
+            ..opts(Mode::Local)
+        };
+        assert_eq!(load(&home, run).expect("run").routing, Some(file));
 
         // Commands that use no `routing` don't read its overrides, so a
         // process started this way can be checked and stopped.
@@ -2160,6 +2225,7 @@ mod tests {
                     env: None,
                     harness_protocol: protocol,
                     router: None,
+                    routing_defaults: false,
                 },
             )
         };
@@ -2194,6 +2260,7 @@ mod tests {
                     env: Some(env),
                     harness_protocol: None,
                     router: None,
+                    routing_defaults: false,
                 },
             )
         };
@@ -2519,6 +2586,7 @@ mod tests {
                         env,
                         harness_protocol,
                         router: None,
+                        routing_defaults: false,
                     };
                     let read = RefCell::new(Vec::new());
                     // Any other var the loader asked for would be set.

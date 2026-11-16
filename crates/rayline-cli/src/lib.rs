@@ -142,6 +142,13 @@ pub async fn run_argv(original_argv: &[OsString]) -> ExitCode {
             cli::Command::Local(cli::Local::Start { router, .. }) => *router,
             _ => None,
         },
+        routing_defaults: matches!(
+            &command,
+            cli::Command::Run(cli::Run {
+                config: cli::ConfigFlag::Local,
+                ..
+            })
+        ) && hybrid::running_from_routing_defaults(),
     }) {
         Ok(settings) => settings,
         Err(error) => {
