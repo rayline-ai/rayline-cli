@@ -630,6 +630,75 @@ fn cloud_probe(binary: &Path) -> Command {
     command
 }
 
+/// Remove `key` from every file Rayline wrote it into: the top-level files of
+/// each harness folder under `~/.rayline/harness/` (cloud-mode configs, the
+/// Codex and Codex app homes) and the Codex `rayline` profile
+/// (`$CODEX_HOME/rayline.config.toml`, else `~/.codex/`). Each match is cut out
+/// in place, so the file keeps every other setting and the harness's
+/// sessions stay; the next launch writes a fresh key. A file holding another
+/// environment's key is left alone. Returns the files changed.
+pub(crate) fn remove_router_key(home: &Path, key: &str) -> io::Result<Vec<PathBuf>> {
+    if key.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut candidates = Vec::new();
+    let harness_root = home.join(crate::DOT_CONFIG_DIR).join("harness");
+    match fs::read_dir(&harness_root) {
+        Ok(dirs) => {
+            for dir in dirs {
+                let dir = dir?.path();
+                if !dir.is_dir() {
+                    continue;
+                }
+                for file in fs::read_dir(&dir)? {
+                    let file = file?;
+                    if file.file_type()?.is_file() {
+                        candidates.push(file.path());
+                    }
+                }
+            }
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    let codex_home = match exported_dir("CODEX_HOME")? {
+        Some(codex_home) => codex_home,
+        None => home.join(".codex"),
+    };
+    candidates.push(codex_home.join("rayline.config.toml"));
+
+    let mut changed = Vec::new();
+    for path in candidates {
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(io::Error::new(
+                    error.kind(),
+                    format!("{}: {error}", path.display()),
+                ));
+            }
+        };
+        let Ok(text) = String::from_utf8(bytes) else {
+            continue;
+        };
+        if !text.contains(key) {
+            continue;
+        }
+        let in_path =
+            |error: io::Error| io::Error::new(error.kind(), format!("{}: {error}", path.display()));
+        let tmp = path.with_file_name(format!(
+            ".{}.tmp-{}",
+            path.file_name().unwrap_or_default().to_string_lossy(),
+            std::process::id()
+        ));
+        write_private(&tmp, &text.replace(key, "")).map_err(in_path)?;
+        fs::rename(&tmp, &path).map_err(in_path)?;
+        changed.push(path);
+    }
+    Ok(changed)
+}
+
 pub(crate) fn build_command(binary: &Path, plan: &Plan, args: &[OsString]) -> Command {
     let mut command = Command::new(binary);
     command.args(args);

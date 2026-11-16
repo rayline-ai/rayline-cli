@@ -50,7 +50,7 @@ Harnesses:
 | Command | Does |
 |---|---|
 | `rayline auth login` | Sign in with Rayline session login in the browser. Writes `credentials.json`. |
-| `rayline auth logout` | Revoke the stored session and remove the stored router key. |
+| `rayline auth logout` | Revoke the stored session and remove the stored router key, also from the harness configs Rayline wrote. |
 | `rayline auth status` | Show the signed-in account and environment. |
 | `rayline auth token` | Print a valid account bearer token. |
 
@@ -377,7 +377,7 @@ When the local process starts, before it serves anything, it also refuses:
 
 ## 6. `credentials.json`
 
-One file: `~/.config/rayline/credentials.json`. `rayline auth login` writes `session` and `router_key` together (it mints the router key at sign-in), `rayline auth logout` removes them, and a token refresh rewrites `session` only, because refresh tokens rotate. Nothing else writes it. It is the only source for Rayline's session and router key: no env var or flag overrides it.
+One file: `~/.config/rayline/credentials.json`. `rayline auth login` writes `session` and `router_key` together (it mints the router key at sign-in), `rayline auth logout` revokes the session, then removes them and cuts the router key out of the harness configs Rayline wrote (`~/.rayline/harness/*/` and the Codex `rayline` profile), and a token refresh rewrites `session` only, because refresh tokens rotate. Nothing else writes it. It is the only source for Rayline's session and router key: no env var or flag overrides it.
 
 ```json
 {
