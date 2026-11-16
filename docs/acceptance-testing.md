@@ -51,7 +51,7 @@ The script:
 
 ## Cases
 
-Every cell has its own directory under `WORK`; the harness runs in its `work/` subdirectory, and the turn logs stay in the cell directory. Every turn is the harness's own non-interactive mode with the arguments in the table below. The script passes no model or reasoning flags: the harness runs on the models and settings Rayline's config gives it.
+Every cell has its own directory under `WORK`; the harness runs in its `work/` subdirectory, and the turn logs stay in the cell directory. Every turn is the harness's own non-interactive mode with the arguments in the table below. The script passes no model or reasoning flags and sets no harness environment variables: the harness runs on the models and settings Rayline's config gives it.
 
 | Case | What the model must do | Catches |
 |---|---|---|
@@ -64,7 +64,7 @@ The answer never appears in the prompt: the sum and the MCP value change every r
 
 | Harness | Turn | Session (`multi`) | MCP server (`heavy`) |
 |---|---|---|---|
-| claude | `-p "<prompt>"` with `MAX_THINKING_TOKENS=8000` | `--session-id <uuid>`, then `--resume <uuid>` | skipped: Claude Code drops tools with top-level `oneOf`/`anyOf`/`allOf` before any request |
+| claude | `-p "<prompt>"` | `--session-id <uuid>`, then `--resume <uuid>` | skipped: Claude Code drops tools with top-level `oneOf`/`anyOf`/`allOf` before any request |
 | codex | `exec --skip-git-repo-check "<prompt>"` | `session id:` from turn 1, then `exec resume <id> ...` | `-c mcp_servers.acceptance.command/args` |
 | opencode | `run "<prompt>"` | `-s ses_<id>` on both turns | skipped: OpenCode wraps MCP tools in its Code Mode `execute` tool, so their schemas never leave the harness |
 | pi | `-p "<prompt>"` | `--session-id <id>` on both turns | `.pi/mcp.json` in the working directory with `"exposure": "direct"` (the default, codemode, keeps the schemas inside Pi), `--approve` |

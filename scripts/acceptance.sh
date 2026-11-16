@@ -37,7 +37,7 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 PROFILE_DIR=$SCRIPT_DIR/acceptance/profiles
 RAYLINE=${RAYLINE:-rayline}
 TIMEOUT=${TIMEOUT:-600}
-PROFILES=${PROFILES:-"$PROFILE_DIR/cloud.json $PROFILE_DIR/local-hosted-arc-swift.json $PROFILE_DIR/local-hosted-arc-sage.json $PROFILE_DIR/local-router-local.json"}
+PROFILES=${PROFILES:-}
 CASES=${CASES:-"plain tool heavy multi"}
 HARNESSES=(claude codex opencode pi omp hermes openclaw)
 ALL_CASES=(plain tool heavy multi)
@@ -82,13 +82,6 @@ harness_cmd() {
     hermes) cmd=(chat "$@" -q "$prompt") ;;
     openclaw) cmd=(agent "$@" -m "$prompt") ;;
   esac
-}
-
-# harness_env <harness>: sets `turn_env` to the environment one turn needs.
-harness_env() {
-  turn_env=()
-  # Claude Code reasons only when given a thinking budget.
-  [ "$1" = claude ] && turn_env=(MAX_THINKING_TOKENS=8000)
 }
 
 # heavy_args <harness> <dir>: sets `args` to the flags that add the MCP tool
@@ -200,10 +193,8 @@ run_turn() {
   shift 4
   # Session args first: Codex's `resume <id>` comes right after `exec`.
   harness_cmd "$harness" "$prompt" "$@" ${cell_flags[@]+"${cell_flags[@]}"}
-  harness_env "$harness"
   [ "$mode" = local ] && offset=$(wc -l <"$RUNTIME_LOG")
-  out=$(cd "$cwd" && with_timeout "$TIMEOUT" env ${turn_env[@]+"${turn_env[@]}"} \
-    "$RAYLINE" run "$harness" --config "$profile_file" -- "${cmd[@]}" </dev/null 2>&1 |
+  out=$(cd "$cwd" && with_timeout "$TIMEOUT" "$RAYLINE" run "$harness" --config "$profile_file" -- "${cmd[@]}" </dev/null 2>&1 |
     sed -E 's/rlk-[A-Za-z0-9_-]+/rlk-<redacted>/g')
   status=${PIPESTATUS[0]}
   printf '%s\n' "$out" >"$log"
@@ -375,7 +366,14 @@ selected=("$@")
 for harness in "${selected[@]}"; do
   one_of "$harness" "${HARNESSES[@]}" || { echo "unknown harness: $harness" >&2; usage; }
 done
-read -r -a profile_files <<<"$PROFILES"
+# The default profiles are an array, so a checkout path with spaces stays one
+# file each; only a PROFILES value given by the caller is split on spaces.
+if [ -n "$PROFILES" ]; then
+  read -r -a profile_files <<<"$PROFILES"
+else
+  profile_files=("$PROFILE_DIR/cloud.json" "$PROFILE_DIR/local-hosted-arc-swift.json"
+    "$PROFILE_DIR/local-hosted-arc-sage.json" "$PROFILE_DIR/local-router-local.json")
+fi
 read -r -a cases <<<"$CASES"
 [ ${#profile_files[@]} -gt 0 ] || { echo "PROFILES is empty" >&2; usage; }
 [ ${#cases[@]} -gt 0 ] || { echo "CASES is empty" >&2; usage; }
