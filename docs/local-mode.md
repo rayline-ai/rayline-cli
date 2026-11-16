@@ -155,7 +155,7 @@ On Windows:
   x86_64, with an NVIDIA GPU of compute capability 7.5, 8.x, 9.0 or 12.0 and
   NVIDIA driver 576 or later. No CUDA toolkit or Visual C++ runtime.
 - It is the encoder plus the cuBLAS DLLs it loads, `cublas64_12.dll` and
-  `cublasLt64_12.dll`, about 0.83 GB together, installed beside `rayline`.
+  `cublasLt64_12.dll`, about 1 GB together, installed beside `rayline`.
 - Windows on Arm and other GPUs aren't supported.
 
 When the encoder finds no GPU it can use (no NVIDIA GPU, or a driver too old

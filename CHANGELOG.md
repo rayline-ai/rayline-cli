@@ -11,7 +11,7 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   Releases ship the ARC encoder for Windows x86_64 with the cuBLAS DLLs it
   loads, and `install-rayline.ps1` and `rayline update` install them beside
   `rayline`. It needs a GPU of compute capability 7.5, 8.x, 9.0 or 12.0 and
-  NVIDIA driver 576 or later, and is about 0.83 GB. See
+  NVIDIA driver 576 or later, and is about 1 GB. See
   [Local mode](docs/local-mode.md).
 - `rayline local start` with `local` decisions fails when the ARC encoder finds
   no GPU it can use, instead of running ARC on the CPU.
