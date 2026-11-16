@@ -1450,16 +1450,20 @@ impl StateFiles {
         self.routes_token = Some(path);
         Ok(())
     }
+
+    /// The files to remove, in order. The ready file goes last: while it
+    /// exists, `rayline local stop` keeps waiting.
+    fn in_removal_order(&self) -> impl Iterator<Item = &Path> {
+        self.routes_token
+            .iter()
+            .map(PathBuf::as_path)
+            .chain([self.token.as_path()])
+            .chain(self.ready.iter().map(PathBuf::as_path))
+    }
 }
 impl Drop for StateFiles {
-    /// The ready file goes last: `rayline local stop` returns once it is
-    /// gone, so every other state file must already be removed by then.
     fn drop(&mut self) {
-        if let Some(path) = &self.routes_token {
-            let _ = std::fs::remove_file(path);
-        }
-        let _ = std::fs::remove_file(&self.token);
-        if let Some(path) = &self.ready {
+        for path in self.in_removal_order() {
             let _ = std::fs::remove_file(path);
         }
     }
@@ -1544,6 +1548,27 @@ async fn stop_child(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_ready_file_is_removed_last() {
+        let files = StateFiles {
+            token: PathBuf::from("gateway-token"),
+            ready: Some(PathBuf::from("ready.json")),
+            routes_token: Some(PathBuf::from("routes-token")),
+        };
+        let order: Vec<&Path> = files.in_removal_order().collect();
+        assert_eq!(
+            order,
+            [
+                Path::new("routes-token"),
+                Path::new("gateway-token"),
+                Path::new("ready.json")
+            ]
+        );
+        // Nothing to remove under these relative names; forget skips the
+        // drop's removals.
+        std::mem::forget(files);
+    }
+
     use super::*;
 
     #[test]
