@@ -17,6 +17,13 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 
 ### Changed
 
+- **`rayline run claude` gives Claude Code ARC's real context window.**
+  Claude Code doesn't know ARC model ids and assumed 200K for them, which
+  also capped the auto-compact window, so long sessions compacted at a
+  fraction of the window. Rayline now sets `CLAUDE_CODE_MAX_CONTEXT_TOKENS`
+  to the main model's window from the router's model list. A Claude Code
+  daemon an older Rayline started doesn't hold this setting, so the first
+  launch after updating shows the running-daemon prompt.
 - **Installing and updating Rayline no longer download the ARC encoder.** The
   installers fetch only `rayline`, `rayline-core` and `rayline-core-LICENSE`.
   The first `rayline local start` (or `rayline run ... --local` that starts

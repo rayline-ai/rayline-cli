@@ -20,6 +20,9 @@ const SUBAGENT_MODEL_FORCE_ENV: &str = "CLAUDE_CODE_SUBAGENT_MODEL_FORCE";
 /// (titles, summaries) use.
 const HAIKU_MODEL_ENV: &str = "ANTHROPIC_DEFAULT_HAIKU_MODEL";
 pub(crate) const AUTO_COMPACT_WINDOW_ENV: &str = "CLAUDE_CODE_AUTO_COMPACT_WINDOW";
+/// The context window Claude Code budgets a model it doesn't know against
+/// (otherwise 200K).
+pub(crate) const MAX_CONTEXT_TOKENS_ENV: &str = "CLAUDE_CODE_MAX_CONTEXT_TOKENS";
 /// Removed from every Claude Code launch, cloud and local: the token Rayline
 /// sets is the only credential, and a vendor switch would send requests
 /// around Rayline.
@@ -82,6 +85,31 @@ fn role_model_env_switches(
         (SUBAGENT_MODEL_FORCE_ENV, Some("1".to_owned())),
         (HAIKU_MODEL_ENV, Some(hosted.background.clone())),
     ]
+}
+
+/// The main model's context window for `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, when
+/// the router sizes the session (`routed`: it answered an auto-compact
+/// window, so Claude Code doesn't know the id and would assume 200K, capping
+/// that window too). `None` for a model Claude Code sizes itself, and a
+/// value in the user's environment is not read.
+fn max_context_tokens(
+    hosted: &crate::harness::LaunchModels,
+    routed: bool,
+) -> Result<Option<String>, RunError> {
+    if !routed {
+        return Ok(None);
+    }
+    hosted
+        .offered
+        .iter()
+        .find(|model| model.id == hosted.main)
+        .map(|model| Some(model.context_window.to_string()))
+        .ok_or_else(|| {
+            RunError::Router(format!(
+                "the router's model list doesn't describe its main model {}",
+                hosted.main
+            ))
+        })
 }
 
 #[derive(Debug)]
@@ -184,6 +212,10 @@ async fn run_command_from_home(
     let mut inspect_dir = claude_config_dir(home, isolated).map_err(RunError::ConfigDir)?;
     let mut launch_switches = launch_env_switches();
     launch_switches.extend(role_model_env_switches(&hosted_models));
+    launch_switches.push((
+        MAX_CONTEXT_TOKENS_ENV,
+        max_context_tokens(&hosted_models, auto_compact_window.is_some())?,
+    ));
     let daemon_request = RequestSpec {
         env_name: &env_name,
         env_flag: hosted.env.as_deref(),
@@ -1252,6 +1284,27 @@ mod isolated_seed_tests {
 #[cfg(test)]
 mod arc_default_tests {
     use super::*;
+
+    /// An ARC model the router sizes gets its listed window as Claude Code's
+    /// context window; a model Claude Code sizes itself gets none.
+    #[test]
+    fn claude_code_gets_the_main_model_s_window_when_the_router_sizes_it() {
+        let models = crate::harness::tests::hosted_models();
+        let main = models
+            .offered
+            .iter()
+            .find(|model| model.id == models.main)
+            .unwrap();
+        assert_eq!(
+            max_context_tokens(&models, true).unwrap(),
+            Some(main.context_window.to_string())
+        );
+        assert_eq!(max_context_tokens(&models, false).unwrap(), None);
+
+        let mut unlisted = models.clone();
+        unlisted.offered.retain(|model| model.id != models.main);
+        assert!(max_context_tokens(&unlisted, true).is_err());
+    }
 
     /// `(subagent model, force, haiku model)` for a key's data mode (`None`:
     /// standard).
