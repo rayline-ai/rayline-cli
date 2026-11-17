@@ -258,7 +258,7 @@ The action ARC identifies is the model id after its provider prefix (`qwen/qwen3
 | `model` | string | yes | The name that server knows the model by. |
 | `context_window` | integer > 0 | yes, when the local process starts (item 5) | Context window in tokens. |
 | `max_output_tokens` | integer > 0 | yes, when the local process starts (item 5) | Output ceiling in tokens. |
-| `tokenizer` | string | no | Hugging Face tokenizer repo for token counting. |
+| `tokenizer` | string | no | Hugging Face tokenizer repo for token counting (item 7). |
 | `price` | object `input`, `output`, `cache_read`, `cache_write` (numbers >= 0) | no | Overrides ARC's price for this model only. |
 
 1. When ARC picks a model in `models`, the local process sends the request to its endpoint under its `model` name.
@@ -275,6 +275,7 @@ The action ARC identifies is the model id after its provider prefix (`qwen/qwen3
 4. Main/subagent routes are not supported.
 5. ARC doesn't publish the models it knows yet, so it knows no model's limits. Every entry must state `context_window` and `max_output_tokens`, and the local process refuses to start without them (section 5.8 item 11).
 6. In local mode Rayline tells every harness a context window of 1,000,000 tokens, whichever model serves the turn.
+7. With a `tokenizer`, the local process counts each request it sends to the model over `openai_chat` (today, `openclaw`'s) in the model's own tokens, with the repo's tokenizer and chat template, so ARC sees the prompt's real size. Requests over `anthropic_messages` and `openai_responses` are sized from their length in bytes, several times their real token count, so the model takes them only when its `context_window` leaves that much room. The endpoint must list `openai_chat` (section 5.8 item 4), and the repo must publish a chat template (item 13 there): a base model's repo often doesn't, and its instruct or chat variant does.
 
 ### 5.4 `routing`
 
@@ -364,7 +365,7 @@ Load refuses, naming the key:
 1. An unknown key at any level Rayline defines.
 2. A wrong type, an empty string, or a value out of range.
 3. In a local-mode run, an endpoint that doesn't list the protocol of the harness being run. Cloud mode doesn't use endpoints, and `rayline local start` has no harness, so neither checks this.
-4. A model entry whose `endpoint` is not in `endpoints`.
+4. A model entry whose `endpoint` is not in `endpoints`, or that has a `tokenizer` while its endpoint doesn't list `openai_chat`.
 5. Local mode without `routing`, or `routing` missing a required key.
 6. `--env <name>` with no `environments.<name>` entry. `prod` gets no special case.
 7. A routing env override when the file has no `routing` section. The mode comes from the file only. `rayline local start --router local` is the exception (section 3.3 item 11), and commands that use no `routing` (`auth`, `top`, `update`, `local status`, `local stop`) read neither `routing` nor its `RAYLINE_ROUTING_*` overrides, so neither can stop them.
@@ -376,6 +377,7 @@ When the local process starts, before it serves anything, it also refuses:
 10. An `api_key_env` naming an env var that isn't set.
 11. A model entry that is missing `context_window` or `max_output_tokens`. ARC knows no model today, so this applies to every entry (section 5.3 item 5).
 12. An `api_key_env` naming `RAYLINE_ROUTER_API_KEY`, which holds the Rayline router key.
+13. A `tokenizer` repo that publishes no chat template: no `chat_template.jinja`, and no `chat_template` key in `tokenizer_config.json`. The error names `models.<id>.tokenizer`.
 
 ## 6. `credentials.json`
 

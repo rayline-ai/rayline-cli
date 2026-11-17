@@ -438,10 +438,21 @@ fn load_from(
         ));
     }
     for (id, model) in &raw.models {
-        if !raw.endpoints.contains_key(&model.endpoint) {
+        let Some(endpoint) = raw.endpoints.get(&model.endpoint) else {
             return Err(doc.err(
                 format!("{}.endpoint", child("models", id)),
                 format!("names `{}`, which is not in `endpoints`", model.endpoint),
+            ));
+        };
+        // The counter renders a request as OpenAI Chat, so only the model's
+        // Chat deployment is counted.
+        if model.tokenizer.is_some() && !endpoint.protocols.contains(&Protocol::OpenaiChat) {
+            return Err(doc.err(
+                format!("{}.tokenizer", child("models", id)),
+                format!(
+                    "counts OpenAI Chat requests only, and endpoint `{}` does not list `openai_chat`",
+                    model.endpoint
+                ),
             ));
         }
     }
@@ -2207,6 +2218,26 @@ mod tests {
                 "names `lm-studio`, which is not in `endpoints`".to_owned()
             )
         );
+    }
+
+    #[test]
+    fn a_tokenizer_needs_an_endpoint_that_lists_openai_chat() {
+        let mut doc = example();
+        set(
+            &mut doc,
+            &["endpoints", "gpu-box", "protocols"],
+            json!(["anthropic_messages", "openai_responses"]),
+        );
+        assert_eq!(
+            key_error(load_doc(&doc)),
+            (
+                "models.\"z-ai/glm-5.3-flash\".tokenizer".to_owned(),
+                "counts OpenAI Chat requests only, and endpoint `gpu-box` does not list `openai_chat`"
+                    .to_owned()
+            )
+        );
+        remove(&mut doc, &["models", GLM, "tokenizer"]);
+        load_doc(&doc).expect("a model without a tokenizer may use any protocol");
     }
 
     #[test]

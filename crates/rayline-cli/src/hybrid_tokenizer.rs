@@ -71,15 +71,11 @@ fn fetch_with(
         return cached_or(hub, repo, error);
     }
     let dir = rayline_hf::hf_cache_snapshot_path(hub, repo, "", &commit);
-    let has_template = [
-        rayline_tokencount::TEMPLATE_FILE,
-        rayline_tokencount::TOKENIZER_CONFIG_FILE,
-    ]
-    .iter()
-    .any(|file| dir.join(file).is_file());
     // Every candidate was fetched or confirmed absent.
-    if !has_template {
-        return Err(format!("{repo} publishes no chat template"));
+    if !has_chat_template(&dir)? {
+        return Err(format!(
+            "{repo} publishes no chat template; name a repo that does, such as the model's instruct or chat variant"
+        ));
     }
     // `cached_or` uses this snapshot alone.
     let marker = complete_marker(hub, repo);
@@ -119,13 +115,8 @@ pub(crate) fn cached_or(hub: &Path, repo: &str, error: String) -> Result<Snapsho
         .join(rayline_hf::repo_to_folder_name(repo))
         .join("snapshots")
         .join(&commit);
-    let complete = dir.join(rayline_tokencount::TOKENIZER_FILE).is_file()
-        && [
-            rayline_tokencount::TEMPLATE_FILE,
-            rayline_tokencount::TOKENIZER_CONFIG_FILE,
-        ]
-        .iter()
-        .any(|file| dir.join(file).is_file());
+    let complete =
+        dir.join(rayline_tokencount::TOKENIZER_FILE).is_file() && has_chat_template(&dir)?;
     if !complete {
         return Err(format!(
             "{}: the snapshot {} it names is incomplete",
@@ -134,6 +125,24 @@ pub(crate) fn cached_or(hub: &Path, repo: &str, error: String) -> Result<Snapsho
         ));
     }
     Ok(Snapshot { dir, cached: true })
+}
+
+/// Whether the snapshot at `dir` has a chat template where the counter reads
+/// one: `chat_template.jinja`, else the `chat_template` key of
+/// `tokenizer_config.json`. A config that cannot be read is an error naming it.
+fn has_chat_template(dir: &Path) -> Result<bool, String> {
+    if dir.join(rayline_tokencount::TEMPLATE_FILE).is_file() {
+        return Ok(true);
+    }
+    let config = dir.join(rayline_tokencount::TOKENIZER_CONFIG_FILE);
+    let bytes = match std::fs::read(&config) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(format!("{}: {error}", config.display())),
+    };
+    let config_json: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|error| format!("{}: {error}", config.display()))?;
+    Ok(config_json.get("chat_template").is_some())
 }
 
 /// The commit `refs/main` names in the Hugging Face cache at `hub`.
@@ -299,6 +308,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&hub);
     }
 
+    const NO_TEMPLATE: &str = "example/model publishes no chat template; name a repo that does, such as the model's instruct or chat variant";
+
     #[test]
     fn a_repo_with_no_template_candidate_publishes_no_chat_template() {
         // Every candidate was fetched and none exists, so a cached snapshot
@@ -306,8 +317,81 @@ mod tests {
         let hub = temp_hub("no-template");
         cache_complete_snapshot(&hub);
         assert_eq!(
-            fetch_current(&hub, NOT_FOUND).err(),
-            Some(format!("{REPO} publishes no chat template"))
+            fetch_current(&hub, NOT_FOUND).err().as_deref(),
+            Some(NO_TEMPLATE)
+        );
+        let _ = std::fs::remove_dir_all(&hub);
+    }
+
+    /// A Hub that serves `tokenizer.json` and `tokenizer_config.json` with
+    /// `config`, and has none of the other optional files.
+    fn hub_with_config<'a>(
+        hub: &'a Path,
+        config: &'static str,
+    ) -> impl Fn(&str, &str) -> Result<(), String> + 'a {
+        move |file, commit| {
+            let body = match file {
+                rayline_tokencount::TOKENIZER_FILE => "{}",
+                rayline_tokencount::TOKENIZER_CONFIG_FILE => config,
+                _ => return Err(NOT_FOUND.to_owned()),
+            };
+            let path = rayline_hf::hf_cache_snapshot_path(hub, REPO, file, commit);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, body).map_err(|error| error.to_string())
+        }
+    }
+
+    #[test]
+    fn a_tokenizer_config_without_a_chat_template_publishes_no_chat_template() {
+        // A base model's config: special tokens, no `chat_template`.
+        let hub = temp_hub("config-no-template");
+        let fetched = fetch_with(
+            &hub,
+            REPO,
+            Ok("def456".to_owned()),
+            hub_with_config(&hub, r#"{"bos_token": "<bos>"}"#),
+        );
+        assert_eq!(fetched.err().as_deref(), Some(NO_TEMPLATE));
+        assert!(!complete_marker(&hub, REPO).exists());
+        let _ = std::fs::remove_dir_all(&hub);
+    }
+
+    #[test]
+    fn a_chat_template_in_the_tokenizer_config_is_used() {
+        let hub = temp_hub("config-template");
+        let fetched = fetch_with(
+            &hub,
+            REPO,
+            Ok("def456".to_owned()),
+            hub_with_config(&hub, r#"{"chat_template": "{{ messages }}"}"#),
+        )
+        .unwrap();
+        assert!(!fetched.cached);
+        assert_eq!(
+            std::fs::read_to_string(complete_marker(&hub, REPO)).unwrap(),
+            "def456"
+        );
+        let _ = std::fs::remove_dir_all(&hub);
+    }
+
+    #[test]
+    fn a_marked_snapshot_without_a_chat_template_is_incomplete() {
+        // A snapshot marked complete before its template was checked.
+        let hub = temp_hub("marked-no-template");
+        let snapshot = cache_complete_snapshot(&hub);
+        std::fs::remove_file(snapshot.join(rayline_tokencount::TEMPLATE_FILE)).unwrap();
+        std::fs::write(
+            snapshot.join(rayline_tokencount::TOKENIZER_CONFIG_FILE),
+            r#"{"bos_token": "<bos>"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            cached_or(&hub, REPO, "unused".to_owned()).err(),
+            Some(format!(
+                "{}: the snapshot {} it names is incomplete",
+                complete_marker(&hub, REPO).display(),
+                snapshot.display()
+            ))
         );
         let _ = std::fs::remove_dir_all(&hub);
     }
