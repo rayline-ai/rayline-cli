@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise `rayline local` and `run --local` against the execution-contract fixture core.
+"""Exercise `rayline local` and a local-mode `rayline run` against the execution-contract fixture core.
 
 Run after `cargo build --locked -p rayline-cli`.
 This verifies supervision and harness wiring; the VSR core suite verifies routing.
@@ -67,28 +67,33 @@ def main():
         # Both endpoints list the protocols of the harnesses run below: claude
         # and pi speak anthropic_messages, openclaw speaks openai_chat.
         settings.write_text(json.dumps({
+            "mode": "local",
             "environments": {"fixture": {"base_url": "http://127.0.0.1:9",
                                          "login_url": "http://127.0.0.1:9/cli-auth"}},
-            "endpoints": {
-                "box": {"base_url": "http://127.0.0.1:9",
-                        "protocols": ["openai_chat", "anthropic_messages"],
-                        "api_key_env": "RAYLINE_TEST_LOCAL_ALIAS"},
-                "gateway": {"base_url": "http://127.0.0.1:9",
-                            "protocols": ["anthropic_messages", "openai_chat"],
-                            "api_key_env": "ANTHROPIC_AUTH_TOKEN"},
+            "local": {
+                "inference": {
+                    "endpoints": {
+                        "box": {"base_url": "http://127.0.0.1:9",
+                                "protocols": ["openai_chat", "anthropic_messages"],
+                                "api_key_env": "RAYLINE_TEST_LOCAL_ALIAS"},
+                        "gateway": {"base_url": "http://127.0.0.1:9",
+                                    "protocols": ["anthropic_messages", "openai_chat"],
+                                    "api_key_env": "ANTHROPIC_AUTH_TOKEN"},
+                    },
+                    "models": {
+                        "z-ai/glm-5.3-flash": {"endpoint": "box", "model": "glm",
+                                               "context_window": 131072, "max_output_tokens": 8192},
+                        "qwen/qwen3.8-27b": {"endpoint": "gateway", "model": "qwen",
+                                             "context_window": 98304, "max_output_tokens": 8192},
+                    },
+                },
+                "routing": {"decisions_model": {"id": "arc-swift-1.0"},
+                            "classifier_model": "anthropic/claude-haiku-5.5",
+                            "policy": {"preset": "arc-policy.prefer-local.v1"},
+                            # The fixture router decides: this checks supervision,
+                            # not local ARC, which needs the encoder.
+                            "router": "cloud"},
             },
-            "models": {
-                "z-ai/glm-5.3-flash": {"endpoint": "box", "model": "glm",
-                                       "context_window": 131072, "max_output_tokens": 8192},
-                "qwen/qwen3.8-27b": {"endpoint": "gateway", "model": "qwen",
-                                     "context_window": 98304, "max_output_tokens": 8192},
-            },
-            "routing": {"decisions_model": "arc-swift-1.0",
-                        "classifier_model": "anthropic/claude-haiku-5.5",
-                        "policy": {"preset": "arc-policy.prefer-local.v1"},
-                        # The fixture router decides: this checks supervision,
-                        # not local ARC, which needs the encoder.
-                        "router": "hosted"},
         }))
 
         def rayline_cmd(*args, success=True):
@@ -100,7 +105,7 @@ def main():
             return rayline_cmd("local", *args, success=success)
 
         def run(harness, *args, success=True):
-            return rayline_cmd("--env", "fixture", "run", harness, "--local", *args, success=success)
+            return rayline_cmd("--env", "fixture", "run", harness, *args, success=success)
 
         def start():
             rayline_cmd("--env", "fixture", "local", "start")

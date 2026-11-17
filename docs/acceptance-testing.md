@@ -1,6 +1,6 @@
 # Acceptance testing
 
-`scripts/acceptance.sh` runs real turns through every harness, for each config profile and four cases. A profile is a config file the script passes as `rayline run <harness> --config <file>`: one without a `routing` section runs in cloud mode, one with it in local mode. A change is done when every cell passes for every profile.
+`scripts/acceptance.sh` runs real turns through every harness, for each config profile and four cases. A profile is a config file the script passes as `rayline run <harness> --config <file>`, which runs in the file's `mode`. A change is done when every cell passes for every profile.
 
 Cloud turns run on Rayline Platform and are billed to your account (some tens of cents per full run).
 
@@ -15,14 +15,14 @@ Cloud turns run on Rayline Platform and are billed to your account (some tens of
 
 The default profiles are committed in `scripts/acceptance/profiles/`:
 
-| Profile | Mode | `routing` |
+| Profile | `mode` | `local.routing` |
 |---|---|---|
-| `cloud` | cloud | none |
-| `local-hosted-arc-swift` | local | `router` `hosted`, `decisions_model` `arc-swift-1.0` |
-| `local-hosted-arc-sage` | local | `router` `hosted`, `decisions_model` `arc-sage-1.0` |
-| `local-router-local` | local | `router` `local`, `decisions_model` `arc-swift-1.0` |
+| `cloud` | `cloud` | none (the default file) |
+| `local-cloud-arc-swift` | `local` | `router` `cloud`, `decisions_model` `arc-swift-1.0` |
+| `local-cloud-arc-sage` | `local` | `router` `cloud`, `decisions_model` `arc-sage-1.0` |
+| `local-router-local` | `local` | `router` `local`, `decisions_model` `arc-swift-1.0` |
 
-The local profiles list no inference servers, so every model ARC picks runs on Rayline Platform. To cover your own servers, copy a profile, add your `endpoints` and `models` (`docs/spec.md` section 5), and pass it in `PROFILES`. A profile's name is its file name without `.json`. The script never writes a profile or `~/.config/rayline/settings.json`.
+The local profiles list no inference servers, so every model ARC picks runs on Rayline Platform. To cover your own servers, copy a profile, add your `local.inference.endpoints` and `local.inference.models` (`docs/spec.md` section 5), and pass it in `PROFILES`. A profile's name is its file name without `.json`. The script never writes a profile or `~/.config/rayline/settings.json`.
 
 ## Run
 

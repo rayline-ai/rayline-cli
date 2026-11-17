@@ -1470,7 +1470,7 @@ mod tests {
         config::load_in(
             home,
             &config::LoadOptions {
-                mode: config::Mode::Cloud,
+                command: config::Command::Other,
                 env,
                 harness_protocol: None,
                 router: None,
@@ -1486,7 +1486,7 @@ mod tests {
         // A settings entry named prod is only for `--env prod`.
         write_settings_json(
             &home,
-            &json!({"environments": {"prod": {
+            &json!({"mode": "cloud", "environments": {"prod": {
                 "base_url": "https://other.example.test",
                 "login_url": "https://other.example.test/cli-auth"
             }}}),
@@ -1513,7 +1513,7 @@ mod tests {
         let home = temp_home("resolve-dev");
         write_settings_json(
             &home,
-            &json!({"environments": {"dev": {
+            &json!({"mode": "cloud", "environments": {"dev": {
                 "base_url": "http://127.0.0.1:8080/",
                 "login_url": "https://dev.example.test/cli-auth"
             }}}),
@@ -1542,7 +1542,7 @@ mod tests {
         assert_eq!(key_error(Some("dev")), "environments.dev");
         write_settings_json(
             &home,
-            &json!({"environments": {"dev": {
+            &json!({"mode": "cloud", "environments": {"dev": {
                 "base_url": "https://api-dev.example.test",
                 "login_url": "https://dev.example.test/cli-auth",
                 "router_url": "https://api-dev.example.test"

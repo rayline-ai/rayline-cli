@@ -75,26 +75,27 @@ struct Supervisor {
     /// stop` still stops it.
     #[serde(default)]
     router: Option<RouterSource>,
-    /// `routing.decisions_model`. Absent in a record from a Rayline that
-    /// didn't record it.
+    /// `local.routing.decisions_model.id`. Absent in a record from a Rayline
+    /// that didn't record it.
     #[serde(default)]
     decisions_model: Option<String>,
-    /// `routing.classifier_model`: Claude Code runs only on a process
+    /// `local.routing.classifier_model`: Claude Code runs only on a process
     /// started with one.
     #[serde(default)]
     classifier_model: Option<String>,
-    /// Started from the `--router` defaults (no `routing` in its config): a
-    /// `rayline run --local` without `routing` runs on it.
+    /// Started from the `--router` defaults (no `local.routing` in its
+    /// config): a `rayline run --mode local` without `local.routing` runs on
+    /// it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     routing_defaults: bool,
 }
 
-/// `routing.router`, and for `local` the ARC release with the built-in
-/// pin resolved.
+/// `local.routing.router`, and for `local` the ARC release with the
+/// built-in pin resolved.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
 enum RouterSource {
-    Hosted,
+    Cloud,
     Local {
         repo: String,
         revision: String,
@@ -110,7 +111,7 @@ impl RouterSource {
             .as_ref()
             .filter(|routing| routing.router == crate::config::Router::Local)
         else {
-            return Self::Hosted;
+            return Self::Cloud;
         };
         let release = routing
             .arc_release
@@ -128,7 +129,7 @@ impl RouterSource {
 impl std::fmt::Display for RouterSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Hosted => f.write_str("hosted decisions"),
+            Self::Cloud => f.write_str("cloud decisions"),
             Self::Local {
                 repo,
                 revision,
@@ -163,7 +164,7 @@ impl Supervisor {
         if self.classifier_model.is_none() {
             return Err(io::Error::other(format!(
                 "the local process (pid {}) was started without \
-                 `routing.classifier_model`, which Claude Code needs; stop it with \
+                 `local.routing.classifier_model`, which Claude Code needs; stop it with \
                  `rayline local stop` and run again",
                 self.pid
             )));
@@ -305,7 +306,7 @@ pub(crate) async fn start(settings: &Settings) -> ExitCode {
                 let _ = io::Write::write_all(
                     &mut io::stdout(),
                     format!(
-                        "Note: Claude Code needs `routing.classifier_model` in {}, \
+                        "Note: Claude Code needs `local.routing.classifier_model` in {}, \
                          set to a model Rayline Platform serves:\n{}",
                         settings.file.display(),
                         routing.with_classifier_model()
@@ -361,7 +362,7 @@ fn status_json(running: &Supervisor, state: &Value, paths: &Paths) -> io::Result
         "environment": running.env.as_deref().unwrap_or("prod"),
         "router": match running.router {
             Some(RouterSource::Local { .. }) => "local",
-            Some(RouterSource::Hosted) | None => "hosted",
+            Some(RouterSource::Cloud) | None => "cloud",
         },
         "decisions_model": running.decisions_model,
     });
@@ -492,7 +493,7 @@ fn running_in(dir: &Path) -> bool {
 }
 
 /// The router of the running local process when it was started from the
-/// `--router` defaults, for a `rayline run --local` to load them. Reads its
+/// `--router` defaults, for a `rayline run --mode local` to load them. Reads its
 /// state without creating anything; state it can't read is none.
 pub(crate) fn running_from_routing_defaults() -> Option<crate::config::Router> {
     let home = crate::home().ok()?;
@@ -504,7 +505,7 @@ pub(crate) fn running_from_routing_defaults() -> Option<crate::config::Router> {
             router: Some(router),
             ..
         })) => Some(match router {
-            RouterSource::Hosted => crate::config::Router::Hosted,
+            RouterSource::Cloud => crate::config::Router::Cloud,
             RouterSource::Local { .. } => crate::config::Router::Local,
         }),
         _ => None,
@@ -521,7 +522,7 @@ fn may_launch(settings: &Settings) -> io::Result<()> {
         .is_some_and(|routing| routing.defaults)
     {
         return Err(io::Error::other(format!(
-            "{}: `routing` is required in local mode",
+            "{}: `local.routing` is required in local mode",
             settings.file.display()
         )));
     }
@@ -549,7 +550,7 @@ async fn run_harness(
     if local_decisions(settings) && !reads_anthropic_messages(harness) {
         return Err(io::Error::other(format!(
             "local ARC decisions read only Claude Code, OpenCode, Pi and omp turns, not \
-             {harness}'s; set `routing.router` to `hosted` to run {harness}"
+             {harness}'s; set `local.routing.router` to `cloud` to run {harness}"
         )));
     }
     if harness == "claude"
@@ -557,7 +558,7 @@ async fn run_harness(
         && routing.classifier_model.is_none()
     {
         return Err(io::Error::other(format!(
-            "{}: `routing.classifier_model` is required to run Claude Code in local mode: \
+            "{}: `local.routing.classifier_model` is required to run Claude Code in local mode: \
              it serves Claude Code's auto-mode safety checks. Set it to a model Rayline \
              Platform serves:\n{}",
             settings.file.display(),
@@ -669,7 +670,7 @@ async fn launch(
     let hosted = crate::status::hosted_environment(settings);
     let config =
         crate::hybrid_profile::core_config(settings, &hosted.base_url).map_err(io::Error::other)?;
-    // With `routing.router` `local`, the local process runs the ARC
+    // With `local.routing.router` `local`, the local process runs the ARC
     // encoder and a loopback routes service, and points the core's Decisions
     // at it; the config keeps the router, which the classifier still uses.
     // The local process refuses Decisions anywhere but this router or a
@@ -727,11 +728,11 @@ async fn launch(
     match &local_arc {
         Some(arc) => say(format!(
             "Router: local ARC ({}), {}",
-            routing.decisions_model, arc.source
+            routing.decisions_model.id, arc.source
         )),
         None => say(format!(
-            "Router: hosted ARC ({}) via {}",
-            routing.decisions_model,
+            "Router: cloud ARC ({}) via {}",
+            routing.decisions_model.id,
             config["decisions"]["url"]
                 .as_str()
                 .unwrap_or(&hosted.base_url)
@@ -812,7 +813,7 @@ async fn launch(
             decisions_model: settings
                 .routing
                 .as_ref()
-                .map(|routing| routing.decisions_model.clone()),
+                .map(|routing| routing.decisions_model.id.clone()),
             classifier_model: settings
                 .routing
                 .as_ref()
@@ -1028,7 +1029,7 @@ fn current_exe() -> io::Result<PathBuf> {
     fs::canonicalize(std::env::current_exe()?)
 }
 
-/// The local ARC files of `routing.router` `local`.
+/// The local ARC files of `local.routing.router` `local`.
 struct LocalArc {
     /// Where the decisions come from, for the start report.
     source: String,
@@ -1059,7 +1060,7 @@ fn arc_encoder_weights() -> crate::arc_release::Pinned<'static> {
 }
 
 fn local_arc(home: &Path, routing: &crate::config::Routing) -> io::Result<Option<LocalArc>> {
-    if routing.router == crate::config::Router::Hosted {
+    if routing.router == crate::config::Router::Cloud {
         return Ok(None);
     }
     // The platform and the NVIDIA driver are checked before anything is
@@ -1202,7 +1203,7 @@ fn encoder_ships(ships: bool) -> io::Result<()> {
         format!(
             "`local` decisions need the ARC encoder, which Rayline releases ship only for \
              macOS arm64, and Linux (x86_64 and aarch64) and Windows x86_64 with an NVIDIA GPU, not for {os} {}; \
-             to use the hosted router instead, run `rayline local start --router hosted`",
+             to use the cloud router instead, run `rayline local start --router cloud`",
             std::env::consts::ARCH
         ),
     ))
@@ -1320,8 +1321,8 @@ fn nvidia_driver(os: &str, library: &str, loaded: Result<(), String>) -> io::Res
             io::ErrorKind::NotFound,
             format!(
                 "`local` decisions on {os} need the NVIDIA driver, and its {library} can't be \
-                 loaded ({error}); install the NVIDIA driver, or to use the hosted router \
-                 instead, run `rayline local start --router hosted`"
+                 loaded ({error}); install the NVIDIA driver, or to use the cloud router \
+                 instead, run `rayline local start --router cloud`"
             ),
         )
     })
@@ -1345,7 +1346,7 @@ fn installed_binary(name: &str) -> io::Result<PathBuf> {
     })
 }
 
-/// A warning for each `models` entry the local process's ARC decisions
+/// A warning for each `local.inference.models` entry the local process's ARC decisions
 /// skip, from its ready file.
 fn skipped_models(state: &Value) -> Vec<String> {
     let Some(skipped) = state.get("skipped_models").and_then(Value::as_array) else {
@@ -1357,10 +1358,10 @@ fn skipped_models(state: &Value) -> Vec<String> {
             let id = model.get("id")?.as_str()?;
             let why = match model.get("reason")?.as_str()? {
                 "not_in_release" => "isn't in the ARC release's catalog",
-                _ => "has no price in its `models` entry or the ARC release",
+                _ => "has no price in the file or the ARC release",
             };
             Some(format!(
-                "Warning: models entry {id} {why}; ARC won't route to it"
+                "Warning: `local.inference.models` entry {id} {why}; ARC won't route to it"
             ))
         })
         .collect()
@@ -1635,7 +1636,7 @@ fn harness_command(
 }
 
 /// Refuse a command line local mode can't run, before anything starts.
-/// Whether `routing.router` is `local`.
+/// Whether `local.routing.router` is `local`.
 fn local_decisions(settings: &Settings) -> bool {
     settings
         .routing
@@ -2231,8 +2232,8 @@ mod tests {
         assert_eq!(
             skipped_models(&state),
             vec![
-                "Warning: models entry x/other isn't in the ARC release's catalog; ARC won't route to it",
-                "Warning: models entry x/known has no price in its `models` entry or the ARC release; ARC won't route to it",
+                "Warning: `local.inference.models` entry x/other isn't in the ARC release's catalog; ARC won't route to it",
+                "Warning: `local.inference.models` entry x/known has no price in the file or the ARC release; ARC won't route to it",
             ]
         );
         assert!(skipped_models(&json!({"ready": true})).is_empty());
@@ -2304,7 +2305,7 @@ mod tests {
         );
         assert!(
             message.ends_with(
-                "; to use the hosted router instead, run `rayline local start --router hosted`"
+                "; to use the cloud router instead, run `rayline local start --router cloud`"
             ),
             "{message}"
         );
@@ -2324,7 +2325,7 @@ mod tests {
             error.to_string(),
             "`local` decisions on Linux need the NVIDIA driver, and its libcuda.so.1 can't be \
              loaded (libcuda.so.1: cannot open shared object file); install the NVIDIA driver, \
-             or to use the hosted router instead, run `rayline local start --router hosted`"
+             or to use the cloud router instead, run `rayline local start --router cloud`"
         );
     }
 
@@ -2624,20 +2625,24 @@ mod tests {
         let file = home.join("settings.json");
         fs::write(
             &file,
-            r#"{"routing": {"decisions_model": "arc-swift-1.0",
+            r#"{"mode": "local", "local": {
+              "routing": {"router": "cloud", "decisions_model": {"id": "arc-swift-1.0"},
                 "classifier_model": "anthropic/claude-haiku-5.5",
                 "policy": {"preset": "arc-policy.hybrid-default.v1"}},
-              "endpoints": {
-                "box": {"base_url": "http://127.0.0.1:1", "protocols": ["openai_chat"],
-                  "api_key_env": "RAYLINE_TEST_USED_ENDPOINT_KEY"},
-                "spare": {"base_url": "http://127.0.0.1:2", "protocols": ["openai_chat"],
-                  "api_key_env": "RAYLINE_TEST_UNUSED_ENDPOINT_KEY"}},
-              "models": {"local/box-model": {"endpoint": "box", "model": "box-model",
-                "context_window": 16384, "max_output_tokens": 8192}}}"#,
+              "inference": {
+                "endpoints": {
+                  "box": {"base_url": "http://127.0.0.1:1", "protocols": ["openai_chat"],
+                    "api_key_env": "RAYLINE_TEST_USED_ENDPOINT_KEY"},
+                  "spare": {"base_url": "http://127.0.0.1:2", "protocols": ["openai_chat"],
+                    "api_key_env": "RAYLINE_TEST_UNUSED_ENDPOINT_KEY"}},
+                "models": {"local/box-model": {"endpoint": "box", "model": "box-model",
+                  "context_window": 16384, "max_output_tokens": 8192}}}}}"#,
         )
         .unwrap();
         let settings = crate::config::load(&crate::config::LoadOptions {
-            mode: crate::config::Mode::LocalFile(&file),
+            command: crate::config::Command::LocalStart {
+                config: Some(&file),
+            },
             env: None,
             harness_protocol: None,
             router: None,
@@ -2933,21 +2938,24 @@ mod tests {
         assert_eq!(body, "");
     }
 
-    /// The config file `name` in `dir`, with `routing` and an `environments.dev`
-    /// entry, loaded in local mode for `env`.
+    /// The config file `name` in `dir`, with `local.routing` and an
+    /// `environments.dev` entry, loaded in local mode for `env`.
     fn local_settings(dir: &Path, name: &str, env: Option<&str>) -> Settings {
         let file = dir.join(name);
         fs::write(
             &file,
-            r#"{"routing": {"decisions_model": "arc-swift-1.0",
+            r#"{"mode": "local",
+              "local": {"routing": {"router": "cloud", "decisions_model": {"id": "arc-swift-1.0"},
                 "classifier_model": "anthropic/claude-haiku-5.5",
-                "policy": {"preset": "arc-policy.hybrid-default.v1"}},
+                "policy": {"preset": "arc-policy.hybrid-default.v1"}}},
               "environments": {"dev": {"base_url": "https://router.example.test",
                 "login_url": "https://router.example.test/cli-auth"}}}"#,
         )
         .unwrap();
         crate::config::load(&crate::config::LoadOptions {
-            mode: crate::config::Mode::LocalFile(&file),
+            command: crate::config::Command::LocalStart {
+                config: Some(&file),
+            },
             env,
             harness_protocol: None,
             router: None,
@@ -2993,15 +3001,15 @@ mod tests {
                 },
             })
         );
-        running.router = Some(RouterSource::Hosted);
-        let hosted = status_json(
+        running.router = Some(RouterSource::Cloud);
+        let cloud = status_json(
             &running,
             &json!({"listen_url": "http://127.0.0.1:5000"}),
             &paths,
         )
         .unwrap();
-        assert_eq!(hosted["router"], "hosted");
-        assert!(hosted.get("routes").is_none());
+        assert_eq!(cloud["router"], "cloud");
+        assert!(cloud.get("routes").is_none());
     }
 
     #[test]
@@ -3010,7 +3018,7 @@ mod tests {
             pid: 7,
             config: PathBuf::from("/c.json"),
             env: None,
-            router: Some(RouterSource::Hosted),
+            router: Some(RouterSource::Cloud),
             decisions_model: None,
             classifier_model: None,
             routing_defaults: false,
@@ -3073,7 +3081,7 @@ mod tests {
         }
         let error = may_launch(&settings).unwrap_err().to_string();
         assert!(
-            error.ends_with("`routing` is required in local mode"),
+            error.ends_with("`local.routing` is required in local mode"),
             "{error}"
         );
     }
@@ -3084,7 +3092,7 @@ mod tests {
             pid: 1,
             config: PathBuf::from("/c.json"),
             env: None,
-            router: Some(RouterSource::Hosted),
+            router: Some(RouterSource::Cloud),
             decisions_model: Some("d".to_owned()),
             classifier_model: None,
             routing_defaults: false,
@@ -3165,7 +3173,10 @@ mod tests {
                 .await
                 .unwrap_err()
                 .to_string();
-            assert!(error.contains("`routing.router` to `hosted`"), "{error}");
+            assert!(
+                error.contains("`local.routing.router` to `cloud`"),
+                "{error}"
+            );
         }
         let _ = fs::remove_dir_all(&dir);
     }
@@ -3184,7 +3195,7 @@ mod tests {
             routing_defaults: false,
         };
         supervisor.check_serves(&started).unwrap();
-        assert_eq!(supervisor.router, Some(RouterSource::Hosted));
+        assert_eq!(supervisor.router, Some(RouterSource::Cloud));
 
         // A record from a Rayline that didn't record decisions serves no run.
         let earlier: Supervisor =
@@ -3210,7 +3221,7 @@ mod tests {
         assert_eq!(
             supervisor.check_serves(&local).unwrap_err().to_string(),
             format!(
-                "the local process (pid 7) was started with hosted decisions, and this run has \
+                "the local process (pid 7) was started with cloud decisions, and this run has \
                  local decisions from {} at {} in runtime (manifest sha256 {}); stop it with \
                  `rayline local stop` first",
                 built_in.repo, built_in.revision, built_in.manifest_sha256
@@ -3292,7 +3303,7 @@ mod tests {
             fs::write(
                 paths.supervisor(),
                 json!({"pid": pid, "config": "/c.json", "env": "dev",
-                       "router": {"mode": "hosted"}})
+                       "router": {"mode": "cloud"}})
                 .to_string(),
             )
             .unwrap();
@@ -3304,7 +3315,7 @@ mod tests {
                 pid: std::process::id(),
                 config: PathBuf::from("/c.json"),
                 env: Some("dev".to_owned()),
-                router: Some(RouterSource::Hosted),
+                router: Some(RouterSource::Cloud),
                 decisions_model: None,
                 classifier_model: None,
                 routing_defaults: false,

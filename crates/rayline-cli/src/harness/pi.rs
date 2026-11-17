@@ -15,9 +15,12 @@
 //! is its default for Messages, so no thinking block with an empty signature
 //! goes upstream.
 
+use std::fmt;
 use std::process::Command;
 
-use serde_json::json;
+use serde::de::{Deserialize, Deserializer, MapAccess, Visitor};
+use serde_json::value::RawValue;
+use serde_json::{Value, json};
 
 use super::{Plan, RenderContext, json_file};
 
@@ -43,7 +46,7 @@ fn local_version_error(version: (u64, u64, u64)) -> Option<String> {
     })
 }
 
-pub(crate) fn plan(ctx: &RenderContext<'_>) -> Plan {
+pub(crate) fn plan(ctx: &RenderContext<'_>) -> Result<Plan, String> {
     let compat = json!({
         "sendSessionAffinityHeaders": true
     });
@@ -52,15 +55,13 @@ pub(crate) fn plan(ctx: &RenderContext<'_>) -> Plan {
         .offered
         .iter()
         .map(|model| {
-            json!({
+            let mut entry = json!({
                 "id": model.id,
-                "name": model.display_name,
                 // ARC selects thinking effort; clients must not expose controls.
-                "reasoning": ctx.capabilities.is_some(),
-                "input": model.input_modalities,
-                "contextWindow": model.context_window,
-                "maxTokens": model.max_output_tokens
-            })
+                "reasoning": ctx.capabilities.is_some()
+            });
+            super::add_details(&mut entry, model);
+            entry
         })
         .collect();
     let models = json!({
@@ -74,18 +75,79 @@ pub(crate) fn plan(ctx: &RenderContext<'_>) -> Plan {
             }
         }
     });
-    // pi writes settings.json itself (model picks, theme), so only seed it.
-    let settings = json!({
-        "defaultProvider": PROVIDER_ID,
-        "defaultModel": launch.main
-    });
-    Plan {
-        files: vec![
-            json_file("models.json", &models, true),
-            json_file("settings.json", &settings, false),
-        ],
+    // pi also saves its own settings (theme, model picks) to settings.json, so
+    // each launch sets only Rayline's keys there and keeps the rest.
+    let settings = [
+        ("defaultProvider", json!(PROVIDER_ID)),
+        ("defaultModel", json!(launch.main)),
+    ];
+    let fresh = set_keys("{}\n", &settings).expect("an empty object takes any key");
+    let settings = super::merged_file(ctx.config_dir, "settings.json", fresh, |existing| {
+        set_keys(existing, &settings)
+    })?;
+    Ok(Plan {
+        files: vec![json_file("models.json", &models), settings],
         env_set: vec![("PI_CODING_AGENT_DIR", ctx.config_dir.as_os_str().to_owned())],
         env_remove: Vec::new(),
+    })
+}
+
+/// `existing`, a JSON object (pi's `settings.json`), with each of `values`
+/// set at its top level: an entry with that key is replaced, and a missing one
+/// is added at the end. Every other entry keeps its place and its text. The
+/// result is laid out as pi writes the file (two-space indent).
+fn set_keys(existing: &str, values: &[(&str, Value)]) -> Result<String, String> {
+    let text = existing.strip_prefix('\u{feff}').unwrap_or(existing);
+    let Entries(mut entries) = serde_json::from_str(text).map_err(|error| error.to_string())?;
+    for (key, value) in values {
+        let raw = RawValue::from_string(value.to_string()).expect("a Value is valid JSON");
+        // pi (JSON.parse) reads the last of repeated keys; set them all.
+        let mut found = false;
+        for entry in entries.iter_mut().filter(|entry| entry.0 == *key) {
+            entry.1 = raw.clone();
+            found = true;
+        }
+        if !found {
+            entries.push(((*key).to_owned(), raw));
+        }
+    }
+    let mut out = String::from("{");
+    for (index, (key, value)) in entries.iter().enumerate() {
+        out.push_str(if index == 0 { "\n  " } else { ",\n  " });
+        out.push_str(&serde_json::to_string(key).expect("a string serializes"));
+        out.push_str(": ");
+        out.push_str(value.get());
+    }
+    if !entries.is_empty() {
+        out.push('\n');
+    }
+    out.push('}');
+    if existing.ends_with('\n') {
+        out.push('\n');
+    }
+    Ok(out)
+}
+
+/// A JSON object's entries in file order, each value as its original text.
+struct Entries(Vec<(String, Box<RawValue>)>);
+
+impl<'de> Deserialize<'de> for Entries {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Object;
+        impl<'de> Visitor<'de> for Object {
+            type Value = Entries;
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a JSON object")
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Entries, A::Error> {
+                let mut entries = Vec::new();
+                while let Some(entry) = map.next_entry()? {
+                    entries.push(entry);
+                }
+                Ok(Entries(entries))
+            }
+        }
+        deserializer.deserialize_map(Object)
     }
 }
 
@@ -145,14 +207,15 @@ mod tests {
     }
 
     #[test]
-    fn a_contributor_key_seeds_its_listed_sage() {
+    fn a_contributor_key_sets_its_listed_sage() {
         let dir = super::super::tests::temp_dir("pi-contributor");
         let mut ctx = super::super::tests::render_context(&dir);
-        ctx.models = super::super::LaunchModels::from_listing(&super::super::tests::listing(Some(
-            "contributor",
-        )))
+        ctx.models = super::super::LaunchModels::from_listing(
+            &super::super::tests::listing(Some("contributor")),
+            &super::super::tests::cloud(Some("contributor")),
+        )
         .unwrap();
-        super::super::write_files(&dir, &super::plan(&ctx).files).unwrap();
+        super::super::write_files(&dir, &super::plan(&ctx).unwrap().files).unwrap();
         let read = |name: &str| -> serde_json::Value {
             serde_json::from_str(&std::fs::read_to_string(dir.join(name)).unwrap()).unwrap()
         };
@@ -169,22 +232,64 @@ mod tests {
     }
 
     #[test]
-    fn saved_settings_are_left_as_pi_wrote_them() {
+    fn each_launch_sets_rayline_s_keys_and_keeps_pi_s() {
         let dir = super::super::tests::temp_dir("pi-saved");
         let ctx = super::super::tests::render_context(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let settings = dir.join("settings.json");
-        // A pick the key does not list stays: Rayline only seeds this file.
-        let saved = "{\n  \"defaultProvider\": \"rayline\",\n  \"defaultModel\": \"rayline-router\",\n  \"theme\": \"dark\"\n}\n";
+        // As pi writes it (JSON.stringify, two-space indent, no final newline),
+        // with a model picked in pi.
+        let saved = "{\n  \"theme\": \"dark\",\n  \"defaultProvider\": \"other\",\n  \"defaultModel\": \"rayline-router\",\n  \"packages\": [\n    \"a\",\n    {\n      \"source\": \"b\"\n    }\n  ],\n  \"retry\": {}\n}";
         std::fs::write(&settings, saved).unwrap();
         std::fs::write(dir.join("models.json"), "{}").unwrap();
-        super::super::write_files(&dir, &super::plan(&ctx).files).unwrap();
-        assert_eq!(std::fs::read_to_string(&settings).unwrap(), saved);
+        super::super::write_files(&dir, &super::plan(&ctx).unwrap().files).unwrap();
+        let expected = saved
+            .replace("\"other\"", "\"rayline\"")
+            .replace("\"rayline-router\"", "\"arc-sage-1.0\"");
+        assert_eq!(std::fs::read_to_string(&settings).unwrap(), expected);
         // models.json holds the key and URL, so every launch rewrites it.
         let models: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(dir.join("models.json")).unwrap())
                 .unwrap();
         assert_eq!(models["providers"]["rayline"]["baseUrl"], TEST_URL);
+    }
+
+    #[test]
+    fn missing_keys_are_added_and_a_file_that_is_not_an_object_is_refused() {
+        use super::set_keys;
+        let values = [
+            ("defaultProvider", serde_json::json!("rayline")),
+            ("defaultModel", serde_json::json!("arc-sage-1.0")),
+        ];
+        assert_eq!(
+            set_keys("{\"theme\": \"dark\"}\n", &values).unwrap(),
+            "{\n  \"theme\": \"dark\",\n  \"defaultProvider\": \"rayline\",\n  \"defaultModel\": \"arc-sage-1.0\"\n}\n"
+        );
+        assert_eq!(
+            set_keys("{}", &values).unwrap(),
+            "{\n  \"defaultProvider\": \"rayline\",\n  \"defaultModel\": \"arc-sage-1.0\"\n}"
+        );
+        // pi reads the last of repeated keys, so each one is set.
+        assert_eq!(
+            set_keys(
+                "{\"defaultModel\": \"a\", \"defaultModel\": \"b\"}",
+                &values[1..]
+            )
+            .unwrap(),
+            "{\n  \"defaultModel\": \"arc-sage-1.0\",\n  \"defaultModel\": \"arc-sage-1.0\"\n}"
+        );
+        for invalid in ["", "[]", "{\"theme\": }", "{} {}"] {
+            assert!(set_keys(invalid, &values).is_err(), "{invalid:?}");
+        }
+
+        let dir = super::super::tests::temp_dir("pi-invalid");
+        let ctx = super::super::tests::render_context(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("settings.json"), "{\"theme\": ").unwrap();
+        let error = super::plan(&ctx).unwrap_err();
+        assert!(error.starts_with("cannot update "), "{error}");
+        assert!(error.contains("settings.json"), "{error}");
+        assert!(error.ends_with("; fix or remove the file"), "{error}");
     }
 
     /// The probe reads the version pi prints on stdout, and refuses one it

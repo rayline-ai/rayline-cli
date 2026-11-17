@@ -7,9 +7,9 @@ Sections marked **Internal** are real but stay out of public docs and `--help`. 
 ## 1. Rules
 
 1. **Fail fast.** Rayline validates `settings.json`, env overrides and flags once, at load, before any command runs. Every command that uses `credentials.json` (`rayline auth status`, `rayline auth logout`, a harness launch, starting the local process) loads and validates it before it acts; `rayline local status`, `rayline local stop`, `rayline top` and `rayline update` don't read it. A local-mode launch that reuses a running local process reads only that process's state (`supervisor.json`, `gateway-token`), not `credentials.json`. `rayline auth login` replaces an invalid `credentials.json` with the new session and says so, because signing in is how the user repairs it (section 6). Otherwise an invalid value stops Rayline with a clear error that names the key or flag. After load, the code trusts the parsed config: no checks, defaults or fallbacks at call sites.
-2. **No silent fallback.** A missing or invalid value is an error. It is never skipped, guessed or replaced by another source. One exception: with `local` decisions, a `models` entry the ARC release can't route to is skipped with a warning (section 5.4 item 3).
+2. **No silent fallback.** A missing or invalid value is an error. It is never skipped, guessed or replaced by another source. One exception: with `local` decisions, a `local.inference.models` entry the ARC release can't route to is skipped with a warning (section 5.4 item 3).
 3. **One spelling, one value.** Each key, flag and env var has one name and each meaning has one value. No aliases, no alternative spellings, no deprecated names.
-4. **No compatibility code.** No migration of old files, keys, names or install layouts. Old files are ignored, not read and not moved.
+4. **No compatibility code.** No migration of old files, keys, names or install layouts, except `settings.json` (section 5.9). Old files are ignored, not read and not moved.
 5. **No hard-coded models in the local process.** The candidates ARC picks from, their context windows, output limits and prices come from ARC or from `settings.json`, never from constants in code, except the three cloud models in section 5.3 item 2, which stay until the Rayline router publishes ARC's model set.
 6. **No new surface.** Nothing is added that this spec does not list.
 
@@ -33,7 +33,7 @@ Commands:
   top              Show live request metrics
   update           Check for or install a Rayline update
 
-Usage: rayline run <HARNESS> [--local | --config <file>] [HARNESS ARGS]...
+Usage: rayline run <HARNESS> [--mode <cloud|local>] [--config <file>] [HARNESS ARGS]...
 
 Harnesses:
   claude           Claude Code
@@ -45,10 +45,10 @@ Harnesses:
   openclaw         OpenClaw
 
 Options:
-  --local           Run through the local Rayline process (local mode)
-  --config <file>   Use <file> instead of ~/.config/rayline/settings.json;
-                    local mode if it has a `routing` section
-  --isolated        claude only: use a separate Claude Code config folder
+  --mode <cloud|local>  The mode for this run, over the config's `mode`;
+                        local runs through the local Rayline process
+  --config <file>       Use <file> instead of ~/.config/rayline/settings.json
+  --isolated            claude only: use a separate Claude Code config folder
 
 Codex:
   rayline run codex app [WORKSPACE]   Launch the Codex desktop app
@@ -71,17 +71,17 @@ Arguments after the harness name, or after --, go to the harness.
 ### 3.2 `rayline run <HARNESS>`
 
 ```
-rayline run <HARNESS> [--local | --config <file>] [HARNESS ARGS]...
+rayline run <HARNESS> [--mode <cloud|local>] [--config <file>] [HARNESS ARGS]...
 ```
 
-1. With neither flag: **cloud mode**. Config from `~/.config/rayline/settings.json`. No local process. The harness talks to Rayline Platform directly. When a local process is running, the run first prints to stderr `Note: a local process is running; this run uses Rayline Platform. Add --local to use the local process.`
-2. `--local`: **local mode**. Config from `~/.config/rayline/settings.json`. The harness talks to the local process, which is started if it isn't running. The config must have a `routing` section (section 5.4), except while a local process started from the `--router` defaults runs (section 3.3 item 11).
-3. `--config <file>`: config from `<file>` instead of the default file (it replaces it, never merges). If the file has a `routing` section the run is in local mode, otherwise cloud mode.
-4. `--local` and `--config` together are a usage error.
+1. The config comes from `~/.config/rayline/settings.json`, or from `<file>` with `--config <file>`, which replaces it (never merges). The mode is `--mode`, else `RAYLINE_MODE`, else the config's `mode` (section 5). `--mode` and `--config` combine.
+2. **Cloud mode**: no local process. The harness talks to Rayline Platform directly, with the models in `cloud` (section 5.1), which the config must have. When a local process is running, the run first prints to stderr `Note: a local process is running; this run uses Rayline Platform. Add --mode local to use the local process.`
+3. **Local mode**: the harness talks to the local process, which is started if it isn't running. The config must have `local.routing` (section 5.4), except while a local process started from the `--router` defaults runs (section 3.3 item 11).
+4. A `--mode` value other than `cloud` or `local` is a usage error, and so is `--local`.
 5. Rayline options come first, right after the harness name. The first argument that is not a Rayline option, or everything after `--`, goes to the harness unchanged, including `--help`. When the harness arguments are exactly one of `--help`, `-h`, `--version` and `-v`, for `claude`, `codex` and every harness in the list above, Rayline runs the harness with that argument alone and does nothing else: it reads no config or credentials, signs nobody in, starts no local process and doesn't check Claude Code's daemon. A harness not on `PATH` fails with ``Error: `<harness>` not found on PATH``.
 6. `rayline run --help` prints the usage above. `rayline run <HARNESS>` with an unknown harness is a usage error.
 7. Each harness keeps today's behaviour in both modes, apart from what this spec removes.
-8. Local mode refuses these kept options and commands (section 9) before anything starts: `rayline run claude --isolated`, `rayline run codex app` and `rayline run codex configure`. A lone `--help`, `-h`, `--version` or `-v` (item 5) runs the harness first, so `rayline run claude --local --isolated --help` prints Claude Code's help. `app` and `configure` are Rayline commands only as the word right after `rayline run codex`. After Rayline's options they are codex arguments, so `rayline run codex --local app` passes `app` to codex.
+8. Local mode refuses these kept options and commands (section 9) before anything starts: `rayline run claude --isolated`, `rayline run codex app` and `rayline run codex configure`. A lone `--help`, `-h`, `--version` or `-v` (item 5) runs the harness first, so `rayline run claude --mode local --isolated --help` prints Claude Code's help. `app` and `configure` are Rayline commands only as the word right after `rayline run codex`. After Rayline's options they are codex arguments, so `rayline run codex --mode local app` passes `app` to codex.
 9. For `claude`, `codex`, `pi` and `opencode`, local mode refuses a command line that resumes or forks a saved session, before anything starts. It looks at the harness arguments before any `--`, in both the `--flag` and `--flag=value` forms, and refuses these:
    - `claude`: `-r`, `-c`, `--resume`, `--continue`, `--fork-session`, `--resume-session-at`;
    - `codex`: `resume` or `fork` as the first argument, or `exec resume` as the first two;
@@ -94,7 +94,7 @@ rayline run <HARNESS> [--local | --config <file>] [HARNESS ARGS]...
 12. Local mode refuses `rayline run pi` before anything starts when `pi` isn't on `PATH`, or when `pi --version` can't run, exits non-zero, prints no version or prints one older than 0.87.1 (an older pi sends no session id). When pi is older, the error names the minimum version and `npm install -g @earendil-works/pi-coding-agent`.
 13. `rayline run openclaw`, in cloud and local mode, refuses before writing its config when `openclaw --version` can't run, exits non-zero, prints no version or prints one older than 2026.9.6 (an older OpenClaw rejects the whole config over fields it doesn't know). The error names the minimum version and `npm install -g openclaw`.
 14. Rayline sets each launch up for ARC and passes the harness arguments through unread, a harness's own model flag included. The endpoint decides what a model id means:
-    - cloud mode: the hosted router serves the model id the harness sends, or refuses it;
+    - cloud mode: the Rayline router serves the model id the harness sends, or refuses it;
     - local mode: the declared model is `rayline-auto`; a model id the harness sends is a request, and ARC decides which model runs;
     - a harness may change its own request for the model it named, and the endpoint answers that request. Codex sends GPT reasoning fields and non-function tools for a model id it recognises as a GPT reasoning model (for example `codex -m openai/gpt-6.1-sol`); in local mode the core refuses that request with 400 naming the field, before anything runs. OpenClaw sends its session header only for a model Rayline declares; in local mode any other `--model` is refused by the core with 400 session_identity_required.
     - a harness's own config pins override the environment Rayline sets, for example a subagent model pinned in Claude Code's `settings.json`.
@@ -105,15 +105,15 @@ Harness-specific options and subcommands are **kept for review** (section 9).
 
 | Command | Does |
 |---|---|
-| `rayline local start [--config <file>] [--router <local\|hosted>]` | Start the local process from the default config file, or from `<file>`. The config must have a `routing` section, except with `--router` (item 11). While it waits for the process, stderr shows `Starting the local process (ARC encoder and execution core)...` with `router` `local`, else `Starting the local process...`, and the ready line ends `(started in <s> s)`. |
+| `rayline local start [--config <file>] [--router <cloud\|local>]` | Start the local process from the `local` section of the default config file, or of `<file>`, whatever `mode` says. The config must have `local.routing`, except with `--router` (item 11). While it waits for the process, stderr shows `Starting the local process (ARC encoder and execution core)...` with `router` `local`, else `Starting the local process...`, and the ready line ends `(started in <s> s)`. |
 | `rayline local status [--json]` | Show whether the local process is running, its address, the config file and the environment it was started from. `--json` prints it as one JSON object (item 12). |
 | `rayline local stop` | Stop the local process. External inference servers keep running. |
 
 1. One local process per machine, with its state in `~/.rayline/local/`.
 2. `start` while it is running is an error that names the running process and its config file.
-3. A `rayline run ... --local` or `--config` run whose config file differs from the one the running process was started from, or whose `--env` differs, or whose `routing.router` (and, for `local`, ARC release: its repo, commit, directory and manifest sha256) differs, is an error. It never silently uses the running process's config.
+3. A local-mode run whose config file differs from the one the running process was started from, or whose `--env` differs, or whose `local.routing.router` (and, for `local`, ARC release: its repo, commit, directory and manifest sha256) differs, is an error. It never silently uses the running process's config.
 4. On macOS, `rayline local` and local-mode runs require macOS 13 or later.
-5. Starting the local process downloads the tokenizer of each `models` entry that names one (section 5.3) into the Hugging Face cache (section 8.2). When Hugging Face doesn't answer within 20 seconds or a file fails to download, it uses the last complete copy in the cache and says that it is the cached copy. With no complete cached copy, start fails with an error that names the config file, the `models` entry and the tokenizer.
+5. Starting the local process downloads the tokenizer of each `local.inference.models` entry that names one (section 5.3) into the Hugging Face cache (section 8.2). When Hugging Face doesn't answer within 20 seconds or a file fails to download, it uses the last complete copy in the cache and says that it is the cached copy. With no complete cached copy, start fails with an error that names the config file, the `models` entry and the tokenizer.
 6. The token counter reads the tokenizer repo's files in the layouts Hugging Face models publish:
    - `tokenizer.json`;
    - the chat template: `chat_template.jinja`, else the `chat_template` key of `tokenizer_config.json` (a string, or named templates `default` and `tool_use`);
@@ -131,10 +131,10 @@ Harness-specific options and subcommands are **kept for review** (section 9).
 
    The core passes on the service's two headers separately: `Retry-After` only as delta-seconds, and `X-Should-Retry` only as exactly `true` or `false`. A refusal can carry one without the other, and the local process uses the one it gets. A missing header takes its own default, and only for an unavailable or busy service. Without `retry-after`, the local process waits about 5 seconds for its resend and tells the harness `retry-after: 30`. Without `x-should-retry`, the turn may be resent. When the service doesn't answer, the core passes on neither.
 
-   With `router` `local`, the error says local ARC refused or couldn't decide the turn on this machine, and a refusal points at `routing.decisions_model` and `models`.
-9. When the core fails a turn before any output because it couldn't reach the endpoint the decision selected, the local process doesn't resend it, and the harness gets 502 with `x-should-retry: false`. The error names Rayline Platform when every model is Rayline Platform's, else "Rayline Platform, or an inference server in `endpoints`", and says to check the network and any `HTTPS_PROXY` the local process was started with.
+   With `router` `local`, the error says local ARC refused or couldn't decide the turn on this machine, and a refusal points at `local.routing.decisions_model` and `local.inference.models`.
+9. When the core fails a turn before any output because it couldn't reach the endpoint the decision selected, the local process doesn't resend it, and the harness gets 502 with `x-should-retry: false`. The error names Rayline Platform when every model is Rayline Platform's, else "Rayline Platform, or an inference server in `local.inference.endpoints`", and says to check the network and any `HTTPS_PROXY` the local process was started with.
 10. `runtime.log` gets a line, never with the request's content, for every request the local process refuses (an untrusted origin, a missing token, a body over 64 MiB: status and path) and every error the core answers with (status, path and error type; a 502 before any output as item 8 or 9 classifies it).
-11. `--router` sets `routing.router`, over the file and `RAYLINE_ROUTING_ROUTER`. With `--router` and no `routing` section in the config (or no config file), start uses `routing` with that `router`, `decisions_model` `arc-swift-1.0`, `policy.preset` `arc-policy.prefer-local.v1` and no `classifier_model`, for `local` and `hosted` alike; `RAYLINE_ROUTING_*` overrides apply to those defaults as to a file's `routing`. The process's `supervisor.json` records that it started from them (`"routing_defaults": true`), and while it runs, a `rayline run <harness> --local` whose config has no `routing` uses the same defaults and runs on it. Whenever the started `routing` (these defaults or a file's) has no `classifier_model`, start ends with a note: Claude Code needs `routing.classifier_model`, followed by a `settings.json` with that `routing` and `"classifier_model": "<model id>"`.
+11. `--router` sets `local.routing.router`, over the file and `RAYLINE_LOCAL_ROUTING_ROUTER`. With `--router` and no `local.routing` in the config, start uses `local.routing` with that `router`, `decisions_model` `{ "id": "arc-swift-1.0" }`, `policy.preset` `arc-policy.prefer-local.v1` and no `classifier_model`, for `cloud` and `local` alike; the `RAYLINE_LOCAL_ROUTING_*` overrides apply to those defaults as to a file's `local.routing`. The process's `supervisor.json` records that it started from them (`"routing_defaults": true`), and while it runs, a local-mode `rayline run <harness>` whose config has no `local.routing` uses the same defaults and runs on it. Whenever the started `local.routing` (these defaults or a file's) has no `classifier_model`, start ends with a note: Claude Code needs `local.routing.classifier_model`, followed by a `settings.json` in local mode with that `local.routing` and `"classifier_model": "<model id>"`.
 12. `rayline local status --json` prints `{"running": false}` when nothing runs. Otherwise:
 
    | Key | Value |
@@ -144,8 +144,8 @@ Harness-specific options and subcommands are **kept for review** (section 9).
    | `url` | The gateway address, as `status` prints it. |
    | `config` | The config file it was started from. |
    | `environment` | `prod` or the `--env` name. |
-   | `router` | `local` or `hosted`. |
-   | `decisions_model` | `routing.decisions_model`. |
+   | `router` | `cloud` or `local`. |
+   | `decisions_model` | `local.routing.decisions_model.id`. |
    | `routes` | With `local` decisions only: `url`, the local Routes API (`POST /v1/routes`), and `token_file`, the file holding its bearer token. |
 
    The token is never printed. Other local programs (pi-arc, for one) read it from `token_file` and send `Authorization: Bearer <token>`. It admits `POST /v1/routes` only; any other method or path is refused 403, so it can't send anything to Rayline Platform. The local process writes the file (mode 0600) when it starts with `local` decisions and removes it when it stops; a new start makes a new token.
@@ -158,9 +158,9 @@ rayline top [--json]
 
 1. Shows live request metrics from the local process.
 2. `--json` prints one snapshot as JSON and exits.
-3. The live view (a terminal, without `--json`) waits for a local process: while none runs it shows `Local process: not running` and checks again every refresh. When the local process restarts, it follows the new one. `--json`, or output that isn't a terminal, with no local process running exits with the error ``no local process is running. Start one with `rayline local start` or `rayline run <harness> --local`.``
-4. Under its title, `top` names the router that decides: `Router: local ARC (<decisions_model>) on this machine`, or `Router: hosted ARC (<decisions_model>) in Rayline Platform`. The snapshot carries this as `router`: `{"kind": "local" | "hosted", "model": <decisions_model>}`.
-5. Each request shows the router that decided it, how long a local decision took, and the event it was decided for (`task_start`, `tool_result`, ...): the row fields `router` (`local`, `hosted`, or `null` for a request no decision routed, such as a classifier call), `decision_ms` (local decisions only) and `decision_event`.
+3. The live view (a terminal, without `--json`) waits for a local process: while none runs it shows `Local process: not running` and checks again every refresh. When the local process restarts, it follows the new one. `--json`, or output that isn't a terminal, with no local process running exits with the error ``no local process is running. Start one with `rayline local start` or `rayline run <harness> --mode local`.``
+4. Under its title, `top` names the router that decides: `Router: local ARC (<decisions_model>) on this machine`, or `Router: cloud ARC (<decisions_model>) in Rayline Platform`. The snapshot carries this as `router`: `{"kind": "local" | "cloud", "model": <decisions_model>}`.
+5. Each request shows the router that decided it, how long a local decision took, and the event it was decided for (`task_start`, `tool_result`, ...): the row fields `router` (`local`, `cloud`, or `null` for a request no decision routed, such as a classifier call), `decision_ms` (local decisions only) and `decision_event`.
 
 ### 3.5 `rayline update`
 
@@ -200,57 +200,196 @@ The hidden `--base-url` option is in section 4.4.
 
 ## 4. Internal CLI
 
-1. `--env <name>`, hidden, a global option placed before the command: `rayline --env dev run claude`. It selects `environments.<name>` from `settings.json` and from `credentials.json`. Without it, prod (built in). An unknown name is a load error. `rayline local status`, `rayline local stop` and `rayline top` act on the one running local process, so `--env` with them is a usage error.
+1. `--env <name>`, hidden, a global option placed before the command: `rayline --env dev run claude`. It selects `environments.<name>` from the config file and from `credentials.json`. Without it, prod (built in). An unknown name is a load error. `rayline local status`, `rayline local stop` and `rayline top` act on the one running local process, so `--env` with them is a usage error.
 2. `rayline update` hidden release-testing options: `--base-url <url>` (where releases are read from) and `--install-path <path>` (which binary is replaced). They replace the env vars `RAYLINE_UPDATE_BASE_URL` and `RAYLINE_UPDATE_INSTALL_PATH`.
 3. The local process runs from the `rayline` binary itself, through an internal entry point that `rayline local start` uses. It is not a user command and is not in `--help`. There is no separate `rld` binary.
 4. `install-rayline.sh` hidden release-testing option `--base-url <url>`: where the release is read from. With `--version` it is a usage error. It replaces `RAYLINE_RELEASE_BASE_URL`.
 
 ## 5. `settings.json`
 
-One file: `~/.config/rayline/settings.json`, written by the user. `--config <file>` takes a file of the same shape. The file is optional: with no file, every section is empty.
+One file: `~/.config/rayline/settings.json`. `--config <file>` takes a file of the same shape, which replaces it (never merges).
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `mode` | `cloud` or `local` | yes | The mode a `rayline run` uses (section 3.2). |
+| `cloud` | object (section 5.1) | in cloud mode | The models a cloud-mode run uses. |
+| `local` | object: `inference` (`endpoints` and `models`, sections 5.2 and 5.3) and `routing` (section 5.4) | in local mode, and for `rayline local start` | The local process's setup. |
+| `environments` | object (section 5.5) | no | Internal environments. |
+| `update` | object (section 5.6) | no | The release channel. |
+
+1. A file may hold both `cloud` and `local`. The section a command uses must be present; the other may be absent. A section the file has must be complete, whichever command reads it. `rayline local start` reads `local` whatever `mode` says.
+2. The whole file is validated at load, including the section the command doesn't use: an unknown key, a wrong value or a missing required key anywhere is a load error (section 5.8).
+3. When `~/.config/rayline/settings.json` doesn't exist, a command that reads it writes the default file (example 1) and prints to stderr ``Created <file> with the default settings (`mode` `cloud`)``. Every command reads it, `auth`, `top`, `update`, `local status` and `local stop` included, except `--version`, `--help`, a usage error and a command with `--config <file>`. A default file with no `mode` is converted the same way (section 5.9).
+4. `settings.json` has no `$schema` key. `schema/settings.schema.json` (JSON Schema draft 2020-12) describes the shape for readers and tests. Rayline doesn't read it: load is the only validator.
+
+The three setups:
+
+| Setup | `mode` | `local.routing.router` | ARC decides | Inference runs |
+|---|---|---|---|---|
+| Cloud mode | `cloud` | – | in Rayline Platform | on Rayline Platform |
+| Local mode, cloud ARC | `local` | `cloud` | in Rayline Platform | on the user's servers or Rayline Platform |
+| Local mode, local ARC | `local` | `local` | on the user's machine | on the user's servers or Rayline Platform |
+
+Example 1, cloud mode (the default file):
 
 ```json
 {
-  "endpoints": {
-    "gpu-box": {
-      "base_url": "https://gpu-box.example.com:8443",
-      "protocols": ["anthropic_messages", "openai_chat", "openai_responses"],
-      "api_key_env": "GPU_BOX_API_KEY"
-    },
-    "ollama": {
-      "base_url": "http://127.0.0.1:11434",
-      "protocols": ["openai_chat", "anthropic_messages"]
-    }
+  "mode": "cloud",
+
+  "cloud": {
+    "model": { "id": "arc-sage-1.0" },
+    "smol_model": { "id": "arc-swift-1.0" }
+  }
+}
+```
+
+Example 2, local mode with cloud ARC:
+
+```json
+{
+  "mode": "local",
+
+  "cloud": {
+    "model": { "id": "arc-sage-1.0" },
+    "smol_model": { "id": "arc-swift-1.0" }
   },
-  "models": {
-    "z-ai/glm-5.3-flash": {
-      "endpoint": "gpu-box",
-      "model": "GLM-5.3-Flash-EXL3",
-      "context_window": 1000000,
-      "max_output_tokens": 32000,
-      "tokenizer": "zai-org/GLM-5.3-Flash",
-      "price": { "input": 0, "output": 0, "cache_read": 0, "cache_write": 0 }
-    }
-  },
-  "routing": {
-    "decisions_model": "arc-swift-1.0",
-    "classifier_model": "anthropic/claude-haiku-5.5",
-    "policy": {
-      "preset": "arc-policy.prefer-local.v1",
-      "overrides": {
-        "selection": { "min_p_pass": 0.5 },
-        "schedule": { "model": ["cache_boundaries", "user_messages"] }
+
+  "local": {
+    "inference": {
+      "endpoints": {
+        "gpu-box": {
+          "base_url": "https://gpu-box.example.com:8443",
+          "protocols": ["anthropic_messages", "openai_chat", "openai_responses"],
+          "api_key_env": "GPU_BOX_API_KEY"
+        }
+      },
+      "models": {
+        "z-ai/glm-5.3-flash": {
+          "endpoint": "gpu-box",
+          "model": "GLM-5.3-Flash-EXL3",
+          "context_window": 1000000,
+          "max_output_tokens": 32000,
+          "tokenizer": "zai-org/GLM-5.3-Flash"
+        }
       }
+    },
+    "routing": {
+      "router": "cloud",
+      "decisions_model": { "id": "arc-swift-1.0" },
+      "classifier_model": "anthropic/claude-haiku-5.5",
+      "policy": {
+        "preset": "arc-policy.prefer-local.v1",
+        "overrides": {
+          "selection": { "min_p_pass": 0.5 },
+          "schedule": { "model": ["cache_boundaries", "user_messages"] }
+        }
+      }
+    }
+  },
+
+  "environments": {
+    "dev": {
+      "base_url": "https://api.dev.example.com",
+      "login_url": "https://platform.dev.example.com/cli-auth"
     }
   }
 }
 ```
 
-### 5.1 Rayline Platform
+Example 3, local mode with local ARC:
+
+```json
+{
+  "mode": "local",
+
+  "cloud": {
+    "model": { "id": "arc-sage-1.0" },
+    "smol_model": { "id": "arc-swift-1.0" }
+  },
+
+  "local": {
+    "inference": {
+      "endpoints": {
+        "gpu-box": {
+          "base_url": "https://gpu-box.example.com:8443",
+          "protocols": ["anthropic_messages", "openai_chat", "openai_responses"],
+          "api_key_env": "GPU_BOX_API_KEY"
+        }
+      },
+      "models": {
+        "z-ai/glm-5.3-flash": {
+          "endpoint": "gpu-box",
+          "model": "GLM-5.3-Flash-EXL3",
+          "context_window": 1000000,
+          "max_output_tokens": 32000,
+          "tokenizer": "zai-org/GLM-5.3-Flash"
+        }
+      }
+    },
+    "routing": {
+      "router": "local",
+      "decisions_model": { "id": "arc-swift-1.0" },
+      "classifier_model": "anthropic/claude-haiku-5.5",
+      "policy": {
+        "preset": "arc-policy.prefer-local.v1",
+        "overrides": {
+          "selection": { "min_p_pass": 0.5 },
+          "schedule": { "model": ["cache_boundaries", "user_messages"] }
+        }
+      }
+    }
+  },
+
+  "environments": {
+    "dev": {
+      "base_url": "https://api.dev.example.com",
+      "login_url": "https://platform.dev.example.com/cli-auth"
+    }
+  }
+}
+```
+
+Examples 2 and 3 differ in one line, `router`. Their `cloud` section is optional; with it, `--mode cloud` works on the same file. `classifier_model` is needed only to run Claude Code in local mode (section 5.4).
+
+With `router` `cloud`, `decisions_model` can ask for ARC's answer at a `v_value` (section 5.4):
+
+```json
+"decisions_model": { "id": "arc-1.0", "v_value": 2 }
+```
+
+### 5.1 Rayline Platform and `cloud`
 
 Rayline Platform (prod) is built in and has no entry. It serves every protocol a harness speaks. Login is always Rayline session login.
 
-### 5.2 `endpoints`
+`cloud` holds the two models a cloud-mode run uses. A model is an object, `{ "id": "<ARC model id>" }`.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `model` | model object | yes | The harness's main model. |
+| `model.id` | non-empty string | yes | Its ARC model id. |
+| `smol_model` | model object | no, default `model` (the whole object) | The harness's small model. |
+| `smol_model.id` | non-empty string | with `smol_model` | Its ARC model id. |
+
+1. A model object in `cloud` has only `id`. Any other key, `v_value` included, is a load error, like any unknown key.
+2. Rayline checks the shape of a model object, not its id: load holds no list of ids and reads none. It doesn't replace an id with the key's Contributor or zero data retention id. The id goes to the API as written, and the API validates it when the model is called (for example 400 `value_required`, 400 `tier_value_immutable`, 403 `zdr_model_required`).
+3. A cloud-mode launch reads the key's model listing to set up the harness. The opencode, pi, omp, OpenClaw and Hermes configs list every model the listing has, with its name, limits and input types. Rayline doesn't check `cloud.model.id` or `cloud.smol_model.id` against the listing: an id the listing doesn't have is added to those configs by its id alone, with no limits (OpenClaw, which requires a name, gets the id as its name), and the harness uses its own defaults for it.
+4. Where each harness uses the two models:
+
+   | Harness | `model` | `smol_model` |
+   |---|---|---|
+   | Claude Code | `ANTHROPIC_MODEL` | `CLAUDE_CODE_SUBAGENT_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL` |
+   | opencode | `model` | `small_model` |
+   | omp | roles `default`, `slow`, `plan` | role `smol` |
+   | Codex | `model` | not used |
+   | pi | `defaultModel` | not used |
+   | Hermes | `model.default` | not used |
+   | OpenClaw | `agents.defaults.model.primary` | not used |
+
+5. Every launch, in either mode, sets these. pi's `settings.json` and omp's `config.yml` also hold settings the harness saves itself, so in those two files a launch sets only Rayline's keys (pi `defaultProvider` and `defaultModel`; omp `modelRoles` `default`, `smol`, `slow` and `plan`) and keeps every other entry as the harness wrote it. A model picked in pi or omp is replaced at the next launch. A file Rayline can't update that way (invalid JSON, or YAML laid out other than omp writes it, such as a non-empty flow collection or an anchor) is an error that names the file, and Rayline leaves it unchanged. Rayline doesn't otherwise check that `config.yml` is valid YAML: an invalid escape in a quoted value, for example, is kept as written.
+
+### 5.2 `local.inference.endpoints`
+
+`local.inference` is optional. Without it, local mode runs every model ARC picks on Rayline Platform.
 
 Your own inference servers, keyed by id.
 
@@ -262,14 +401,14 @@ Your own inference servers, keyed by id.
 
 In local mode each harness speaks one protocol, the only one its Rayline config sets up: `claude`, `pi`, `omp` and `opencode` speak `anthropic_messages`; `codex` and `hermes` speak `openai_responses`; `openclaw` speaks `openai_chat`. When the endpoint lists the harness's protocol, requests pass straight through with no translation. When it doesn't, the config is wrong and Rayline refuses to run. In cloud mode the config Rayline writes for `hermes` defaults to `anthropic_messages`, with an `openai_responses` provider beside it, and the one for `openclaw` adds an `openai_responses` provider beside `openai_chat`. Every other harness uses the same protocol in both modes.
 
-### 5.3 `models`
+### 5.3 `local.inference.models`
 
 Models ARC can pick that are not served by Rayline Platform, keyed by the model id ARC returns.
 The action ARC identifies is the model id after its provider prefix (`qwen/qwen3.8-27b` -> `qwen3.8-27b`).
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
-| `endpoint` | string | yes | An id in `endpoints`. |
+| `endpoint` | string | yes | An id in `local.inference.endpoints`. |
 | `model` | string | yes | The name that server knows the model by. |
 | `context_window` | integer > 0 | yes, when the local process starts (item 5) | Context window in tokens. |
 | `max_output_tokens` | integer > 0 | yes, when the local process starts (item 5) | Output ceiling in tokens. |
@@ -288,20 +427,22 @@ The action ARC identifies is the model id after its provider prefix (`qwen/qwen3
    A `models` entry keyed by one of the registry ids replaces that cloud model. ARC prices the cloud models. This list goes when the Rayline router publishes ARC's model set (section 10.4 item 14).
 3. Nothing marks a model as "local". Every entry works the same way.
 4. Main/subagent routes are not supported.
-5. ARC doesn't publish the models it knows yet, so it knows no model's limits. Every entry must state `context_window` and `max_output_tokens`, and the local process refuses to start without them (section 5.8 item 11).
+5. ARC doesn't publish the models it knows yet, so it knows no model's limits. Every entry must state `context_window` and `max_output_tokens`, and the local process refuses to start without them (section 5.8 item 13).
 6. In local mode Rayline tells every harness a context window of 1,000,000 tokens, whichever model serves the turn.
 
-### 5.4 `routing`
+### 5.4 `local.routing`
 
-Required for local mode. Its presence in a `--config` file selects local mode.
+How the local process picks a model. Required in local mode and for `rayline local start`, except with the `--router` defaults (section 3.3 item 11).
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
-| `decisions_model` | string | yes | Which ARC product makes decisions (for example `arc-swift-1.0`). No default in code, except `rayline local start --router <local|hosted>` without `routing` (section 3.3 item 11). With `router` `local`, it must be `arc-swift-1.0` or `arc-sage-1.0` (or their short and data-mode spellings, such as `arc-swift` or `arc-sage-zdr-1.0`); any other value fails load naming the key. |
-| `classifier_model` | string | to run Claude Code | The model that serves Claude Code's auto-mode safety classifier calls, sent to Rayline Platform. No default in code. A local-mode `rayline run claude` without it fails before anything starts, naming the key and showing a `settings.json` with the run's `routing` and `"classifier_model": "<model id>"`, and so does one that would use a local process started without it; such a process refuses classifier calls. |
+| `router` | `cloud` or `local` | yes | Where the local process gets its decisions. `cloud`: the environment's Rayline router decides. `local`: ARC runs inside the local process from the ARC release (item 1); no decision goes to Rayline Platform. |
+| `decisions_model` | model object `{ "id": ..., "v_value": ... }` | yes | Which ARC model makes decisions. No default in code, except `rayline local start --router <cloud|local>` without `local.routing` (section 3.3 item 11). |
+| `decisions_model.id` | non-empty string | yes | Its ARC model id (for example `arc-swift-1.0`). With `router` `local`, it must be `arc-swift-1.0` or `arc-sage-1.0` (or their short and data-mode spellings, such as `arc-swift` or `arc-sage-zdr-1.0`); any other value fails load naming the key. With `router` `cloud`, Rayline doesn't check it (section 5.1 item 2). |
+| `decisions_model.v_value` | number >= 0 | no | With `router` `cloud`, the local process asks the Rayline router for ARC's `custom` answer at this value, sent as `routing.v_value`; without it, ARC's `top` answer. With `router` `local`, it is a load error. |
+| `classifier_model` | string | to run Claude Code | The model that serves Claude Code's auto-mode safety classifier calls, sent to Rayline Platform. No default in code. A local-mode `rayline run claude` without it fails before anything starts, naming the key and showing a `settings.json` with the run's `local.routing` and `"classifier_model": "<model id>"`, and so does one that would use a local process started without it; such a process refuses classifier calls. |
 | `policy.preset` | non-empty string | yes | ARC's preset id (`arc-policy.package-default.v1`, `arc-policy.hybrid-default.v1` or `arc-policy.prefer-local.v1`). Sent to ARC unchanged; no short names. The same exception as `decisions_model` applies. |
 | `policy.overrides` | object | no | ARC's own `routing.policy.overrides` shape, sent to ARC unchanged. ARC validates it. |
-| `router` | `local` or `hosted` | no, default `hosted` | Where the local process gets its decisions. `hosted`: the environment's Rayline router decides. Set `local` to decide on this machine: ARC runs inside the local process from the ARC release (item 1); no decision goes to Rayline Platform. |
 | `arc_release.repo` | string `<owner>/<name>` | with `arc_release` | The Hugging Face repo of the ARC release `local` decisions download instead of the built-in one. |
 | `arc_release.revision` | 40 lowercase hex digits | with `arc_release` | The repo's commit. |
 | `arc_release.manifest_sha256` | 64 lowercase hex digits | with `arc_release` | The sha256 of the release's `manifest.json`. |
@@ -313,17 +454,17 @@ Required for local mode. Its presence in a `--config` file selects local mode.
    - A private repo needs a Hugging Face token (section 7.1 item 6); without one, start fails saying to set `HF_TOKEN`.
    - Start shows the download on stderr as one transfer of the release's files, the encoder weights and, when it downloads it, the ARC encoder (item 2), in MB with its rate. On a terminal it is one line that updates in place. Elsewhere it prints a line when the download starts, at each further tenth or 10 seconds after the last line, `Verifying the ARC release...` once the last bytes are in, and `ARC release downloaded: <MB> in <s> s (<rate>)`. The rate counts only bytes this start downloaded. When nothing needs downloading, it prints only `ARC release cached`. A closed stderr doesn't stop start.
    - The encoder weights (about 1 GB) come from `rayline-ai/ARC-1.0` at the built-in release's commit and a sha256 compiled into Rayline, whatever `arc_release` says, without a token, by the same rules. A release in `arc_release` must be built for those weights; Rayline can't check that.
-   - When neither the release nor the `models` prices it takes price any model, start fails saying so.
-   - Start still contacts the environment's Rayline router and checks each `models` entry's `tokenizer` (section 5.3), as with `hosted`.
-2. With `router` `local`, the local process runs the ARC encoder `~/.rayline/arc/<version>/rayline-arc-encoder` (`rayline-arc-encoder.exe` on Windows), where `<version>` is the running `rayline`'s version, and looks for it nowhere else; an encoder beside `rayline` is not used. Releases ship it for macOS arm64, Linux (x86_64 and aarch64) and Windows x86_64. Before downloading anything, start checks the platform: on another platform it fails saying releases don't ship the encoder there; on Linux when `libcuda.so.1` can't be loaded, and on Windows when `nvcuda.dll` is missing, it fails saying the NVIDIA driver is required. These errors, and the one below for an encoder that would run on the CPU, end with the same fix: ``to use the hosted router instead, run `rayline local start --router hosted` ``. macOS arm64 needs no driver. The directory holds the encoder, `rayline-arc-encoder-LICENSE`, on Windows every `.dll` the release's `SHA256SUMS` lists (the cuBLAS DLLs the encoder loads), and that `SHA256SUMS` with its minisign signature. Each start checks the signature and each file's sha256, with the same stamps as the release's files (item 1). When any file is missing or doesn't match, start downloads it from that version's release, with the base URL and minisign-verified `SHA256SUMS` of `rayline update`; each download must match its sha256 and is moved into place by rename, the encoder with mode 0755 on macOS and Linux. After a download they are checked again with the release's files (item 1), which records their stamps. Start also removes the other versions' directories in `~/.rayline/arc/`. When the encoder finds no GPU it can use and would run on the CPU, start fails with an error that says so.
-3. With `router` `local`, a `models` entry the ARC release doesn't know, or that neither its `price` nor the release prices, is skipped: the local process doesn't route to it, and `rayline local start` prints one warning per skipped entry, naming it and why. Turns route among the remaining models. When every `models` entry is skipped, start fails with an error naming them. Item 5 is checked first.
-4. With `router` `local`, every turn routes by a local ARC decision; there is no fallback. A turn the decider can't decide fails with the decider's error code: one whose request holds more than the decider reads (over a million JSON values; over 16 bytes of text, images not counted, per token of the encoder's largest context of 270,336 tokens; over 1,024 tools; or over 64 working directories), or holds content the decider can't encode yet (images and documents), and any turn while the encoder is down. `rayline run codex`, `hermes` and `openclaw` (harnesses that don't send Anthropic Messages) fail before anything starts, with an error saying to use `hosted`.
-5. With `router` `local`, a `models` entry's `price` needs a release that takes caller prices; with one that doesn't, start fails naming each `models.<id>.price` to remove.
+   - When neither the release nor the `local.inference.models` prices it takes price any model, start fails saying so.
+   - Start still contacts the environment's Rayline router and checks each `models` entry's `tokenizer` (section 5.3), as with `cloud`.
+2. With `router` `local`, the local process runs the ARC encoder `~/.rayline/arc/<version>/rayline-arc-encoder` (`rayline-arc-encoder.exe` on Windows), where `<version>` is the running `rayline`'s version, and looks for it nowhere else; an encoder beside `rayline` is not used. Releases ship it for macOS arm64, Linux (x86_64 and aarch64) and Windows x86_64. Before downloading anything, start checks the platform: on another platform it fails saying releases don't ship the encoder there; on Linux when `libcuda.so.1` can't be loaded, and on Windows when `nvcuda.dll` is missing, it fails saying the NVIDIA driver is required. These errors, and the one below for an encoder that would run on the CPU, end with the same fix: ``to use the cloud router instead, run `rayline local start --router cloud` ``. macOS arm64 needs no driver. The directory holds the encoder, `rayline-arc-encoder-LICENSE`, on Windows every `.dll` the release's `SHA256SUMS` lists (the cuBLAS DLLs the encoder loads), and that `SHA256SUMS` with its minisign signature. Each start checks the signature and each file's sha256, with the same stamps as the release's files (item 1). When any file is missing or doesn't match, start downloads it from that version's release, with the base URL and minisign-verified `SHA256SUMS` of `rayline update`; each download must match its sha256 and is moved into place by rename, the encoder with mode 0755 on macOS and Linux. After a download they are checked again with the release's files (item 1), which records their stamps. Start also removes the other versions' directories in `~/.rayline/arc/`. When the encoder finds no GPU it can use and would run on the CPU, start fails with an error that says so.
+3. With `router` `local`, a `local.inference.models` entry the ARC release doesn't know, or that neither its `price` nor the release prices, is skipped: the local process doesn't route to it, and `rayline local start` prints one warning per skipped entry, naming it and why. Turns route among the remaining models. When every `models` entry is skipped, start fails with an error naming them. Item 5 is checked first.
+4. With `router` `local`, every turn routes by a local ARC decision; there is no fallback. A turn the decider can't decide fails with the decider's error code: one whose request holds more than the decider reads (over a million JSON values; over 16 bytes of text, images not counted, per token of the encoder's largest context of 270,336 tokens; over 1,024 tools; or over 64 working directories), or holds content the decider can't encode yet (images and documents), and any turn while the encoder is down. `rayline run codex`, `hermes` and `openclaw` (harnesses that don't send Anthropic Messages) fail before anything starts, with an error saying to use `cloud`.
+5. With `router` `local`, a `models` entry's `price` needs a release that takes caller prices; with one that doesn't, start fails naming each `local.inference.models.<id>.price` to remove.
 6. With `router` `local`, when the encoder exits, the local process logs it and starts it again after 2, 4, then 8 seconds. After 3 restarts within 10 minutes it logs an error and stops restarting until `rayline local stop`.
 
 ### 5.5 Internal: `environments`
 
-Not in public docs. Prod is built in. Internal users add other environments and pick one with `--env`.
+Top-level and optional. Not in public docs. Prod is built in. Internal users add other environments and pick one with `--env`.
 
 ```json
 "environments": {
@@ -343,7 +484,7 @@ An environment name is one or more ASCII letters, digits, `-` and `_`. The same 
 
 ### 5.6 Internal: `update`
 
-Not in public docs.
+Top-level and optional. Not in public docs.
 
 ```json
 "update": { "channel": "dev" }
@@ -361,36 +502,65 @@ Each scalar key Rayline defines can be overridden by one env var named `RAYLINE_
 
 | Key | Env var |
 |---|---|
-| `routing.decisions_model` | `RAYLINE_ROUTING_DECISIONS_MODEL` |
-| `routing.classifier_model` | `RAYLINE_ROUTING_CLASSIFIER_MODEL` |
-| `routing.policy.preset` | `RAYLINE_ROUTING_POLICY_PRESET` |
-| `routing.router` | `RAYLINE_ROUTING_ROUTER` |
+| `mode` | `RAYLINE_MODE` |
+| `cloud.model.id` | `RAYLINE_CLOUD_MODEL_ID` |
+| `cloud.smol_model.id` | `RAYLINE_CLOUD_SMOL_MODEL_ID` |
+| `local.routing.router` | `RAYLINE_LOCAL_ROUTING_ROUTER` |
+| `local.routing.decisions_model.id` | `RAYLINE_LOCAL_ROUTING_DECISIONS_MODEL_ID` |
+| `local.routing.decisions_model.v_value` | `RAYLINE_LOCAL_ROUTING_DECISIONS_MODEL_V_VALUE` |
+| `local.routing.classifier_model` | `RAYLINE_LOCAL_ROUTING_CLASSIFIER_MODEL` |
+| `local.routing.policy.preset` | `RAYLINE_LOCAL_ROUTING_POLICY_PRESET` |
 | `update.channel` | `RAYLINE_UPDATE_CHANNEL` |
 
 1. Precedence, lowest to highest: built-in defaults, the config file, env overrides, flags.
 2. An override value is validated like the file value; an invalid one is a load error.
-3. Whole entries (`endpoints.*`, `models.*`, `environments.*`, `routing.arc_release`) and ARC's `policy.overrides` have no env override. Put them in a file and pass it with `--config`.
-4. No other `RAYLINE_*` env var changes Rayline's behaviour (section 7).
+3. An override applies to the section a command uses. It replaces a value the file has; it never gives a required key the file lacks (section 5.8 item 5), though it may give an optional one (`cloud.smol_model.id`, `local.routing.decisions_model.v_value`, `local.routing.classifier_model`, `update.channel`). One for a section the file lacks is a load error for a command that uses that section (section 5.8 item 7), and is not read by one that doesn't.
+4. Whole entries (`local.inference.endpoints.*`, `local.inference.models.*`, `environments.*`, `local.routing.arc_release`) and ARC's `policy.overrides` have no env override. Put them in a file and pass it with `--config`.
+5. An env var named from a key path of the earlier shape (`RAYLINE_ROUTING_*`) is not read. No other `RAYLINE_*` env var changes Rayline's behaviour (section 7).
 
 ### 5.8 Load errors
 
 Load refuses, naming the key:
 
-1. An unknown key at any level Rayline defines.
+1. An unknown key at any level Rayline defines, anywhere in the file, including the section the command doesn't use. The earlier shape's top-level `endpoints`, `models` and `routing` are unknown keys in a file with `mode`.
 2. A wrong type, an empty string, or a value out of range.
-3. In a local-mode run, an endpoint that doesn't list the protocol of the harness being run. Cloud mode doesn't use endpoints, and `rayline local start` has no harness, so neither checks this.
-4. A model entry whose `endpoint` is not in `endpoints`.
-5. Local mode without `routing`, or `routing` missing a required key. When the default `settings.json` doesn't exist, the error prints a `settings.json` to paste (`routing` with `router` `hosted`, `decisions_model` `arc-swift-1.0` and `policy.preset` `arc-policy.prefer-local.v1`), says to add `classifier_model` to run Claude Code, and ends ``See https://docs.rayline.ai/rayline-cli/local-mode``.
+3. In a local-mode run, a `local.inference.endpoints` entry that doesn't list the protocol of the harness being run. Cloud mode doesn't use endpoints, and `rayline local start` has no harness, so neither checks this.
+4. A `local.inference.models` entry whose `endpoint` is not in `local.inference.endpoints`.
+5. A file without `mode`, unless it is the default file in the earlier shape (section 5.9). A cloud-mode run without `cloud`. Local mode or `rayline local start` without `local` or `local.routing`. When the file has no `local` section, the error says `local` is required in local mode and ends ``See https://docs.rayline.ai/rayline-cli/local-mode``; it prints no section, model id, preset or endpoint. Which sections must be present depends on the command; `auth`, `top`, `update`, `local status` and `local stop` need neither. A section the file has missing a required key in the file, for every command: `cloud` without `model` or `model.id`, a `cloud.smol_model` without `id`, a `local.routing` without `router`, `decisions_model`, `decisions_model.id` or `policy.preset`. An env override doesn't give a missing required key.
 6. `--env <name>` with no `environments.<name>` entry. `prod` gets no special case.
-7. A routing env override when the file has no `routing` section. The mode comes from the file only. `rayline local start --router <local|hosted>` with no config file or no `routing` section, and a `rayline run <harness> --local` with no `routing` while a local process started from those defaults runs, are the exceptions: the overrides apply to the built-in `routing` defaults (section 3.3 item 11). Commands that use no `routing` (`auth`, `top`, `update`, `local status`, `local stop`) read neither `routing` nor its `RAYLINE_ROUTING_*` overrides, so neither can stop them.
+7. An env override for a section the file lacks, for a command that uses that section: `RAYLINE_CLOUD_*` without `cloud`, and `RAYLINE_LOCAL_ROUTING_*` without `local.routing`. `rayline local start --router <cloud|local>` with no `local.routing`, and a local-mode `rayline run <harness>` with no `local.routing` while a local process started from those defaults runs, are the exceptions: the overrides apply to the built-in defaults (section 3.3 item 11).
 8. A `--config <file>` that doesn't exist. Only the default file is optional.
 9. A key repeated in one JSON object, an empty map key, a URL that isn't absolute `http` or `https`, a duplicate in `protocols`, or a `price` missing any of its four fields.
+10. A `local.routing.decisions_model.v_value` with `router` `local`, and, with `router` `local`, a `decisions_model.id` local decisions don't make (section 5.4). These are checked whichever section the command uses.
+11. A `--config <file>` with no `mode`: it is not converted (section 5.9), and its keys of the earlier shape are unknown keys.
 
 When the local process starts, before it serves anything, it also refuses:
 
-10. An `api_key_env` naming an env var that isn't set.
-11. A model entry that is missing `context_window` or `max_output_tokens`. ARC knows no model today, so this applies to every entry (section 5.3 item 5).
-12. An `api_key_env` naming `RAYLINE_ROUTER_API_KEY`, which holds the Rayline router key.
+12. An `api_key_env` naming an env var that isn't set.
+13. A model entry that is missing `context_window` or `max_output_tokens`. ARC knows no model today, so this applies to every entry (section 5.3 item 5).
+14. An `api_key_env` naming `RAYLINE_ROUTER_API_KEY`, which holds the Rayline router key.
+
+### 5.9 Migration from the earlier shape
+
+1. A command that reads the default file (section 5 item 3) converts a default file that is in the earlier shape to this shape and writes it back. A file with no `mode` key is in the earlier shape, the shape of `settings.json` in the releases before this one.
+2. The original is kept as `settings.json.bak` beside it, replacing any earlier `settings.json.bak`. The command prints to stderr ``Converted <file> from the earlier shape (`mode` `<mode>`); the original is <backup>``.
+3. The conversion carries everything the file holds: every endpoint, model, `routing` key, environment and `update`. It drops nothing:
+
+   | Earlier shape | This shape |
+   |---|---|
+   | `endpoints` | `local.inference.endpoints` |
+   | `models` | `local.inference.models` |
+   | `routing` | `local.routing` |
+   | `routing.router` `hosted` | `local.routing.router` `cloud` |
+   | `routing` with no `router` | `local.routing.router` `cloud` |
+   | `routing.decisions_model` `"<id>"` | `local.routing.decisions_model` `{ "id": "<id>" }` |
+   | `environments`, `update` | the same |
+   | – | `cloud` of the default file (example 1) |
+   | – | `mode`: `local` when the file has `routing` (the result has the shape of example 2 or 3), `cloud` when it has none |
+
+4. Only a file that is valid in the earlier shape is converted. A file with no `mode` that holds a key the earlier shape doesn't have, or a value it refuses, is a load error that names the key as the earlier shape spells it and says the file is read as the earlier shape; nothing is written.
+5. A `--config` file in the earlier shape is a load error that names the key (section 5.8 item 11). It is not converted.
+6. Flags and env vars are not converted: `--local` and `--router hosted` are usage errors, and the earlier shape's env names are not read (section 5.7 item 5).
 
 ## 6. `credentials.json`
 
@@ -488,10 +658,11 @@ Every other env var Rayline reads today is gone (section 10).
 
 ### 8.1 `~/.config/rayline`
 
-Only two files:
+Only these files:
 
-1. `settings.json`: written by the user.
-2. `credentials.json`: written by `rayline auth login` and `rayline auth logout`.
+1. `settings.json`: written by the user, and by Rayline when it is missing (section 5 item 3) or in the earlier shape (section 5.9).
+2. `settings.json.bak`: the file in the earlier shape that a conversion replaced (section 5.9).
+3. `credentials.json`: written by `rayline auth login` and `rayline auth logout`.
 
 ### 8.2 `~/.rayline`
 
@@ -553,7 +724,7 @@ Everything below is deleted outright: code, tests, docs and help text.
 ### 10.1 Commands and options
 
 1. `rayline router` and all its subcommands (`start`, `status`, `logs`, `top`, `stop`).
-2. `rayline hybrid` and all its subcommands and options (`start`, `status`, `stop`, `run`, `--core`, `--config`, `--env`, `--local-context-window`, `--classifier-model`, `--cell`, `--port`, `--startup-timeout-secs`, `--state-dir`). `rayline local` and `rayline run --local` replace it.
+2. `rayline hybrid` and all its subcommands and options (`start`, `status`, `stop`, `run`, `--core`, `--config`, `--env`, `--local-context-window`, `--classifier-model`, `--cell`, `--port`, `--startup-timeout-secs`, `--state-dir`). `rayline local` and a local-mode `rayline run` replace it.
 3. Every subcommand of today's `rayline local`: `models`, `download`, `use`, `remove`, `custom`, `show`, `test`, `clear`, `on`, `off`, `onboard`, `subagents`, with `--url` and `--base-url`.
 4. Top-level harness commands (`rayline claude`, `rayline codex`, `rayline claude-desktop`, `rayline pi`, ...) and the `rayline claude run` form. `rayline run <HARNESS>` replaces them.
 5. `rayline claude` options: `-m, --model`, `--auto-compact-window`, `--local-provider`, `--route`, `--via`, `--local-injector-port`, `--statusline`, `--no-statusline`, `--diagnose`, `--upstream-ca-path`, `--router-config-path`, `--routing-mode`, `--no-proxy`, `--local-router`, `--no-telemetry`.
@@ -563,6 +734,7 @@ Everything below is deleted outright: code, tests, docs and help text.
 9. `update --channel`. `update.channel` and `RAYLINE_UPDATE_CHANNEL` replace it.
 10. The `rl` alias.
 11. `rayline run claude-desktop` and all its commands and options (`start`, `status`, `validate`, `stop`, `install-service`, `uninstall-service`, `off`, `uninstall`, `--manual`, `--prefixed-ids`, `--desktop-config`), with its LaunchAgent and its state folder and lock. `rayline run claude-desktop` is an unknown harness.
+12. `rayline run --local`. `--mode local` and the config's `mode` replace it.
 
 ### 10.2 The old local stack
 
@@ -578,6 +750,7 @@ Everything below is deleted outright: code, tests, docs and help text.
 2. Files: `~/.config/rayline/cli.toml`, `router.json`, `router.<env>.json`, `claude-daemon-launches.json` and harness homes under `~/.config/rayline`; `~/.rayline/rld/`, `~/.rayline/hybrid/`, `~/.rayline/cc/`, `~/.rayline/codex-app-home/`, `~/.rayline/claude-desktop/`, `~/.rayline/claude-desktop.lock` and `~/.rayline/harness/claude-desktop/`. Rayline neither reads nor moves them.
 3. The old settings file location and its migration.
 4. Today's `credentials.json` shape (`version`, camelCase fields, `authKind`, `router_keys.<env>`, `apiKey`).
+5. The earlier shape's keys in a file with `mode`: top-level `endpoints`, `models` and `routing`, `routing.router` `hosted` (`cloud` replaces it) and a string `decisions_model`. Only the conversion of section 5.9 reads it.
 
 ### 10.4 Aliases, extra values and guesses
 
@@ -606,9 +779,10 @@ Everything below is deleted outright: code, tests, docs and help text.
 4. `RAYLINE_UPDATE_BASE_URL`, `RAYLINE_UPDATE_INSTALL_PATH`. Hidden `update` options replace them (section 4.2).
 5. The old local router, `rld` and proxy mode: `RAYLINE_MODEL_REPO`, `RAYLINE_MODEL_FILE`, `RAYLINE_MODEL_REVISION`, `RAYLINE_MODEL_SHA256`, `RAYLINE_LLAMA_TAG`, `RAYLINE_CTX_SIZE`, `RAYLINE_LOCAL_MODEL_ID`, `RAYLINE_NO_LOCAL_MODEL`, `RAYLINE_ADAPTER_PORT`, `RAYLINE_ADAPTER_UPSTREAM_MODEL`, `RAYLINE_ADAPTER_UPSTREAM_URL`, `RAYLINE_INJECTOR_PORT`, `RAYLINE_PROXY_PORT`, `RAYLINE_ISOLATED_PROXY_PORT`, `RAYLINE_ROUTER_URL`, `RAYLINE_DECISION_PLANE`, `RAYLINE_LOCAL_ROUTER_PORT`, `RAYLINE_ROUTER_CONFIG`, `RAYLINE_DATA_DIR`, `RAYLINE_PROXY_CA_CERT_PATH`, `RAYLINE_PROXY_CA_KEY_PATH`, `RAYLINE_UPSTREAM_CA_FILE`, `RAYLINE_ROUTE_STATUS_PATH`, `RAYLINE_ANTHROPIC_URL`, `RAYLINE_PROXY_ROUTING_MODE`, `RAYLINE_CLAUDE_ROUTING_MODE`, `RAYLINE_METRICS_PORT`, `RAYLINE_METRICS_URL`, `RLD_BIN`; proxy injection of `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, `NO_PROXY`, `NODE_EXTRA_CA_CERTS`; the old router config folder from `APPDATA` and `XDG_CONFIG_HOME`; `OLLAMA_HOST` and `LMSTUDIO_HOST`.
 6. Installer overrides: `RAYLINE_INSTALL_DIR` (`--install-dir` replaces it), `RAYLINE_RELEASE_BASE_URL` (the installer's hidden `--base-url` replaces it, section 4.4) and `RAYLINE_MINISIGN_PUBKEY` (the installers check no signature).
+7. The settings overrides of earlier releases, `RAYLINE_ROUTING_DECISIONS_MODEL`, `RAYLINE_ROUTING_CLASSIFIER_MODEL`, `RAYLINE_ROUTING_POLICY_PRESET` and `RAYLINE_ROUTING_ROUTER`. The `RAYLINE_LOCAL_ROUTING_*` overrides replace them (section 5.7).
 
 ## 11. Done means tested
 
-1. Unit tests cover every load error in section 5.8 and section 6, every usage error, and the env override table.
+1. Unit tests cover every load error in section 5.8 and section 6, every usage error, the env override table and the migration in section 5.9. Every example file in this spec and the docs loads and passes `schema/settings.schema.json`, and a set of invalid files fails it.
 2. Every harness in section 3 runs in cloud mode and in local mode and completes a real turn, as it does today.
 3. The default test suite needs no live credentials or external services. Live runs are documented commands, run before merge.
