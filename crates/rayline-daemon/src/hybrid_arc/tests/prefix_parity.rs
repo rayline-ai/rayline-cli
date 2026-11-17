@@ -6,10 +6,12 @@ use rayline_arc_decide::{DecideInput, ReadoutRequest, Readouts};
 use std::sync::Mutex;
 
 /// A row may differ from a full encode's by at most this, relative (L2).
-/// On Metal, the append path every later turn takes already differs by
-/// ~3e-3 once another conversation holds cells before it (attention reads
-/// the cache in another layout); continuing a snapshot is the same
-/// operation, held to the same order. Decisions must not change at all.
+/// The append path every later turn takes can differ by ~3e-3 once another
+/// conversation holds cells before it (attention reads the cache in another
+/// layout; measured on Metal in a separate 28k-token check, though this
+/// test's smaller baselines stay near 4e-5 there); continuing a snapshot is
+/// the same operation, held to the same order. Decisions must not change at
+/// all.
 const MAX_RELATIVE_L2: f64 = 1e-2;
 
 /// The baselines' bound: a plain append, with no snapshot, against a full
