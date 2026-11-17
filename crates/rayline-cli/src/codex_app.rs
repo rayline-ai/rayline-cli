@@ -33,10 +33,12 @@ pub struct AppRunRequest {
     /// The hosted environment the loaded config selects, whose router the
     /// app talks to.
     pub hosted: crate::status::HostedEnvironment,
+    /// `cloud`: the models the launch gives the harness.
+    pub cloud: crate::config::Cloud,
 }
 
 pub async fn run(request: AppRunRequest) -> ExitCode {
-    let provider = match crate::codex::resolve_provider(&request.hosted).await {
+    let provider = match crate::codex::resolve_provider(&request.hosted, &request.cloud).await {
         Ok(provider) => provider,
         Err(error) => {
             eprintln!("Error: {error}");
@@ -175,7 +177,6 @@ pub(crate) fn write_codex_home(home: &Path, config: &str) -> io::Result<()> {
         &[crate::harness::ConfigFile {
             name: "config.toml",
             contents: merged,
-            overwrite: true,
             merged_from: current,
         }],
     )

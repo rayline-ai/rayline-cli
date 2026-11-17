@@ -22,7 +22,7 @@
 //!   Responses, where `compat.supportsPromptCacheKey` sends the session as
 //!   `prompt_cache_key`; without it OpenClaw sends no key on a custom
 //!   endpoint. ARC is not served on Responses yet, so Chat Completions stays
-//!   the default. Under `rayline run openclaw --local` OpenClaw speaks only Chat
+//!   the default. Under a local-mode `rayline run openclaw` OpenClaw speaks only Chat
 //!   Completions, its one protocol (spec section 5.2), so this provider is not
 //!   written there.
 //!
@@ -115,16 +115,18 @@ pub(crate) fn plan(ctx: &RenderContext<'_>) -> Plan {
             .offered
             .iter()
             .map(|model| {
-                json!({
+                let mut entry = json!({
                     "id": model.id,
-                    "name": model.display_name,
                     // ARC selects thinking effort; clients must not expose controls.
                     "reasoning": ctx.capabilities.is_some(),
-                    "input": model.input_modalities,
-                    "contextWindow": model.context_window,
-                    "maxTokens": model.max_output_tokens,
                     "compat": compat
-                })
+                });
+                super::add_details(&mut entry, model);
+                // OpenClaw requires a name; an unlisted id has none but itself.
+                if model.details.is_none() {
+                    entry["name"] = json!(model.id);
+                }
+                entry
             })
             .collect::<Vec<_>>()
     };
@@ -169,11 +171,10 @@ pub(crate) fn plan(ctx: &RenderContext<'_>) -> Plan {
     });
     Plan {
         files: vec![
-            json_file(CONFIG_FILE, &config, true),
+            json_file(CONFIG_FILE, &config),
             ConfigFile {
                 name: KEY_FILE,
                 contents: ctx.key.to_owned(),
-                overwrite: true,
                 merged_from: None,
             },
         ],
