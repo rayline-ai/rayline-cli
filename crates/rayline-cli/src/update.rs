@@ -165,6 +165,7 @@ async fn run_on(
     let decision = evaluate_check(
         &current,
         &target,
+        channel,
         request.pinned_version.is_some(),
         request.force,
     );
@@ -273,9 +274,12 @@ fn bare_version_hint(target: &Version, error: UpdateError) -> UpdateError {
     }
 }
 
+/// What `rayline update` decides for `target`, the version asked for
+/// (`explicit_intent`) or else `channel`'s latest.
 pub fn evaluate_check(
     current: &Version,
     target: &Version,
+    channel: UpdateChannel,
     explicit_intent: bool,
     force: bool,
 ) -> UpdateResult {
@@ -298,8 +302,20 @@ pub fn evaluate_check(
         };
     }
 
+    let message = if !explicit_intent && target.public_cmp(current) == Ordering::Less {
+        format!(
+            "Already up to date: {} is newer than the latest {} release ({}). To install that release instead, run: {} update --version {}\n",
+            current.public,
+            channel.as_str(),
+            target.normalized,
+            crate::CLI_BIN,
+            target.normalized
+        )
+    } else {
+        format!("Already on latest ({}).\n", current.public)
+    };
     UpdateResult {
-        message: format!("Already on latest ({}).\n", current.public),
+        message,
         exit_code: 0,
         stderr: false,
     }
@@ -1721,6 +1737,38 @@ mod tests {
         }
         fs::remove_dir_all(root)?;
         Ok(())
+    }
+
+    #[test]
+    fn a_version_newer_than_the_channels_latest_names_that_release() {
+        let current = version("0.5.4-dev.176+abc");
+        let latest = version("0.5.3+3bc25bc98f31");
+        let result = evaluate_check(&current, &latest, UpdateChannel::Prod, false, false);
+        assert_eq!(
+            result.message,
+            "Already up to date: 0.5.4-dev.176 is newer than the latest prod release (0.5.3+3bc25bc98f31). To install that release instead, run: rayline update --version 0.5.3+3bc25bc98f31\n"
+        );
+        assert_eq!(result.exit_code, 0);
+        // The same version, or one asked for, says it is already installed.
+        let same = evaluate_check(
+            &latest,
+            &version("0.5.3+3bc25bc98f31"),
+            UpdateChannel::Prod,
+            false,
+            false,
+        );
+        assert_eq!(same.message, "Already on latest (0.5.3).\n");
+        let asked = evaluate_check(
+            &latest,
+            &version("0.5.3+3bc25bc98f31"),
+            UpdateChannel::Prod,
+            true,
+            false,
+        );
+        assert_eq!(asked.message, "Already on latest (0.5.3).\n");
+        // Forced, it offers the older release.
+        let forced = evaluate_check(&current, &latest, UpdateChannel::Dev, false, true);
+        assert_eq!(forced.exit_code, 1);
     }
 
     fn version(raw: &str) -> Version {
