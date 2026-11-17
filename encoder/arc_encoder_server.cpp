@@ -10,7 +10,8 @@
 //                 [base, base + len(tokens)), strictly ascending. With "session", the tokens are kept as a retained
 //                 session: base 0 starts (or replaces) it, base N appends to a session that holds exactly N tokens.
 //                 With "retain": false (base 0 only), nothing is kept.
-//                 -> 200 raw little-endian float32 rows, one per offset (headers x-rows, x-dim, x-timing-ms);
+//                 -> 200 raw little-endian float32 rows, one per offset (headers x-rows, x-dim, x-timing-ms,
+//                    x-restored-tokens: how many leading tokens came from a prefix snapshot, below);
 //                    409 {"error":"unknown_session"}: an append to a session not held at that base;
 //                    422 {"error": code}: invalid_body, offsets_out_of_range, invalid_retain, images_not_served,
 //                    exceeds_kv_budget (input longer than --ctx);
@@ -31,6 +32,15 @@
 // GatedDeltaNet recurrent state, so an append continues it; an unretained encode uses a scratch sequence that is
 // cleared afterwards. Sessions share one KV cache of --ctx tokens: a request that would not fit beside the sessions
 // held evicts the least recently used ones first. Text only: images are refused (images_not_served).
+//
+// Prefix snapshots: a base-0 encode keeps the state at up to three of its block boundaries, the end of its first
+// readout block (offsets[0] + 1) and the starts of its last two (offsets[n-3] + 1, offsets[n-2] + 1; a harness may
+// send a fixed block after the newest message), each at least kMinPrefix tokens in, as
+// a snapshot sequence holding that prefix's token ids and its rows at the requested offsets below it. A later base-0
+// encode whose tokens start with a snapshot's tokens, and that asks no row below it the snapshot doesn't hold,
+// continues from the longest such snapshot and decodes only the rest.
+// A snapshot shares its KV cells with the sequences it came from or was continued into, so it adds none; each holds
+// one recurrent state. At most kPrefixes are kept, the least recently used replaced first; they live in memory only.
 
 #ifdef _WIN32
 #define NOMINMAX             // before any header: httplib.h includes windows.h
@@ -42,6 +52,7 @@
 #include "httplib.h"
 #include "nlohmann/json.hpp"
 
+#include <algorithm>
 #include <cctype>
 #include <chrono>
 #include <csignal>
@@ -60,10 +71,39 @@ using json = nlohmann::json;
 
 namespace {
 
+constexpr int kPrefixes = 4;           // prefix snapshots kept
+constexpr int32_t kMinPrefix = 1024;   // the shortest prefix kept as a snapshot
+
+// KV cells one decode call wrote, positions [start, end) of `lineage`. Sequences that share cells (a snapshot and the
+// sequences it was taken from or continued into) hold a segment of the same lineage; cells are freed when none does.
+struct Segment {
+    uint64_t lineage = 0;
+    int32_t start = 0;
+    int32_t end = 0;
+};
+
+// `segments` cut off at position `end`.
+std::vector<Segment> clipped(const std::vector<Segment> & segments, int32_t end) {
+    std::vector<Segment> out;
+    for (const auto & g : segments) {
+        if (g.start < end) out.push_back({g.lineage, g.start, std::min(g.end, end)});
+    }
+    return out;
+}
+
 struct Session {
     llama_seq_id seq = -1;
     int32_t n_past = 0;          // tokens held: the next append's base
     std::string owner;
+    uint64_t last_used = 0;
+    std::vector<Segment> segments;
+};
+
+struct Prefix {
+    llama_seq_id seq = -1;
+    std::vector<llama_token> tokens;              // positions 0..tokens.size()
+    std::map<int32_t, std::vector<float>> rows;   // readouts at offsets below its end
+    std::vector<Segment> segments;
     uint64_t last_used = 0;
 };
 
@@ -92,30 +132,134 @@ struct Server {
     std::map<std::string, Session> sessions;
     std::atomic<int> held{0};  // sessions.size() as of the last request, for /health without the lock
     std::vector<bool> seq_used;
+    std::vector<Prefix> prefixes;
     uint64_t clock = 0;
+    uint64_t lineages = 0;
     std::string engine;
 
     llama_seq_id scratch() const { return args.sessions; }
+    // Snapshot sequences follow the sessions' and the scratch.
+    llama_seq_id prefix_seq(int slot) const { return args.sessions + 1 + slot; }
 
     void drop(const Session & s) { llama_memory_seq_rm(llama_get_memory(ctx), s.seq, -1, -1); seq_used[s.seq] = false; }
+    void drop_prefix(size_t i) {
+        llama_memory_seq_rm(llama_get_memory(ctx), prefixes[i].seq, -1, -1);
+        prefixes.erase(prefixes.begin() + (std::ptrdiff_t) i);
+    }
 
-    // The KV cache is shared by every sequence, so a session count alone does not bound it: before decoding up to
-    // `total` tokens for `keep` (empty: the unretained scratch), evict least recently used sessions until the
-    // tokens held fit in the context.
-    void make_room(const std::string & keep, int64_t total) {
+    // The KV cells held: each lineage's cells from its start to the furthest any sequence holds, the sessions but
+    // `skip` (a session about to be replaced) and every snapshot.
+    int64_t cells_held(const std::string * skip) const {
+        std::map<uint64_t, std::pair<int32_t, int32_t>> spans;
+        const auto add = [&](const std::vector<Segment> & segments) {
+            for (const auto & g : segments) {
+                auto it = spans.find(g.lineage);
+                if (it == spans.end()) spans[g.lineage] = {g.start, g.end};
+                else it->second.second = std::max(it->second.second, g.end);
+            }
+        };
+        for (const auto & [id, session] : sessions) {
+            if (skip == nullptr || id != *skip) add(session.segments);
+        }
+        for (const auto & p : prefixes) add(p.segments);
+        int64_t held = 0;
+        for (const auto & [lineage, span] : spans) held += span.second - span.first;
+        return held;
+    }
+
+    // The KV cache is shared by every sequence, so a session count alone does not bound it: before writing `fresh`
+    // new cells for `keep` (empty: the unretained scratch; `replace`: a session started again, whose cells go), evict
+    // the least recently used sessions and snapshots, never `keep` nor the snapshot on sequence `from` it continues
+    // (-1: none), until the cells held fit in the context.
+    void make_room(const std::string & keep, bool replace, llama_seq_id from, int64_t fresh) {
         for (;;) {
-            int64_t held = total;
+            const int64_t held = fresh + cells_held(replace ? &keep : nullptr);
+            if (held <= (int64_t) llama_n_ctx(ctx)) return;
             auto lru = sessions.end();
             for (auto it = sessions.begin(); it != sessions.end(); ++it) {
                 if (it->first == keep) continue;
-                held += it->second.n_past;
                 if (lru == sessions.end() || it->second.last_used < lru->second.last_used) lru = it;
             }
-            if (held <= (int64_t) llama_n_ctx(ctx) || lru == sessions.end()) return;
-            std::fprintf(stderr, "evicting %s (%d tokens) for KV space\n", lru->first.c_str(), lru->second.n_past);
-            drop(lru->second);
-            sessions.erase(lru);
+            int lru_prefix = -1;
+            for (int i = 0; i < (int) prefixes.size(); ++i) {
+                if (prefixes[i].seq == from) continue;
+                if (lru_prefix < 0 || prefixes[i].last_used < prefixes[lru_prefix].last_used) lru_prefix = i;
+            }
+            const bool session_first = lru != sessions.end() &&
+                                       (lru_prefix < 0 || lru->second.last_used < prefixes[lru_prefix].last_used);
+            if (session_first) {
+                std::fprintf(stderr, "evicting a session (%d tokens) for KV space\n", lru->second.n_past);
+                drop(lru->second);
+                sessions.erase(lru);
+            } else if (lru_prefix >= 0) {
+                std::fprintf(stderr, "evicting a prefix snapshot (%zu tokens) for KV space\n",
+                             prefixes[lru_prefix].tokens.size());
+                drop_prefix((size_t) lru_prefix);
+            } else {
+                return;
+            }
         }
+    }
+
+    // The snapshot a base-0 encode of `tokens` reading `offsets` continues: the longest whose tokens begin `tokens`
+    // (and are fewer) and that holds every row asked for below its end. Its sequence, or -1 for none.
+    llama_seq_id find_prefix(const std::vector<llama_token> & tokens, const std::vector<int32_t> & offsets) const {
+        int best = -1;
+        for (int i = 0; i < (int) prefixes.size(); ++i) {
+            const auto & p = prefixes[i];
+            const size_t n = p.tokens.size();
+            if (n >= tokens.size() || (best >= 0 && n <= prefixes[best].tokens.size())) continue;
+            if (!std::equal(p.tokens.begin(), p.tokens.end(), tokens.begin())) continue;
+            bool rows = true;
+            for (int32_t o : offsets) {
+                if (o >= (int32_t) n) break;
+                if (p.rows.find(o) == p.rows.end()) { rows = false; break; }
+            }
+            if (rows) best = i;
+        }
+        return best >= 0 ? prefixes[best].seq : -1;
+    }
+
+    Prefix * prefix_on(llama_seq_id seq) {
+        for (auto & p : prefixes) {
+            if (p.seq == seq) return &p;
+        }
+        return nullptr;
+    }
+
+    // Keeps `seq`'s state at its first `n` tokens (`tokens[0..n)`, its cells `segments` cut at `n`, its rows `rows`
+    // below `n`) as a snapshot, unless one of those tokens is held already. Replaces the least recently used snapshot
+    // when all are taken.
+    void snapshot(llama_seq_id seq, const std::vector<llama_token> & tokens, int32_t n,
+                  const std::vector<Segment> & segments, const std::map<int32_t, std::vector<float>> & rows) {
+        for (auto & p : prefixes) {
+            if ((int32_t) p.tokens.size() == n && std::equal(p.tokens.begin(), p.tokens.end(), tokens.begin())) {
+                p.last_used = ++clock;
+                return;
+            }
+        }
+        if ((int) prefixes.size() >= kPrefixes) {
+            size_t lru = 0;
+            for (size_t i = 1; i < prefixes.size(); ++i) {
+                if (prefixes[i].last_used < prefixes[lru].last_used) lru = i;
+            }
+            drop_prefix(lru);
+        }
+        std::vector<bool> taken(kPrefixes, false);
+        for (const auto & p : prefixes) taken[p.seq - prefix_seq(0)] = true;
+        int slot = 0;
+        while (taken[slot]) ++slot;
+        Prefix p;
+        p.seq = prefix_seq(slot);
+        llama_memory_seq_rm(llama_get_memory(ctx), p.seq, -1, -1);
+        llama_memory_seq_cp(llama_get_memory(ctx), seq, p.seq, -1, -1);
+        p.tokens.assign(tokens.begin(), tokens.begin() + n);
+        for (const auto & [offset, row] : rows) {
+            if (offset < n) p.rows[offset] = row;
+        }
+        p.segments = clipped(segments, n);
+        p.last_used = ++clock;
+        prefixes.push_back(std::move(p));
     }
 
     // A free sequence id for a new retained session, evicting the least recently used one when all are taken.
@@ -135,16 +279,22 @@ struct Server {
     }
 
     // Decode `tokens` at positions base.. on `seq`, returning the rows at `offsets` (absolute, sorted ascending,
-    // each in [base, base + tokens.size())). Empty optional on a decode failure (the caller clears the sequence).
+    // each in [base, base + tokens.size())). A decode call ends at each of `splits` (absolute, ascending, inside the
+    // tokens), and `at_split` is called there with the position and the rows read so far. Empty optional on a decode
+    // failure (the caller clears the sequence).
+    template <typename AtSplit>
     std::optional<std::vector<float>> run(llama_seq_id seq, int32_t base, const std::vector<llama_token> & tokens,
-                                          const std::vector<int32_t> & offsets) {
+                                          const std::vector<int32_t> & offsets, const std::vector<int32_t> & splits,
+                                          AtSplit at_split) {
         std::vector<float> rows;
         rows.reserve(offsets.size() * dim);
         size_t next = 0;
+        size_t next_split = 0;
         const int32_t n = (int32_t) tokens.size();
         llama_batch batch = llama_batch_init(args.budget, 0, 1);
-        for (int32_t start = 0; start < n; start += args.budget) {
-            const int32_t stop = std::min(n, start + args.budget);
+        for (int32_t start = 0; start < n;) {
+            int32_t stop = std::min(n, start + args.budget);
+            if (next_split < splits.size()) stop = std::min(stop, splits[next_split] - base);
             batch.n_tokens = 0;
             std::vector<int32_t> wanted;
             for (int32_t i = start; i < stop; ++i) {
@@ -163,6 +313,8 @@ struct Server {
                 if (e == nullptr) { llama_batch_free(batch); return std::nullopt; }
                 rows.insert(rows.end(), e, e + dim);
             }
+            if (next_split < splits.size() && splits[next_split] == base + stop) at_split(splits[next_split++], rows);
+            start = stop;
         }
         llama_batch_free(batch);
         return rows;
@@ -296,7 +448,7 @@ int main(int argc, char ** argv) {
     cp.n_ctx = a.n_ctx;
     cp.n_batch = a.budget;
     cp.n_ubatch = std::min(a.ubatch, a.budget);
-    cp.n_seq_max = a.sessions + 1;
+    cp.n_seq_max = a.sessions + 1 + kPrefixes;
     cp.kv_unified = true;
     cp.embeddings = true;
     cp.pooling_type = LLAMA_POOLING_TYPE_NONE;
@@ -395,7 +547,10 @@ int main(int argc, char ** argv) {
             if (it == s.sessions.end() || it->second.n_past != base) return refuse(res, 409, "unknown_session");
         }
         const auto t0 = std::chrono::steady_clock::now();
-        s.make_room(id, base + (int64_t) tokens.size());
+        // A base-0 encode continues the longest snapshot of its prefix, decoding only the rest.
+        const llama_seq_id from = base == 0 ? s.find_prefix(tokens, offsets) : -1;
+        const int32_t restored = from >= 0 ? (int32_t) s.prefix_on(from)->tokens.size() : 0;
+        s.make_room(id, retained && base == 0, from, (int64_t) tokens.size() - restored);
         llama_seq_id seq;
         Session * session = nullptr;
         if (retained) {
@@ -415,7 +570,42 @@ int main(int argc, char ** argv) {
             llama_memory_seq_rm(llama_get_memory(s.ctx), seq, -1, -1);
         }
 
-        auto rows = s.run(seq, base, tokens, offsets);
+        // The cells this encode leaves `seq` holding: the snapshot's it continues, and the ones it writes.
+        std::vector<Segment> segments;
+        if (base > 0) segments = session->segments;
+        std::map<int32_t, std::vector<float>> restored_rows;
+        if (from >= 0) {
+            Prefix & prefix = *s.prefix_on(from);  // make_room keeps it
+            llama_memory_seq_cp(llama_get_memory(s.ctx), prefix.seq, seq, -1, -1);
+            segments = prefix.segments;
+            restored_rows = prefix.rows;
+            prefix.last_used = ++s.clock;
+        }
+        segments.push_back({++s.lineages, base + restored, base + (int32_t) tokens.size()});
+
+        // A base-0 encode keeps its prefix at the end of its first block and the starts of its last two.
+        std::vector<int32_t> splits;
+        if (base == 0 && offsets.size() >= 2) {
+            const size_t n = offsets.size();
+            std::vector<int32_t> points = {offsets.front() + 1, offsets[n - 2] + 1};
+            if (n >= 3) points.insert(points.begin() + 1, offsets[n - 3] + 1);
+            for (int32_t at : points) {
+                if (at >= kMinPrefix && at > restored && (splits.empty() || at > splits.back())) splits.push_back(at);
+            }
+        }
+        const std::vector<llama_token> rest(tokens.begin() + restored, tokens.end());
+        std::vector<int32_t> fresh;
+        for (int32_t o : offsets) {
+            if (o >= base + restored) fresh.push_back(o);
+        }
+        auto rows = s.run(seq, base + restored, rest, fresh, splits, [&](int32_t at, const std::vector<float> & read) {
+            std::map<int32_t, std::vector<float>> held = restored_rows;
+            for (size_t i = 0; (i + 1) * (size_t) s.dim <= read.size(); ++i) {
+                held[fresh[i]].assign(read.begin() + (std::ptrdiff_t) (i * s.dim),
+                                      read.begin() + (std::ptrdiff_t) ((i + 1) * s.dim));
+            }
+            s.snapshot(seq, tokens, at, segments, held);
+        });
         if (!retained) llama_memory_seq_rm(llama_get_memory(s.ctx), seq, -1, -1);
         if (!rows) {
             if (session != nullptr) {
@@ -424,14 +614,28 @@ int main(int argc, char ** argv) {
             }
             return refuse(res, 503, "decode_failed");
         }
+        // The rows below the snapshot's end come from it.
+        if (!restored_rows.empty()) {
+            std::vector<float> all;
+            all.reserve(offsets.size() * s.dim);
+            for (int32_t o : offsets) {
+                if (o >= base + restored) break;
+                const auto & row = restored_rows.at(o);
+                all.insert(all.end(), row.begin(), row.end());
+            }
+            all.insert(all.end(), rows->begin(), rows->end());
+            rows = std::move(all);
+        }
         if (session != nullptr) {
             session->n_past = base + (int32_t) tokens.size();
             session->last_used = ++s.clock;
+            session->segments = segments;
         }
         const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
         res.set_header("x-rows", std::to_string(offsets.size()));
         res.set_header("x-dim", std::to_string(s.dim));
         res.set_header("x-timing-ms", std::to_string(ms));
+        res.set_header("x-restored-tokens", std::to_string(restored));
         res.set_content(std::string(reinterpret_cast<const char *>(rows->data()), rows->size() * sizeof(float)),
                         "application/octet-stream");
     });

@@ -413,16 +413,24 @@ impl LocalDecider {
         let mut input: rayline_arc_decide::DecideInput = serde_json::from_str(body)
             .map_err(|_| rayline_arc_routes::Refusal::new("invalid_request", "decide body"))?;
         input.routing_prices = self.read_prices(input.routing_prices.take());
-        let (release, encoder) = (self.release.clone(), self.encoder.clone());
+        // This decision's own timing records, for the tokens restored from a
+        // prefix snapshot.
+        let (release, encoder) = (self.release.clone(), self.encoder.clone().with_stats());
         // The decision encodes and scores on the CPU and blocks on the
         // encoder; keep it off the async workers.
         let internal = || rayline_arc_routes::Refusal::new("internal_error", "the local decision");
-        let output = tokio::task::spawn_blocking(move || {
-            rayline_arc_decide::decide(&release, &input, &encoder)
+        let (output, restored) = tokio::task::spawn_blocking(move || {
+            let output = rayline_arc_decide::decide(&release, &input, &encoder);
+            let restored: usize = encoder
+                .take_stats()
+                .iter()
+                .filter_map(|stats| stats.restored_tokens)
+                .sum();
+            (output, restored)
         })
         .await
-        .map_err(|_| internal())?
-        .map_err(|error| {
+        .map_err(|_| internal())?;
+        let output = output.map_err(|error| {
             use rayline_arc_decide::DecideError;
             // A down encoder or a failed computation isn't the request's fault.
             let status = match error {
@@ -432,7 +440,9 @@ impl LocalDecider {
             };
             rayline_arc_routes::Refusal::with_status(status, error.code(), error.to_string())
         })?;
-        serde_json::to_value(output).map_err(|_| internal())
+        let mut answer = serde_json::to_value(output).map_err(|_| internal())?;
+        answer["encoding"]["restored_tokens"] = restored.into();
+        Ok(answer)
     }
 }
 
@@ -886,6 +896,18 @@ mod tests {
         assert_ne!(encoder.pid(), first_pid);
         assert_eq!(encoder.context, encoder.full_context());
     }
+
+    /// Prefix snapshots against full encodes, on synthetic inputs only:
+    /// `ARC_ENCODER_BIN=... ARC_ENCODER_MODEL=... ARC_RUNTIME_RELEASE=...
+    /// cargo test -p rayline-daemon --release -- --ignored --nocapture prefix_snapshots`.
+    /// Any encoder binary and GGUF; about two minutes on an M-series Mac.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "needs ARC_ENCODER_BIN, ARC_ENCODER_MODEL and ARC_RUNTIME_RELEASE"]
+    async fn prefix_snapshots_read_and_decide_as_a_full_encode() {
+        prefix_parity::run().await;
+    }
+
+    mod prefix_parity;
 
     #[tokio::test]
     async fn a_health_check_that_never_answers_ends_by_its_deadline() {
