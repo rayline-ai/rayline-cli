@@ -141,7 +141,7 @@ pub struct Routing {
     pub policy: Policy,
     pub router: Router,
     pub arc_release: Option<ArcRelease>,
-    /// The file has no `routing`: this is the `--router local` defaults.
+    /// The file has no `routing`: this is the `--router` defaults.
     pub defaults: bool,
 }
 
@@ -261,14 +261,41 @@ pub struct LoadOptions<'a> {
     /// file's and the env's.
     pub router: Option<Router>,
     /// `rayline run --local` while a local process started from the
-    /// `--router local` defaults runs: a file without `routing` uses them.
-    pub routing_defaults: bool,
+    /// `--router` defaults runs: that process's router, whose defaults a
+    /// file without `routing` uses.
+    pub routing_defaults: Option<Router>,
 }
 
-/// `rayline local start --router local` with no `routing` in the file:
+/// `rayline local start --router` with no `routing` in the file:
 /// the routing it starts with.
-pub const LOCAL_DECISIONS_MODEL: &str = "arc-swift-1.0";
-pub const LOCAL_POLICY_PRESET: &str = "arc-policy.prefer-local.v1";
+pub const DEFAULT_DECISIONS_MODEL: &str = "arc-swift-1.0";
+pub const DEFAULT_POLICY_PRESET: &str = "arc-policy.prefer-local.v1";
+/// Where local mode is documented.
+const LOCAL_MODE_DOCS: &str = "https://docs.rayline.ai/rayline-cli/local-mode";
+
+/// The smallest `settings.json` for local mode: the hosted router with the
+/// `--router` defaults, indented to sit under an error line.
+fn minimal_settings() -> String {
+    let string = |value: &str| Value::from(value).to_string();
+    [
+        "{".to_owned(),
+        "  \"routing\": {".to_owned(),
+        format!("    \"router\": {},", string(Router::Hosted.as_str())),
+        format!(
+            "    \"decisions_model\": {},",
+            string(DEFAULT_DECISIONS_MODEL)
+        ),
+        format!(
+            "    \"policy\": {{\"preset\": {}}}",
+            string(DEFAULT_POLICY_PRESET)
+        ),
+        "  }".to_owned(),
+        "}".to_owned(),
+    ]
+    .iter()
+    .map(|line| format!("  {line}\n"))
+    .collect()
+}
 
 /// A config that Rayline refuses to run with.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -393,20 +420,18 @@ fn load_from(
 
     let doc = Doc { file: &file };
     let raw = doc.root(&root)?;
-    // `--router local` without `routing` starts from its defaults, which
-    // env overrides refine like a file's; the flag itself wins over both.
-    // A run on a local process started that way uses them too.
-    let raw_routing = match raw.routing {
-        None if options.router == Some(Router::Local) || options.routing_defaults => {
-            Some(RawRouting {
-                decisions_model: Some(LOCAL_DECISIONS_MODEL.to_owned()),
-                preset: Some(LOCAL_POLICY_PRESET.to_owned()),
-                router: Some(Router::Local),
-                defaults: true,
-                ..RawRouting::default()
-            })
-        }
-        routing => routing,
+    // `--router` without `routing` starts from its defaults, which env
+    // overrides refine like a file's; the flag itself wins over both. A run
+    // on a local process started that way uses them too.
+    let raw_routing = match (raw.routing, options.router.or(options.routing_defaults)) {
+        (None, Some(router)) => Some(RawRouting {
+            decisions_model: Some(DEFAULT_DECISIONS_MODEL.to_owned()),
+            preset: Some(DEFAULT_POLICY_PRESET.to_owned()),
+            router: Some(router),
+            defaults: true,
+            ..RawRouting::default()
+        }),
+        (routing, _) => routing,
     };
     // A command that uses no `routing` neither reads nor checks it: its
     // required keys may come from env overrides only a run reads.
@@ -430,10 +455,14 @@ fn load_from(
         return Err(doc.err(
             "routing",
             if absent {
-                "is required in local mode, and this file doesn't exist: create it with a \
-                 `routing` section (to run Claude Code, include `routing.classifier_model`)"
+                format!(
+                    "is required in local mode, and this file doesn't exist. Create it with a \
+                     `routing` section, such as:\n{}To run Claude Code, add \
+                     `\"classifier_model\": \"<model id>\"` to it. See {LOCAL_MODE_DOCS}",
+                    minimal_settings()
+                )
             } else {
-                "is required in local mode"
+                "is required in local mode".to_owned()
             },
         ));
     }
@@ -1300,7 +1329,7 @@ mod tests {
             env: None,
             harness_protocol: None,
             router: None,
-            routing_defaults: false,
+            routing_defaults: None,
         }
     }
 
@@ -2070,13 +2099,13 @@ mod tests {
             .routing
             .expect("routing");
         assert_eq!(routing.router, Router::Local);
-        assert_eq!(routing.decisions_model, LOCAL_DECISIONS_MODEL);
-        assert_eq!(routing.policy.preset, LOCAL_POLICY_PRESET);
+        assert_eq!(routing.decisions_model, DEFAULT_DECISIONS_MODEL);
+        assert_eq!(routing.policy.preset, DEFAULT_POLICY_PRESET);
         assert_eq!(routing.classifier_model, None);
         assert!(routing.defaults);
         // A run on a process started from them loads the same routing.
         let run = LoadOptions {
-            routing_defaults: true,
+            routing_defaults: Some(Router::Local),
             ..opts(Mode::Local)
         };
         assert_eq!(
@@ -2088,11 +2117,27 @@ mod tests {
             serde_json::from_str(&routing.with_classifier_model()).expect("snippet is JSON");
         assert_eq!(
             snippet,
-            json!({"routing": {"router": "local", "decisions_model": LOCAL_DECISIONS_MODEL,
-                "policy": {"preset": LOCAL_POLICY_PRESET}, "classifier_model": "<model id>"}})
+            json!({"routing": {"router": "local", "decisions_model": DEFAULT_DECISIONS_MODEL,
+                "policy": {"preset": DEFAULT_POLICY_PRESET}, "classifier_model": "<model id>"}})
         );
-        // `hosted` has no defaults: it still needs `routing`.
-        assert_eq!(key_error(load(&empty, with(Router::Hosted))).0, "routing");
+        // `hosted` has the same defaults, with its own router.
+        let hosted = load(&empty, with(Router::Hosted))
+            .expect("no file")
+            .routing
+            .expect("routing");
+        assert_eq!(
+            hosted,
+            Routing {
+                router: Router::Hosted,
+                ..routing.clone()
+            }
+        );
+        // A run on a process started from the hosted defaults loads them.
+        let run = LoadOptions {
+            routing_defaults: Some(Router::Hosted),
+            ..opts(Mode::Local)
+        };
+        assert_eq!(load(&empty, run).expect("run").routing, Some(hosted));
         // Over a file's `routing`, only `router` changes.
         let home = temp_home();
         write_default(&home, &example());
@@ -2111,7 +2156,7 @@ mod tests {
         assert!(!flagged.defaults);
         // A file's `routing` wins over the defaults a run would use.
         let run = LoadOptions {
-            routing_defaults: true,
+            routing_defaults: Some(Router::Local),
             ..opts(Mode::Local)
         };
         assert_eq!(load(&home, run).expect("run").routing, Some(file));
@@ -2151,7 +2196,7 @@ mod tests {
         .expect("routing");
         assert_eq!(routing.router, Router::Local);
         assert_eq!(routing.classifier_model.as_deref(), Some("c"));
-        assert_eq!(routing.decisions_model, LOCAL_DECISIONS_MODEL);
+        assert_eq!(routing.decisions_model, DEFAULT_DECISIONS_MODEL);
     }
 
     #[test]
@@ -2173,8 +2218,26 @@ mod tests {
             error.starts_with(&format!("{}: `routing`", settings_file(&empty).display())),
             "{error}"
         );
-        assert!(error.contains("doesn't exist: create it"), "{error}");
-        assert!(error.contains("routing.classifier_model"), "{error}");
+        assert!(error.contains("doesn't exist. Create it"), "{error}");
+        assert!(
+            error.contains(r#""classifier_model": "<model id>""#),
+            "{error}"
+        );
+        assert!(
+            error.ends_with(&format!("See {LOCAL_MODE_DOCS}")),
+            "{error}"
+        );
+        // The settings it prints load as they are, in local mode.
+        assert!(error.contains(&minimal_settings()), "{error}");
+        let pasted: Value = serde_json::from_str(&minimal_settings()).expect("JSON");
+        write_default(&empty, &pasted);
+        let routing = load(&empty, opts(Mode::Local))
+            .expect("loads")
+            .routing
+            .expect("routing");
+        assert_eq!(routing.router, Router::Hosted);
+        assert_eq!(routing.decisions_model, DEFAULT_DECISIONS_MODEL);
+        assert_eq!(routing.policy.preset, DEFAULT_POLICY_PRESET);
     }
 
     #[test]
@@ -2225,7 +2288,7 @@ mod tests {
                     env: None,
                     harness_protocol: protocol,
                     router: None,
-                    routing_defaults: false,
+                    routing_defaults: None,
                 },
             )
         };
@@ -2260,7 +2323,7 @@ mod tests {
                     env: Some(env),
                     harness_protocol: None,
                     router: None,
-                    routing_defaults: false,
+                    routing_defaults: None,
                 },
             )
         };
@@ -2586,7 +2649,7 @@ mod tests {
                         env,
                         harness_protocol,
                         router: None,
-                        routing_defaults: false,
+                        routing_defaults: None,
                     };
                     let read = RefCell::new(Vec::new());
                     // Any other var the loader asked for would be set.

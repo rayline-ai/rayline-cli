@@ -131,20 +131,23 @@ struct Recording<'a> {
     client: &'a rayline_arc_decide::LocalEncoder,
     rows: Mutex<Vec<Vec<f32>>>,
     restored: Mutex<usize>,
+    offsets: Mutex<Vec<usize>>,
 }
 
 impl Readouts for Recording<'_> {
     fn readouts(&self, request: &ReadoutRequest<'_>) -> Result<Vec<Vec<f32>>, String> {
         let rows = self.client.readouts(request)?;
         *self.restored.lock().expect("lock") = restored(self.client);
+        *self.offsets.lock().expect("lock") = request.offsets.to_vec();
         self.rows.lock().expect("lock").extend(rows.iter().cloned());
         Ok(rows)
     }
 }
 
 /// A synthetic Anthropic request: `tools` tool definitions and a system
-/// prompt of `system` words, then `user`'s message.
-fn request(tools: usize, system: usize, user: &str) -> String {
+/// prompt of `system` words, then `user`'s message and, with `trailing`
+/// words, a fixed system message after it, as Claude Code sends.
+fn request(tools: usize, system: usize, user: &str, trailing: usize) -> String {
     let words = |seed: usize, n: usize| -> String {
         (0..n)
             .map(|i| format!("word{}", (seed * 131 + i * 17) % 997))
@@ -160,12 +163,19 @@ fn request(tools: usize, system: usize, user: &str) -> String {
             })
         })
         .collect();
+    let mut messages = vec![serde_json::json!({"role": "user", "content": user})];
+    if trailing > 0 {
+        messages.push(serde_json::json!({
+            "role": "system",
+            "content": [{"type": "text", "text": words(20_000, trailing)}],
+        }));
+    }
     serde_json::json!({
         "model": "arc-swift-1.0",
         "max_tokens": 1024,
         "system": [{"type": "text", "text": words(10_000, system)}],
         "tools": tools,
-        "messages": [{"role": "user", "content": user}],
+        "messages": messages,
     })
     .to_string()
 }
@@ -210,13 +220,14 @@ fn without_floats(
     }
 }
 
-/// A decision: its shape without floats, the floats, the rows it read and
-/// how many tokens of them came from a snapshot.
+/// A decision: its shape without floats, the floats, the rows it read, how
+/// many tokens of them came from a snapshot, and its blocks' last tokens.
 struct Decision {
     shape: serde_json::Value,
     floats: Vec<(String, f64)>,
     rows: Vec<Vec<f32>>,
     restored: usize,
+    offsets: Vec<usize>,
 }
 
 fn decide(
@@ -228,6 +239,7 @@ fn decide(
         client,
         rows: Mutex::default(),
         restored: Mutex::default(),
+        offsets: Mutex::default(),
     };
     let output =
         tokio::task::block_in_place(|| rayline_arc_decide::decide(release, input, &recording))
@@ -243,6 +255,7 @@ fn decide(
         floats,
         rows: recording.rows.into_inner().expect("lock"),
         restored: recording.restored.into_inner().expect("lock"),
+        offsets: recording.offsets.into_inner().expect("lock"),
     }
 }
 
@@ -351,18 +364,60 @@ pub async fn run() {
     .await;
     drop(small);
 
+    // Claude Code's layout: tools, system, the newest message, then a fixed
+    // system message. A new conversation continues up to its message.
+    let claude_code = |seed: u32| {
+        Input::new(&[
+            tokens(1, 6_000),
+            tokens(3, 1_500),
+            tokens(seed, 1_200),
+            tokens(4, 5_000),
+        ])
+    };
+    let main = encoder(CONTEXT).await;
+    let client = main.client().with_stats();
+    assert_eq!(read(&client, "e", &claude_code(14)).1, 0);
+    let f = claude_code(15);
+    let (rows, restored) = read(&client, "f", &f);
+    assert_eq!(
+        restored, 7_500,
+        "f continues the snapshot before its message"
+    );
+    check(
+        "Claude Code layout, a new conversation",
+        &rows,
+        restored,
+        &f,
+    )
+    .await;
+    drop(main);
+
     // Decisions: a second conversation sharing the first's tools and system
-    // prompt decides as a full encode of it does.
+    // prompt (and, in Claude Code's layout, the fixed system message after
+    // the newest one) decides as a full encode of it does, continuing up to
+    // its message.
     let release = load_release(&PathBuf::from(
         std::env::var_os("ARC_RUNTIME_RELEASE").expect("ARC_RUNTIME_RELEASE"),
     ))
     .expect("the release loads");
-    let first = request(30, 2_000, "Rename the config loader and update its tests.");
-    let second = request(30, 2_000, "Why does the build fail on the release branch?");
-    for preset in [
-        "arc-policy.package-default.v1",
-        "arc-policy.prefer-local.v1",
+    for (layout, trailing, preset) in [
+        ("newest last", 0, "arc-policy.package-default.v1"),
+        ("newest last", 0, "arc-policy.prefer-local.v1"),
+        ("Claude Code", 4_000, "arc-policy.package-default.v1"),
+        ("Claude Code", 4_000, "arc-policy.prefer-local.v1"),
     ] {
+        let first = request(
+            30,
+            2_000,
+            "Rename the config loader and update its tests.",
+            trailing,
+        );
+        let second = request(
+            30,
+            2_000,
+            "Why does the build fail on the release branch?",
+            trailing,
+        );
         let main = encoder(CONTEXT).await;
         let client = main.client().with_stats();
         decide(
@@ -384,9 +439,11 @@ pub async fn run() {
             &decide_input(&release, "two", preset, &second),
         );
         drop(fresh);
-        assert!(
-            reused.restored > 0,
-            "{preset}: the second conversation continues a snapshot"
+        let message = reused.offsets.len() - if trailing > 0 { 2 } else { 1 };
+        assert_eq!(
+            reused.restored,
+            reused.offsets[message - 1] + 1,
+            "{layout}, {preset}: the second conversation continues up to its message"
         );
         assert_eq!(full.restored, 0);
         assert_eq!(
@@ -408,9 +465,11 @@ pub async fn run() {
             })
             .fold(("", 0.0), |a, b| if b.1 > a.1 { b } else { a });
         println!(
-            "decision {preset}: {} tokens restored, rows worst relative L2 {rows:.3e}, \
-             scores worst relative difference {score:.3e} ({path})",
-            reused.restored
+            "decision {layout}, {preset}: {} tokens restored, {} rows, worst relative L2 \
+             {rows:.3e}; {} scores, worst relative difference {score:.3e} ({path})",
+            reused.restored,
+            reused.rows.len(),
+            reused.floats.len()
         );
         assert!(rows <= MAX_RELATIVE_L2, "{preset}: {rows:e}");
     }

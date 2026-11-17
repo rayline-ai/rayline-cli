@@ -161,12 +161,6 @@ pub async fn run_command(request: &RunRequest) -> Result<Command, RunError> {
     run_command_from_home(request, &home, claude_bin).await
 }
 
-/// Whether Claude Code's args only print its version or help and start no
-/// session: exactly one of `--version`, `-v`, `--help` and `-h`.
-pub(crate) fn starts_no_session(args: &[OsString]) -> bool {
-    matches!(args, [arg] if ["--version", "-v", "--help", "-h"].iter().any(|flag| arg == flag))
-}
-
 /// The print-mode flag (`-p` / `--print`) in the forwarded Claude args, if any.
 /// Print mode suppresses Claude Code's own startup output and is
 /// non-interactive. Returns the exact flag the user passed, so messaging can
@@ -1346,33 +1340,6 @@ mod arc_default_tests {
         let switches = role_model_env_switches(&crate::harness::tests::hosted_models());
         assert_eq!(switches.len(), 3);
         assert!(switches.iter().all(|(_, value)| value.is_some()));
-    }
-}
-
-#[cfg(test)]
-mod starts_no_session_tests {
-    use super::starts_no_session;
-    use std::ffi::OsString;
-
-    fn args(values: &[&str]) -> Vec<OsString> {
-        values.iter().map(OsString::from).collect()
-    }
-
-    #[test]
-    fn only_a_lone_version_or_help_flag_starts_no_session() {
-        for lone in ["--version", "-v", "--help", "-h"] {
-            assert!(starts_no_session(&args(&[lone])), "{lone}");
-        }
-        for launch in [
-            &[][..],
-            &["agents"],
-            &["-p", "--help"],
-            &["--version", "x"],
-            &["-V"],
-            &["help"],
-        ] {
-            assert!(!starts_no_session(&args(launch)), "{launch:?}");
-        }
     }
 }
 
