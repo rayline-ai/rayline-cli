@@ -174,7 +174,8 @@ fn refuse_cpu_engine(engine: &str) -> Result<()> {
         bail!(
             "the ARC encoder found no GPU it can use and would run on the CPU ({engine}); \
              local decisions need Apple Silicon, or an NVIDIA GPU with a current driver \
-             (Linux 525.60.13 or later, Windows 576 or later); set `routing.router` to `hosted`"
+             (Linux 525.60.13 or later, Windows 576 or later); to use the hosted router instead, \
+             run `rayline local start --router hosted`"
         );
     }
     Ok(())
@@ -938,7 +939,12 @@ mod tests {
         let refused = refuse_cpu_engine("llamacpp@b11669-arc+cpu+kv-f16+fa")
             .expect_err("a cpu engine is refused")
             .to_string();
-        assert!(refused.contains("routing.router"), "{refused}");
+        assert!(
+            refused.ends_with(
+                "; to use the hosted router instead, run `rayline local start --router hosted`"
+            ),
+            "{refused}"
+        );
     }
 
     #[test]
