@@ -33,8 +33,9 @@
 // cleared afterwards. Sessions share one KV cache of --ctx tokens: a request that would not fit beside the sessions
 // held evicts the least recently used ones first. Text only: images are refused (images_not_served).
 //
-// Prefix snapshots: a base-0 encode keeps the state at up to two of its block boundaries, the end of its first
-// readout block (offsets[0] + 1) and the start of its last (offsets[n-2] + 1), each at least kMinPrefix tokens in, as
+// Prefix snapshots: a base-0 encode keeps the state at up to three of its block boundaries, the end of its first
+// readout block (offsets[0] + 1) and the starts of its last two (offsets[n-3] + 1, offsets[n-2] + 1; a harness may
+// send a fixed block after the newest message), each at least kMinPrefix tokens in, as
 // a snapshot sequence holding that prefix's token ids and its rows at the requested offsets below it. A later base-0
 // encode whose tokens start with a snapshot's tokens, and that asks no row below it the snapshot doesn't hold,
 // continues from the longest such snapshot and decodes only the rest.
@@ -582,10 +583,13 @@ int main(int argc, char ** argv) {
         }
         segments.push_back({++s.lineages, base + restored, base + (int32_t) tokens.size()});
 
-        // A base-0 encode keeps its prefix at the end of its first block and the start of its last.
+        // A base-0 encode keeps its prefix at the end of its first block and the starts of its last two.
         std::vector<int32_t> splits;
         if (base == 0 && offsets.size() >= 2) {
-            for (int32_t at : {offsets.front() + 1, offsets[offsets.size() - 2] + 1}) {
+            const size_t n = offsets.size();
+            std::vector<int32_t> points = {offsets.front() + 1, offsets[n - 2] + 1};
+            if (n >= 3) points.insert(points.begin() + 1, offsets[n - 3] + 1);
+            for (int32_t at : points) {
                 if (at >= kMinPrefix && at > restored && (splits.empty() || at > splits.back())) splits.push_back(at);
             }
         }
