@@ -207,8 +207,10 @@ Four `routing` keys can be set from the environment:
 - An override is validated the same way as the file value.
 - An override only changes a value. The config file still has to have a
   `routing` section, because the file decides the mode. The exception is
-  `rayline local start --router local` with no `routing` section: the
-  overrides apply to its built-in `routing` defaults.
+  `rayline local start --router local` with no config file or no `routing`
+  section: the overrides apply to its built-in `routing` defaults, and so do
+  they for a `rayline run <harness> --local` without `routing` while that
+  local process runs.
 - Commands that use no `routing` (`auth`, `top`, `update`, `local status`,
   `local stop`) don't read these env vars.
 - `endpoints`, `models`, `arc_release` and `policy.overrides` can't be set
