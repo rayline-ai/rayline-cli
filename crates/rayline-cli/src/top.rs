@@ -55,18 +55,20 @@ struct TopSource {
 }
 
 impl TopSource {
+    /// [`Self::open`], with one error for every no-local-process case (spec
+    /// section 3.4 item 3). A running process top can't use keeps its own
+    /// error.
     async fn connect(state_dir: &Path) -> io::Result<Self> {
         Self::open(state_dir).await.map_err(|error| {
-            io::Error::new(
-                io::ErrorKind::ConnectionRefused,
-                if error.kind() == io::ErrorKind::NotFound {
+            if error.kind() == io::ErrorKind::NotFound {
+                io::Error::new(
+                    io::ErrorKind::ConnectionRefused,
                     "no local process is running. Start one with `rayline local start` or \
-                     `rayline run <harness> --local`."
-                        .to_owned()
-                } else {
-                    format!("no local process is running: {error}")
-                },
-            )
+                     `rayline run <harness> --local`.",
+                )
+            } else {
+                error
+            }
         })
     }
 
@@ -1066,14 +1068,11 @@ mod tests {
                 .await
                 .unwrap_err()
                 .to_string();
-            assert!(error.contains("no local process is running"), "{error}");
-            assert!(
-                error.contains("readiness")
-                    || error.contains("not live")
-                    || error.contains("Start one with `rayline local start`"),
-                "{error}"
+            assert_eq!(
+                error,
+                "no local process is running. Start one with `rayline local start` or \
+                 `rayline run <harness> --local`."
             );
-            assert!(!error.contains("private-token"));
         }
         fs::remove_dir_all(home).unwrap();
     }
@@ -1088,6 +1087,51 @@ mod tests {
             "no local process is running. Start one with `rayline local start` or \
              `rayline run <harness> --local`."
         );
+    }
+
+    /// State a stopped or crashed process left behind is no local process,
+    /// with the same error as no state at all.
+    #[tokio::test]
+    async fn top_with_stale_state_is_the_no_process_error() {
+        let home = unique_test_dir("top-stale-state");
+        let state_dir = crate::hybrid::state_dir(&home);
+        fs::create_dir_all(&state_dir).unwrap();
+        let mut exited = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--list")
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        exited.wait().unwrap();
+        let dead = exited.id();
+        let ready = state_dir.join("ready.json");
+        for state in [
+            "{}".to_owned(),
+            "not json".to_owned(),
+            serde_json::json!({"contract_version": 1, "ready": false}).to_string(),
+        ] {
+            fs::write(&ready, state).unwrap();
+            let error = render_top_from_home(&home, &JSON).await.unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::ConnectionRefused);
+            assert_eq!(
+                error.to_string(),
+                "no local process is running. Start one with `rayline local start` or \
+             `rayline run <harness> --local`."
+            );
+        }
+        // A complete record whose processes have exited.
+        let server = hybrid_top_fixture(&home, serde_json::json!({})).await;
+        server.abort();
+        let mut state: Value = serde_json::from_slice(&fs::read(&ready).unwrap()).unwrap();
+        state["pid"] = Value::from(dead);
+        state["core_pid"] = Value::from(dead);
+        fs::write(&ready, serde_json::to_vec(&state).unwrap()).unwrap();
+        let error = render_top_from_home(&home, &JSON).await.unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "no local process is running. Start one with `rayline local start` or \
+             `rayline run <harness> --local`."
+        );
+        fs::remove_dir_all(home).unwrap();
     }
 
     #[tokio::test]
