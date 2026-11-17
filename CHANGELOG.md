@@ -3,6 +3,13 @@
 User-facing changes in each Rayline release. Install commands and signed
 assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock/releases).
 
+## Unreleased
+
+### Changed
+
+- `rayline update` updates every install that Homebrew doesn't manage, and
+  `rayline update --help` names Homebrew only.
+
 ## 0.5.6 (2026-11-17)
 
 ### Changed
