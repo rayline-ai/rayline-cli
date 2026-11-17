@@ -22,8 +22,8 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 - A cloud `rayline run` notes when a local process is running: "Note: a local
   process is running; this run uses Rayline Platform. Add --local to use the
   local process."
-- `rayline top` waits for a local process that isn't running yet, and follows
-  one that restarts, instead of exiting.
+- `rayline top`'s live view waits for a local process that isn't running yet,
+  and follows one that restarts, instead of exiting.
 
 ### Changed
 
