@@ -33,9 +33,9 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   cloud`. Stop the local process (`rayline local stop`) before updating from
   an earlier release: this version can't read the record of an earlier
   release's process started with router `hosted`.
-- Local mode with no `local` section prints one to paste and links the local
-  mode docs. A missing `settings.json` is now written with the defaults, so
-  it no longer prints a whole file.
+- Local mode with no `local` section is an error that says `local` is
+  required and links the local mode docs. It no longer prints a
+  `settings.json` to paste.
 - `rayline top` says `cloud` instead of `remote`: `target` `cloud` and
   `totals.cloud_requests` in `--json`, and `cloud=` in the live view's
   totals.

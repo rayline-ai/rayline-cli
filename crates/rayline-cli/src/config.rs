@@ -349,30 +349,6 @@ pub const DEFAULT_POLICY_PRESET: &str = "arc-policy.prefer-local.v1";
 /// Where local mode is documented.
 const LOCAL_MODE_DOCS: &str = "https://docs.rayline.ai/rayline-cli/local-mode";
 
-/// The smallest `local` section: the cloud router with the `--router`
-/// defaults, indented to sit under an error line.
-fn minimal_local() -> String {
-    let string = |value: &str| Value::from(value).to_string();
-    [
-        "\"local\": {".to_owned(),
-        "  \"routing\": {".to_owned(),
-        format!("    \"router\": {},", string(Router::Cloud.as_str())),
-        format!(
-            "    \"decisions_model\": {{\"id\": {}}},",
-            string(DEFAULT_DECISIONS_MODEL)
-        ),
-        format!(
-            "    \"policy\": {{\"preset\": {}}}",
-            string(DEFAULT_POLICY_PRESET)
-        ),
-        "  }".to_owned(),
-        "}".to_owned(),
-    ]
-    .iter()
-    .map(|line| format!("  {line}\n"))
-    .collect()
-}
-
 /// A config that Rayline refuses to run with.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigError {
@@ -608,12 +584,7 @@ fn load_from(
             } else {
                 doc.err(
                     "local",
-                    format!(
-                        "is required in local mode. Add it to the file, such as:\n{}To run \
-                         Claude Code, add `\"classifier_model\": \"<model id>\"` to its \
-                         `routing`. See {LOCAL_MODE_DOCS}",
-                        minimal_local()
-                    ),
+                    format!("is required in local mode. See {LOCAL_MODE_DOCS}"),
                 )
             });
         }
@@ -3435,11 +3406,7 @@ pub(crate) mod tests {
         load_doc(&doc).expect("local mode doesn't use `cloud`");
         let mut doc = example();
         remove(&mut doc, "local");
-        let no_local = format!(
-            "is required in local mode. Add it to the file, such as:\n{}To run Claude Code, \
-             add `\"classifier_model\": \"<model id>\"` to its `routing`. See {LOCAL_MODE_DOCS}",
-            minimal_local()
-        );
+        let no_local = format!("is required in local mode. See {LOCAL_MODE_DOCS}");
         for command in [run(None), START] {
             assert_eq!(
                 key_error(load_doc_for(&doc, command)),
@@ -3467,25 +3434,6 @@ pub(crate) mod tests {
             key_error(load(&empty, opts(run(Some(Mode::Local))))),
             ("local".to_owned(), no_local)
         );
-    }
-
-    /// The `local` section the error prints loads as it is, added to the
-    /// default file: local mode with cloud decisions.
-    #[test]
-    fn the_local_section_to_paste_loads() {
-        let pasted: Value =
-            serde_json::from_str(&format!("{{{}}}", minimal_local())).expect("JSON");
-        let mut doc: Value = parse_json(DEFAULT_FILE).ok().expect("JSON");
-        doc["local"] = pasted["local"].clone();
-        let routing = load_doc_for(&doc, run(Some(Mode::Local)))
-            .expect("loads")
-            .routing
-            .expect("routing");
-        assert_eq!(routing.router, Router::Cloud);
-        assert_eq!(routing.decisions_model.id, DEFAULT_DECISIONS_MODEL);
-        assert_eq!(routing.decisions_model.v_value, None);
-        assert_eq!(routing.policy.preset, DEFAULT_POLICY_PRESET);
-        assert!(!routing.defaults);
     }
 
     #[test]
