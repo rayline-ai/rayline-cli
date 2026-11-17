@@ -379,8 +379,8 @@ impl Harness {
     pub(crate) fn plan(self, ctx: &RenderContext<'_>) -> Result<Plan, String> {
         Ok(match self {
             Self::OpenCode => opencode::plan(ctx),
-            Self::Pi => pi::plan(ctx),
-            Self::Omp => omp::plan(ctx),
+            Self::Pi => pi::plan(ctx)?,
+            Self::Omp => omp::plan(ctx)?,
             Self::Hermes => hermes::plan(ctx)?,
             Self::OpenClaw => openclaw::plan(ctx),
         })
@@ -472,7 +472,7 @@ pub(crate) struct ConfigFile {
     /// `true`: Rayline rewrites it on every launch (it holds the env's URL, so
     /// an env change must take effect), owner-only (it holds the key); a
     /// harness whose file also holds user settings merges them into
-    /// `contents` first (Hermes). `false`: written once
+    /// `contents` first (Hermes, pi, omp; see [`merged_file`]). `false`: written once
     /// as a default; the harness or the user may change it afterwards.
     pub overwrite: bool,
     /// The file's text that `contents` was merged from. If the file no longer
@@ -705,6 +705,38 @@ pub(crate) fn json_file(name: &'static str, value: &Value, overwrite: bool) -> C
         overwrite,
         merged_from: None,
     }
+}
+
+/// `name` in `dir`, a file the harness also writes its own settings to:
+/// `fresh` when it doesn't exist, else what `merge` makes of its text, which
+/// sets Rayline's keys and keeps everything else. Either way it is rewritten
+/// on every launch. A file `merge` refuses is an error that names it.
+pub(crate) fn merged_file(
+    dir: &Path,
+    name: &'static str,
+    fresh: String,
+    merge: impl FnOnce(&str) -> Result<String, String>,
+) -> Result<ConfigFile, String> {
+    let path = dir.join(name);
+    let (contents, merged_from) = match fs::read_to_string(&path) {
+        Ok(existing) => {
+            let merged = merge(&existing).map_err(|error| {
+                format!(
+                    "cannot update {} ({error}); fix or remove the file",
+                    path.display()
+                )
+            })?;
+            (merged, Some(existing))
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => (fresh, None),
+        Err(error) => return Err(format!("failed to read {}: {error}", path.display())),
+    };
+    Ok(ConfigFile {
+        name,
+        contents,
+        overwrite: true,
+        merged_from,
+    })
 }
 
 pub(crate) fn yaml_file(name: &'static str, value: &Value, overwrite: bool) -> ConfigFile {

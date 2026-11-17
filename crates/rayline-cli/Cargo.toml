@@ -25,7 +25,9 @@ minisign-verify = "0.2.5"
 rand = "0.9"
 reqwest.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+# `raw_value`: pi's settings.json keeps the text of the entries Rayline
+# does not set.
+serde_json = { workspace = true, features = ["raw_value"] }
 sha2 = "0.10"
 tar = "0.4"
 time = { version = "0.3.47", default-features = false, features = ["std", "formatting", "parsing"] }

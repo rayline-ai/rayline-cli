@@ -142,6 +142,10 @@ like any other argument. Rayline doesn't read it.
   only with the declared model.
 - A model pinned in the harness's own config, such as a subagent model in
   Claude Code's `settings.json`, overrides the models Rayline sets.
+- pi and oh-my-pi save a model you pick in their own settings, in the folder
+  Rayline generates. Each launch sets Rayline's models there again (pi
+  `defaultProvider` and `defaultModel`; oh-my-pi roles `default`, `smol`,
+  `slow` and `plan`) and keeps the rest of the file as the harness wrote it.
 
 ### Claude Code
 

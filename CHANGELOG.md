@@ -36,6 +36,12 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 - Local mode with no `local` section is an error that says `local` is
   required and links the local mode docs. It no longer prints a
   `settings.json` to paste.
+- Every `rayline run pi` and `rayline run omp` sets the models from the
+  config: pi's `defaultProvider` and `defaultModel`, and omp's `modelRoles`
+  `default`, `smol`, `slow` and `plan`, so a changed `cloud.model` reaches a
+  pi or omp that has run before. Every other setting in pi's `settings.json`
+  and omp's `config.yml` stays as the harness wrote it. A model picked in pi
+  or omp is replaced at the next launch.
 - `rayline top` says `cloud` instead of `remote`: `target` `cloud` and
   `totals.cloud_requests` in `--json`, and `cloud=` in the live view's
   totals.
