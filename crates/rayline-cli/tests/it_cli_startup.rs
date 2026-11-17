@@ -410,12 +410,14 @@ fn a_lone_help_or_version_flag_runs_only_the_harness() {
             }
         }
     }
-    // Anything more than the one flag is a launch, which needs a sign-in.
+    assert!(!home.0.join(".config").exists());
+    // Anything more than the one flag is a launch, which reads the settings
+    // (writing the default file) and needs a sign-in.
     assert_fails(
         &home.run_exe_on(exe, &["run", "claude", "--help", "x"], &bin),
         1,
         "Not signed in to Rayline. Run: rayline auth login",
     );
     assert!(!home.0.join(".rayline").exists());
-    assert!(!home.0.join(".config").exists());
+    assert!(home.settings_file().exists());
 }
