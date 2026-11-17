@@ -15,6 +15,8 @@ const OPTIONAL: &[&str] = &[
     rayline_tokencount::PREPROCESSOR_FILE,
 ];
 
+const NO_CHAT_TEMPLATE: &str = "it publishes no chat template; name a repo that does, such as the model's instruct or chat variant";
+
 /// A tokenizer snapshot directory, and whether it is the cached copy because
 /// Hugging Face did not serve the current one.
 pub(crate) struct Snapshot {
@@ -73,9 +75,7 @@ fn fetch_with(
     let dir = rayline_hf::hf_cache_snapshot_path(hub, repo, "", &commit);
     // Every candidate was fetched or confirmed absent.
     if !has_chat_template(&dir)? {
-        return Err(format!(
-            "{repo} publishes no chat template; name a repo that does, such as the model's instruct or chat variant"
-        ));
+        return Err(NO_CHAT_TEMPLATE.to_owned());
     }
     // `cached_or` uses this snapshot alone.
     let marker = complete_marker(hub, repo);
@@ -115,34 +115,26 @@ pub(crate) fn cached_or(hub: &Path, repo: &str, error: String) -> Result<Snapsho
         .join(rayline_hf::repo_to_folder_name(repo))
         .join("snapshots")
         .join(&commit);
-    let complete =
-        dir.join(rayline_tokencount::TOKENIZER_FILE).is_file() && has_chat_template(&dir)?;
-    if !complete {
+    if !dir.join(rayline_tokencount::TOKENIZER_FILE).is_file() {
         return Err(format!(
             "{}: the snapshot {} it names is incomplete",
             marker.display(),
             dir.display()
         ));
     }
+    // A snapshot an older Rayline marked before it checked the template.
+    if !has_chat_template(&dir)? {
+        return Err(NO_CHAT_TEMPLATE.to_owned());
+    }
     Ok(Snapshot { dir, cached: true })
 }
 
-/// Whether the snapshot at `dir` has a chat template where the counter reads
-/// one: `chat_template.jinja`, else the `chat_template` key of
-/// `tokenizer_config.json`. A config that cannot be read is an error naming it.
+/// Whether the snapshot at `dir` has a chat template, read as the counter
+/// reads it. A template file that cannot be read is an error.
 fn has_chat_template(dir: &Path) -> Result<bool, String> {
-    if dir.join(rayline_tokencount::TEMPLATE_FILE).is_file() {
-        return Ok(true);
-    }
-    let config = dir.join(rayline_tokencount::TOKENIZER_CONFIG_FILE);
-    let bytes = match std::fs::read(&config) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(error) => return Err(format!("{}: {error}", config.display())),
-    };
-    let config_json: serde_json::Value =
-        serde_json::from_slice(&bytes).map_err(|error| format!("{}: {error}", config.display()))?;
-    Ok(config_json.get("chat_template").is_some())
+    rayline_tokencount::chat_templates(dir)
+        .map(|templates| templates.is_some())
+        .map_err(|error| format!("{error:#}"))
 }
 
 /// The commit `refs/main` names in the Hugging Face cache at `hub`.
@@ -201,10 +193,10 @@ mod tests {
             .join("snapshots")
             .join("abc123");
         std::fs::create_dir_all(&snapshot).unwrap();
-        std::fs::write(snapshot.join(rayline_tokencount::TOKENIZER_FILE), "{}").unwrap();
+        std::fs::write(snapshot.join(rayline_tokencount::TEMPLATE_FILE), "").unwrap();
         let marker = complete_marker(&hub, REPO);
         let cached = || cached_or(&hub, REPO, "unused".to_owned()).err().unwrap();
-        // A marked snapshot that lacks its chat template is incomplete.
+        // A marked snapshot that lacks its tokenizer is incomplete.
         std::fs::write(&marker, "abc123").unwrap();
         assert_eq!(
             cached(),
@@ -308,8 +300,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&hub);
     }
 
-    const NO_TEMPLATE: &str = "example/model publishes no chat template; name a repo that does, such as the model's instruct or chat variant";
-
     #[test]
     fn a_repo_with_no_template_candidate_publishes_no_chat_template() {
         // Every candidate was fetched and none exists, so a cached snapshot
@@ -318,7 +308,7 @@ mod tests {
         cache_complete_snapshot(&hub);
         assert_eq!(
             fetch_current(&hub, NOT_FOUND).err().as_deref(),
-            Some(NO_TEMPLATE)
+            Some(NO_CHAT_TEMPLATE)
         );
         let _ = std::fs::remove_dir_all(&hub);
     }
@@ -343,16 +333,40 @@ mod tests {
 
     #[test]
     fn a_tokenizer_config_without_a_chat_template_publishes_no_chat_template() {
-        // A base model's config: special tokens, no `chat_template`.
-        let hub = temp_hub("config-no-template");
+        // A base model's config: special tokens and no template, or a null one.
+        for (name, config) in [
+            ("config-no-template", r#"{"bos_token": "<bos>"}"#),
+            ("config-null-template", r#"{"chat_template": null}"#),
+        ] {
+            let hub = temp_hub(name);
+            let fetched = fetch_with(
+                &hub,
+                REPO,
+                Ok("def456".to_owned()),
+                hub_with_config(&hub, config),
+            );
+            assert_eq!(fetched.err().as_deref(), Some(NO_CHAT_TEMPLATE));
+            assert!(!complete_marker(&hub, REPO).exists());
+            let _ = std::fs::remove_dir_all(&hub);
+        }
+    }
+
+    #[test]
+    fn named_templates_without_a_default_are_refused() {
+        let hub = temp_hub("config-no-default");
         let fetched = fetch_with(
             &hub,
             REPO,
             Ok("def456".to_owned()),
-            hub_with_config(&hub, r#"{"bos_token": "<bos>"}"#),
+            hub_with_config(
+                &hub,
+                r#"{"chat_template": [{"name": "tool_use", "template": "x"}]}"#,
+            ),
         );
-        assert_eq!(fetched.err().as_deref(), Some(NO_TEMPLATE));
-        assert!(!complete_marker(&hub, REPO).exists());
+        assert_eq!(
+            fetched.err().as_deref(),
+            Some("tokenizer_config.json has no default chat template")
+        );
         let _ = std::fs::remove_dir_all(&hub);
     }
 
@@ -375,8 +389,9 @@ mod tests {
     }
 
     #[test]
-    fn a_marked_snapshot_without_a_chat_template_is_incomplete() {
-        // A snapshot marked complete before its template was checked.
+    fn a_marked_snapshot_without_a_chat_template_publishes_no_chat_template() {
+        // A snapshot an older Rayline marked complete before it checked the
+        // template, used when the Hub does not answer.
         let hub = temp_hub("marked-no-template");
         let snapshot = cache_complete_snapshot(&hub);
         std::fs::remove_file(snapshot.join(rayline_tokencount::TEMPLATE_FILE)).unwrap();
@@ -386,12 +401,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            cached_or(&hub, REPO, "unused".to_owned()).err(),
-            Some(format!(
-                "{}: the snapshot {} it names is incomplete",
-                complete_marker(&hub, REPO).display(),
-                snapshot.display()
-            ))
+            cached_or(&hub, REPO, "unused".to_owned()).err().as_deref(),
+            Some(NO_CHAT_TEMPLATE)
         );
         let _ = std::fs::remove_dir_all(&hub);
     }

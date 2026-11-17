@@ -114,12 +114,10 @@ that model's endpoint under its `model` name. ARC doesn't publish the models
 it knows yet, so every entry needs `context_window` and `max_output_tokens`,
 and the local process refuses to start without them.
 
-With a `tokenizer`, requests sent to the model over `openai_chat` (OpenClaw's)
-are counted in the model's own tokens, so ARC sees their real size. Other
-requests are sized from their length in bytes, several times their real token
-count, so the model takes them only when its `context_window` leaves that much
-room. The model's endpoint must list `openai_chat`, and the repo must publish a
-chat template: name a model's instruct or chat variant, not its base model.
+With a `tokenizer`, requests sent to the model over `openai_chat` are counted
+in the model's own tokens; its other requests are not. The model's endpoint
+must list `openai_chat`, and the repo must publish a chat template: name a
+model's instruct or chat variant, not its base model.
 
 The only other models ARC can pick are three Rayline Platform models:
 `anthropic/claude-opus-5.5`, `anthropic/claude-sonnet-5.5` and

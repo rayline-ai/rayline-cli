@@ -12,7 +12,7 @@ use rayline_local_router::ModelCapabilities;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::config::{Protocol, Settings};
+use crate::config::Settings;
 
 /// How long `start` waits for a model's tokenizer files before it uses the
 /// cached copy.
@@ -693,13 +693,8 @@ async fn launch(
             .map_err(io::Error::other)??
     };
     clear_state(paths)?;
-    // One counter per tokenizer, for its model's Chat deployment: the core
-    // counts only OpenAI Chat requests.
     let mut token_counters = Vec::new();
-    for (id, model) in &settings.models {
-        let Some(repo) = &model.tokenizer else {
-            continue;
-        };
+    for (id, repo, deployment) in crate::hybrid_profile::counted_deployments(settings) {
         let hub = rayline_hf::hf_cache_dir(home).map_err(io::Error::other)?;
         let snapshot = tokenizer_snapshot(&hub, repo).await.map_err(|error| {
             io::Error::other(format!(
@@ -715,10 +710,7 @@ async fn launch(
         } else {
             say(format!("Prompt counter for {id}: {repo}"));
         }
-        token_counters.push((
-            crate::hybrid_profile::deployment_id(id, Protocol::OpenaiChat),
-            snapshot.dir,
-        ));
+        token_counters.push((deployment, snapshot.dir));
     }
     write_private_json(&paths.core_config(), &config, true)?;
     match &local_arc {

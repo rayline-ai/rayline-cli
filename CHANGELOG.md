@@ -8,12 +8,12 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 ### Fixed
 
 - `rayline local start` no longer fails when a `models` entry has a
-  `tokenizer` and its endpoint lists more protocols than `openai_chat`, as in
-  the documented example. The tokenizer counts the model's OpenAI Chat
+  `tokenizer` and its endpoint lists other protocols besides `openai_chat`, as
+  in the documented example. The tokenizer counts the model's OpenAI Chat
   requests.
-- A `tokenizer` whose endpoint doesn't list `openai_chat` is refused when the
-  config loads, and a tokenizer repo with no chat template (a base model's)
-  is refused at start. Both errors name `models.<id>.tokenizer`.
+- `rayline local start` refuses a `tokenizer` whose endpoint doesn't list
+  `openai_chat`, and a tokenizer repo with no chat template (a base model's),
+  with an error naming `models.<id>.tokenizer`.
 
 ## 0.5.4 (2026-11-17)
 
