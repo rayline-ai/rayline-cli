@@ -39,6 +39,18 @@ Harnesses:
   omp              oh-my-pi
   hermes           Hermes Agent
   openclaw         OpenClaw
+
+Options:
+  --local           Run through the local Rayline process (local mode)
+  --config <file>   Use <file> instead of ~/.config/rayline/settings.json;
+                    local mode if it has a `routing` section
+  --isolated        claude only: use a separate Claude Code config folder
+
+Codex:
+  rayline run codex app [WORKSPACE]   Launch the Codex desktop app
+  rayline run codex configure         Write a Rayline profile for Codex
+
+Arguments after the harness name, or after --, go to the harness.
 ";
 
 const AUTH_HELP: &str = "\
@@ -81,7 +93,7 @@ Print a valid account bearer token for scripts and integrations.
 const CODEX_APP_HELP: &str = "\
 Usage: rayline run codex app [OPTIONS] [WORKSPACE]
 
-Launch the Codex desktop app on ARC through the Rayline router.
+Launch the Codex desktop app on ARC through Rayline Platform.
 
 The desktop app-server ignores -c overrides and is single-instance, so this
 writes the Rayline provider into an isolated CODEX_HOME
@@ -96,7 +108,7 @@ const CODEX_CONFIGURE_HELP: &str = "\
 Usage: rayline run codex configure [OPTIONS]
 
 Write a Codex profile at $CODEX_HOME/rayline.config.toml (or ~/.codex) that
-reaches ARC through the Rayline router with your router key.
+reaches ARC through Rayline Platform with your router key.
 
 Options:
   --help                  Show this message and exit
@@ -115,13 +127,14 @@ const LOCAL_START_HELP: &str = "\
 Usage: rayline local start [--config <file>] [--router <local|hosted>]
 
 Start the local process from ~/.config/rayline/settings.json, or from <file>.
-The config must have a `routing` section, except with `--router local`.
+The config must have a `routing` section, except with `--router`: without one,
+it uses arc-swift-1.0 and arc-policy.prefer-local.v1.
 
 Options:
   --config <file>                Read the config from <file> instead of the default file
-  --router <local|hosted>        Where decisions are made, over `routing.router`;
-                                 `local` with no `routing` uses arc-swift-1.0 and
-                                 arc-policy.prefer-local.v1
+  --router <local|hosted>        Where ARC makes routing decisions: local (this
+                                 machine) or hosted (Rayline Platform). Overrides
+                                 routing.router.
   --help                         Show this message and exit
 ";
 
@@ -156,11 +169,16 @@ Options:
 const UPDATE_HELP: &str = "\
 Usage: rayline update [OPTIONS]
 
+Check for or install a Rayline update.
+
 Options:
   --check              Check for an update without installing
   --version <version>  Install or check a specific version
   --force              Install even when already current
   --dry-run            Download and verify without replacing Rayline
+  --help               Show this message and exit
+
+Homebrew and Rayline.app installs update through brew or the app.
 ";
 
 /// The first argument that runs the local process (section 4.3). Only
@@ -284,6 +302,29 @@ impl Launch {
 
     /// The kept option or command that local mode does not run: the deleted
     /// `hybrid run` had none of them.
+    /// The harness binary and its one argument when the harness arguments
+    /// are exactly one of `--help`, `-h`, `--version` and `-v`: they only
+    /// print the harness's help or version, so the harness runs with no
+    /// config, sign-in or daemon check (spec section 3.2 item 5).
+    pub(crate) fn info_only(&self) -> Option<(&'static str, &OsString)> {
+        let (binary, args) = match self {
+            Launch::Claude { args, .. } => ("claude", args),
+            Launch::Codex { args } => ("codex", args),
+            Launch::Harness { harness, args } => (harness.binary(), args),
+            Launch::CodexApp { .. } | Launch::CodexConfigure => return None,
+        };
+        match args.as_slice() {
+            [arg]
+                if ["--help", "-h", "--version", "-v"]
+                    .iter()
+                    .any(|flag| arg == flag) =>
+            {
+                Some((binary, arg))
+            }
+            _ => None,
+        }
+    }
+
     fn not_in_local_mode(&self) -> Option<&'static str> {
         match self {
             Launch::Claude { isolated: true, .. } => Some("`--isolated`"),
@@ -1105,6 +1146,7 @@ mod tests {
             .expect("harnesses")
             .1
             .lines()
+            .take_while(|line| !line.is_empty())
             .filter_map(|line| line.split_whitespace().next())
             .collect::<Vec<_>>();
         assert_eq!(names.len(), 7);

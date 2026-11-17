@@ -36,7 +36,9 @@ pub type DecideFuture<'a> = Pin<Box<dyn Future<Output = Result<Value, Refusal>> 
 /// The policy: one decide body in, one decide answer out. The body is a
 /// [`crate::DecideInput`] as JSON, its request members as the harness sent them;
 /// the answer carries `decision.tier_picks`, `decision.receipt`, `actions[]`
-/// and `encoding.token_count`. A refusal is the route's.
+/// and `encoding.token_count`, and may carry `encoding.restored_tokens` (the
+/// tokens a local encoder took from a prefix snapshot), which only the `route`
+/// log line reads. A refusal is the route's.
 pub trait Decider: Send + Sync {
     fn decide<'a>(&'a self, body: &'a str) -> DecideFuture<'a>;
 }
@@ -226,7 +228,7 @@ impl Router {
     pub async fn route(&self, sent: &[u8], headers: &RequestHeaders) -> Result<Value, Refusal> {
         let started = Instant::now();
         let elapsed = || u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-        let result: Result<(Value, Option<String>), Refusal> = async {
+        let result: Result<(Value, Option<String>, Option<u64>), Refusal> = async {
             let parsed = parse(&self.catalog, sent, headers, &ParseContext::now(&self.salt))?;
             let decide = &parsed.decide;
             let body = serde_json::to_string(decide).map_err(|_| {
@@ -241,11 +243,12 @@ impl Router {
                 &route_id,
                 elapsed(),
             )?;
-            Ok((out, decide.event.kind.clone()))
+            let restored = answer["encoding"]["restored_tokens"].as_u64();
+            Ok((out, decide.event.kind.clone(), restored))
         }
         .await;
         match result {
-            Ok((out, kind)) => {
+            Ok((out, kind, restored_tokens)) => {
                 let ms = elapsed();
                 if let (Some(hook), Some(route_id)) = (&self.on_decision, out["route_id"].as_str())
                 {
@@ -260,6 +263,7 @@ impl Router {
                     decided_by = %out["receipt"]["decided_by"],
                     kind = kind.as_deref(),
                     tokens = out["usage"]["encoded_input_tokens"].as_u64(),
+                    restored_tokens,
                     "route"
                 );
                 Ok(out)

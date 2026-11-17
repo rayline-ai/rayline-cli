@@ -83,8 +83,8 @@ struct Supervisor {
     /// started with one.
     #[serde(default)]
     classifier_model: Option<String>,
-    /// Started from the `--router local` defaults (no `routing` in its
-    /// config): a `rayline run --local` without `routing` runs on it.
+    /// Started from the `--router` defaults (no `routing` in its config): a
+    /// `rayline run --local` without `routing` runs on it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     routing_defaults: bool,
 }
@@ -491,24 +491,27 @@ fn running_in(dir: &Path) -> bool {
     )
 }
 
-/// Whether the running local process was started from the `--router local`
-/// defaults, for a `rayline run --local` to load them. Reads its state
-/// without creating anything; state it can't read is no.
-pub(crate) fn running_from_routing_defaults() -> bool {
-    crate::home().is_ok_and(|home| {
-        matches!(
-            running(&Paths {
-                dir: state_dir(&home)
-            }),
-            Ok(Some(Supervisor {
-                routing_defaults: true,
-                ..
-            }))
-        )
-    })
+/// The router of the running local process when it was started from the
+/// `--router` defaults, for a `rayline run --local` to load them. Reads its
+/// state without creating anything; state it can't read is none.
+pub(crate) fn running_from_routing_defaults() -> Option<crate::config::Router> {
+    let home = crate::home().ok()?;
+    match running(&Paths {
+        dir: state_dir(&home),
+    }) {
+        Ok(Some(Supervisor {
+            routing_defaults: true,
+            router: Some(router),
+            ..
+        })) => Some(match router {
+            RouterSource::Hosted => crate::config::Router::Hosted,
+            RouterSource::Local { .. } => crate::config::Router::Local,
+        }),
+        _ => None,
+    }
 }
 
-/// Refuses a run's launch from the `--router local` defaults: they serve a
+/// Refuses a run's launch from the `--router` defaults: they serve a
 /// run only on the process started from them, which has stopped since the
 /// run loaded them.
 fn may_launch(settings: &Settings) -> io::Result<()> {
@@ -1199,7 +1202,7 @@ fn encoder_ships(ships: bool) -> io::Result<()> {
         format!(
             "`local` decisions need the ARC encoder, which Rayline releases ship only for \
              macOS arm64, and Linux (x86_64 and aarch64) and Windows x86_64 with an NVIDIA GPU, not for {os} {}; \
-             set `routing.router` to `hosted`",
+             to use the hosted router instead, run `rayline local start --router hosted`",
             std::env::consts::ARCH
         ),
     ))
@@ -1317,8 +1320,8 @@ fn nvidia_driver(os: &str, library: &str, loaded: Result<(), String>) -> io::Res
             io::ErrorKind::NotFound,
             format!(
                 "`local` decisions on {os} need the NVIDIA driver, and its {library} can't be \
-                 loaded ({error}); install the NVIDIA driver, or use hosted decisions: \
-                 `rayline local start --router hosted`"
+                 loaded ({error}); install the NVIDIA driver, or to use the hosted router \
+                 instead, run `rayline local start --router hosted`"
             ),
         )
     })
@@ -1395,14 +1398,22 @@ fn ready(paths: &Paths) -> io::Result<Value> {
 
 /// Read-only connection for top: never creates state or starts a runtime.
 /// The client's default credentials are safe only for this validated origin.
-/// An error of kind `NotFound` means no local process runs: `ready.json` is
-/// missing or names no live process.
+/// An error of kind `NotFound` means no local process runs, as `rayline local
+/// status` decides it: no `supervisor.json`, or one naming an exited process,
+/// whatever other state it left behind. While a process runs, `NotFound`
+/// also means its `ready.json` is missing or names no live process.
 pub(crate) async fn top_connection(
     state_dir: &Path,
 ) -> io::Result<(reqwest::Client, String, Value)> {
     let paths = Paths {
         dir: state_dir.to_owned(),
     };
+    if !paths.supervisor().try_exists()? || running(&paths)?.is_none() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "no local process is running",
+        ));
+    }
     let state = ready(&paths).map_err(|error| {
         io::Error::new(
             match error.kind() {
@@ -2292,7 +2303,9 @@ mod tests {
             "{message}"
         );
         assert!(
-            message.ends_with("set `routing.router` to `hosted`"),
+            message.ends_with(
+                "; to use the hosted router instead, run `rayline local start --router hosted`"
+            ),
             "{message}"
         );
     }
@@ -2311,7 +2324,7 @@ mod tests {
             error.to_string(),
             "`local` decisions on Linux need the NVIDIA driver, and its libcuda.so.1 can't be \
              loaded (libcuda.so.1: cannot open shared object file); install the NVIDIA driver, \
-             or use hosted decisions: `rayline local start --router hosted`"
+             or to use the hosted router instead, run `rayline local start --router hosted`"
         );
     }
 
@@ -2628,7 +2641,7 @@ mod tests {
             env: None,
             harness_protocol: None,
             router: None,
-            routing_defaults: false,
+            routing_defaults: None,
         })
         .unwrap();
         let withheld = [
@@ -2938,7 +2951,7 @@ mod tests {
             env,
             harness_protocol: None,
             router: None,
-            routing_defaults: false,
+            routing_defaults: None,
         })
         .unwrap()
     }
