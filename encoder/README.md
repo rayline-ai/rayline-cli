@@ -40,6 +40,16 @@ loopback and refuses any other `--host`. `--budget` (tokens per decode call) mus
 (8192 for ARC 1.0) and not exceed `--ctx`. On Apple M4, `GGML_METAL_TENSOR_ENABLE=1` speeds up flash attention.
 Retained sessions live in memory only and share one KV cache of `--ctx` tokens.
 
+A new conversation's prompt usually starts like an earlier one (the same tool definitions and system prompt), so each
+encode from position 0 keeps up to two prefix snapshots: at the end of its first readout block and at the start of
+its last, each at least 1,024 tokens in. A later encode from 0 that starts with a snapshot's tokens decodes only the
+rest and answers `x-restored-tokens` with the tokens it skipped (0
+for none). Snapshots share KV cells with the sequences they came from, so they take no `--ctx` room of their own, and
+each holds one recurrent state (about 10 MiB for ARC 1.0); at most four are kept, the least recently used replaced
+first, and a request that needs KV room evicts sessions and snapshots alike, least recently used first. The ignored
+test `prefix_snapshots_read_and_decide_as_a_full_encode` in `rayline-daemon` checks rows and decisions against full
+encodes with any encoder binary and GGUF (`ARC_ENCODER_BIN`, `ARC_ENCODER_MODEL`, `ARC_RUNTIME_RELEASE`).
+
 ## Adding a platform
 
 A new platform ships only after all seven steps pass on its target hardware.

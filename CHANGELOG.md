@@ -3,6 +3,15 @@
 User-facing changes in each Rayline release. Install commands and signed
 assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock/releases).
 
+## Unreleased
+
+### Changed
+
+- A new conversation's first `local` decision no longer encodes the tool
+  definitions and system prompt it shares with an earlier conversation: about
+  0.1 s instead of about 3 s for Claude Code on Apple M-series, after the
+  first conversation since the local process started.
+
 ## 0.5.4 (2026-11-17)
 
 ### Added
