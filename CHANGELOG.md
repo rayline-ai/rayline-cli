@@ -58,7 +58,7 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 
 ### Rollback
 
-To go back to 0.5.5: run `rayline local stop`, then `curl -fsSL https://get.rayline.ai/install.sh | bash -s -- --version 0.5.5`. 0.5.5 refuses the new `settings.json` keys (`mode`, `cloud`, `local`) as unknown, so put back the file 0.5.6 converted, `~/.config/rayline/settings.json.bak`, as `settings.json`, or remove `settings.json`. Plain `rayline update` would install 0.5.6 again.
+To go back to 0.5.5: run `rayline local stop`, then `rayline update --version 0.5.5`, which replaces the `rayline` you run on macOS, Linux and Windows. It doesn't replace a Homebrew or Rayline.app install. 0.5.5 refuses the new `settings.json` keys (`mode`, `cloud`, `local`) as unknown, so put back the file 0.5.6 converted, `~/.config/rayline/settings.json.bak`, as `settings.json`, or remove `settings.json`. Plain `rayline update` would install 0.5.6 again.
 
 ## 0.5.5 (2026-11-17)
 
