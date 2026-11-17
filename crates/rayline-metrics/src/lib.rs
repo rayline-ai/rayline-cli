@@ -37,7 +37,7 @@ pub struct RouterTotals {
     pub completed_requests: u64,
     pub errored_requests: u64,
     pub local_requests: u64,
-    pub remote_requests: u64,
+    pub cloud_requests: u64,
     pub input_tokens: u64,
     pub output_tokens: u64,
 }
@@ -99,7 +99,7 @@ pub enum MetricsUpdate {
         source: String,
         requested_model: Option<String>,
     },
-    /// `target` is `local` or `remote`; `None` when the receipt names no
+    /// `target` is `local` or `cloud`; `None` when the receipt names no
     /// single deployment.
     RouteDecided {
         request_id: String,
@@ -438,7 +438,7 @@ impl RouterMetrics {
             if record.target.as_deref() == Some("local") {
                 totals.local_requests = totals.local_requests.saturating_add(1);
             } else if record.target.is_some() {
-                totals.remote_requests = totals.remote_requests.saturating_add(1);
+                totals.cloud_requests = totals.cloud_requests.saturating_add(1);
             }
             totals.input_tokens = totals
                 .input_tokens
@@ -935,7 +935,7 @@ mod tests {
     #[test]
     fn output_held_back_to_the_end_is_timed_from_the_response_start() {
         let mut record = RequestRecord::new("req-1".to_owned(), 1_000);
-        record.target = Some("remote".to_owned());
+        record.target = Some("cloud".to_owned());
         record.response_started_at_unix_ms = Some(1_600);
         record.first_token_at_unix_ms = Some(5_390);
         record.completed_at_unix_ms = Some(5_400);
@@ -964,7 +964,7 @@ mod tests {
     #[test]
     fn output_timed_over_less_than_half_a_second_has_no_rate() {
         let mut record = RequestRecord::new("req-1".to_owned(), 1_000);
-        record.target = Some("remote".to_owned());
+        record.target = Some("cloud".to_owned());
         record.response_started_at_unix_ms = Some(2_000);
         record.first_token_at_unix_ms = Some(2_000);
         record.completed_at_unix_ms = Some(2_109);

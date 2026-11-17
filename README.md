@@ -41,13 +41,15 @@ rayline run claude
 rayline run codex -- exec "summarize this repo"
 ```
 
-To use local mode, add a `routing` section to `~/.config/rayline/settings.json`,
-along with any inference servers you run yourself (see
-[Local mode](docs/local-mode.md)). Then run:
+The first command writes `~/.config/rayline/settings.json` in cloud mode.
+To use local mode, add a `local` section to it, with any inference servers you
+run yourself (see [Local mode](docs/local-mode.md)). Then run:
 
 ```bash
-rayline run claude --local
+rayline run claude --mode local
 ```
+
+or set `"mode": "local"` in the file.
 
 | Command | Does |
 |---|---|
@@ -65,7 +67,7 @@ rayline run claude --local
 ## Documentation
 
 - [Getting started](docs/getting-started.md): install, sign-in, running a
-  harness, harness options, updates and files.
+  harness, harness options, settings, updates and files.
 - [Local mode](docs/local-mode.md): `settings.json`, the local process, live
   metrics and config errors.
 - [Acceptance testing](docs/acceptance-testing.md): one real turn per harness

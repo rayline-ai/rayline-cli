@@ -1,3 +1,5 @@
 crates/rayline-cli/tests/fixtures/** -text
 # Patches are pinned by sha256 and their context lines carry the source's whitespace.
 encoder/patches/*.patch -text -whitespace
+# Written byte for byte as the default settings.json; keep it LF on every checkout.
+crates/rayline-cli/src/default-settings.json text eol=lf
