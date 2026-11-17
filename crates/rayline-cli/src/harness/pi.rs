@@ -99,7 +99,7 @@ pub(crate) fn plan(ctx: &RenderContext<'_>) -> Result<Plan, String> {
         set_keys(existing, &settings)
     })?;
     Ok(Plan {
-        files: vec![json_file("models.json", &models, true), settings],
+        files: vec![json_file("models.json", &models), settings],
         env_set: vec![("PI_CODING_AGENT_DIR", ctx.config_dir.as_os_str().to_owned())],
         env_remove: Vec::new(),
     })

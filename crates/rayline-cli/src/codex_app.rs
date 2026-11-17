@@ -177,7 +177,6 @@ pub(crate) fn write_codex_home(home: &Path, config: &str) -> io::Result<()> {
         &[crate::harness::ConfigFile {
             name: "config.toml",
             contents: merged,
-            overwrite: true,
             merged_from: current,
         }],
     )

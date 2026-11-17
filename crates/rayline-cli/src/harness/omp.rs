@@ -130,7 +130,7 @@ pub(crate) fn plan(ctx: &RenderContext<'_>) -> Result<Plan, String> {
         yaml_merge::merge(existing, &config, ROLES)
     })?;
     Ok(Plan {
-        files: vec![yaml_file("models.yml", &models, true), config_file],
+        files: vec![yaml_file("models.yml", &models), config_file],
         env_set: vec![("PI_CODING_AGENT_DIR", ctx.config_dir.as_os_str().to_owned())],
         env_remove: vec!["CLAUDE_CONFIG_DIR", "OMP_PROFILE", "PI_PROFILE"],
     })

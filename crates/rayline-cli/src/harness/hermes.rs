@@ -169,7 +169,6 @@ pub(crate) fn plan(ctx: &RenderContext<'_>) -> Result<Plan, String> {
         files: vec![ConfigFile {
             name: CONFIG_FILE,
             contents,
-            overwrite: true,
             merged_from,
         }],
         env_set: vec![("HERMES_HOME", ctx.config_dir.as_os_str().to_owned())],

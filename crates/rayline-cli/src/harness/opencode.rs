@@ -79,7 +79,7 @@ pub(crate) fn plan(ctx: &RenderContext<'_>) -> Plan {
         }
     });
     Plan {
-        files: vec![json_file(CONFIG_FILE, &config, true)],
+        files: vec![json_file(CONFIG_FILE, &config)],
         env_set: vec![(
             "OPENCODE_CONFIG",
             ctx.config_dir.join(CONFIG_FILE).into_os_string(),

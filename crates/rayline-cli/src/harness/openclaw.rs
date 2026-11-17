@@ -171,11 +171,10 @@ pub(crate) fn plan(ctx: &RenderContext<'_>) -> Plan {
     });
     Plan {
         files: vec![
-            json_file(CONFIG_FILE, &config, true),
+            json_file(CONFIG_FILE, &config),
             ConfigFile {
                 name: KEY_FILE,
                 contents: ctx.key.to_owned(),
-                overwrite: true,
                 merged_from: None,
             },
         ],

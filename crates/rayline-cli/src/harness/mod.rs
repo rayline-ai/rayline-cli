@@ -468,13 +468,11 @@ impl RenderContext<'_> {
 #[derive(Debug)]
 pub(crate) struct ConfigFile {
     pub name: &'static str,
+    /// Rayline rewrites it on every launch (it holds the env's URL, so an env
+    /// change must take effect), owner-only (it holds the key). A harness whose
+    /// file also holds user settings merges them into `contents` first
+    /// (Hermes, pi, omp; see [`merged_file`]).
     pub contents: String,
-    /// `true`: Rayline rewrites it on every launch (it holds the env's URL, so
-    /// an env change must take effect), owner-only (it holds the key); a
-    /// harness whose file also holds user settings merges them into
-    /// `contents` first (Hermes, pi, omp; see [`merged_file`]). `false`: written once
-    /// as a default; the harness or the user may change it afterwards.
-    pub overwrite: bool,
     /// The file's text that `contents` was merged from. If the file no longer
     /// reads exactly this when it is replaced (the harness saved a setting
     /// meanwhile), the write is refused rather than losing that edit.
@@ -617,9 +615,6 @@ pub(crate) fn write_files(dir: &Path, files: &[ConfigFile]) -> io::Result<()> {
     rayline_local_router::windows_state::restrict_to_owner(dir, true)?;
     for file in files {
         let path = dir.join(file.name);
-        if !file.overwrite && path.exists() {
-            continue;
-        }
         let tmp = dir.join(format!(".{}.tmp-{}", file.name, std::process::id()));
         write_private(&tmp, &file.contents)?;
         if let Some(base) = &file.merged_from
@@ -696,21 +691,19 @@ pub(crate) fn build_command(binary: &Path, plan: &Plan, args: &[OsString]) -> Co
     command
 }
 
-pub(crate) fn json_file(name: &'static str, value: &Value, overwrite: bool) -> ConfigFile {
+pub(crate) fn json_file(name: &'static str, value: &Value) -> ConfigFile {
     let mut contents = serde_json::to_string_pretty(value).expect("config serializes");
     contents.push('\n');
     ConfigFile {
         name,
         contents,
-        overwrite,
         merged_from: None,
     }
 }
 
 /// `name` in `dir`, a file the harness also writes its own settings to:
 /// `fresh` when it doesn't exist, else what `merge` makes of its text, which
-/// sets Rayline's keys and keeps everything else. Either way it is rewritten
-/// on every launch. A file `merge` refuses is an error that names it.
+/// sets Rayline's keys and keeps everything else. A file `merge` refuses is an error that names it.
 pub(crate) fn merged_file(
     dir: &Path,
     name: &'static str,
@@ -734,16 +727,14 @@ pub(crate) fn merged_file(
     Ok(ConfigFile {
         name,
         contents,
-        overwrite: true,
         merged_from,
     })
 }
 
-pub(crate) fn yaml_file(name: &'static str, value: &Value, overwrite: bool) -> ConfigFile {
+pub(crate) fn yaml_file(name: &'static str, value: &Value) -> ConfigFile {
     ConfigFile {
         name,
         contents: to_yaml(value),
-        overwrite,
         merged_from: None,
     }
 }
@@ -1318,7 +1309,6 @@ pub(crate) mod tests {
         let files = [ConfigFile {
             name: "config.toml",
             contents: "secret = 1\n".to_owned(),
-            overwrite: true,
             merged_from: None,
         }];
         write_files(&dir, &files).unwrap();
@@ -1327,28 +1317,18 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn write_files_overwrites_owned_and_keeps_defaults() {
+    fn write_files_rewrites_each_file() {
         let dir = temp_dir("write").join("cfg");
         let files = |text: &str| {
-            vec![
-                ConfigFile {
-                    name: "owned.json",
-                    contents: text.to_owned(),
-                    overwrite: true,
-                    merged_from: None,
-                },
-                ConfigFile {
-                    name: "default.json",
-                    contents: text.to_owned(),
-                    overwrite: false,
-                    merged_from: None,
-                },
-            ]
+            vec![ConfigFile {
+                name: "owned.json",
+                contents: text.to_owned(),
+                merged_from: None,
+            }]
         };
         write_files(&dir, &files("one")).unwrap();
         write_files(&dir, &files("two")).unwrap();
         assert_eq!(fs::read_to_string(dir.join("owned.json")).unwrap(), "two");
-        assert_eq!(fs::read_to_string(dir.join("default.json")).unwrap(), "one");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
@@ -1461,7 +1441,6 @@ pub(crate) mod tests {
         let files = [ConfigFile {
             name: "owned.json",
             contents: "new".to_owned(),
-            overwrite: true,
             merged_from: None,
         }];
         write_files(&dir, &files).unwrap();
