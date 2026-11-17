@@ -51,3 +51,6 @@ windows-sys = { version = "=0.61.2", features = [
     "Win32_System_IO",
     "Win32_System_Threading",
 ] }
+
+[dev-dependencies]
+boon = "0.6.1"

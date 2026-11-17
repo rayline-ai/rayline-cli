@@ -1,0 +1,8 @@
+{
+  "mode": "cloud",
+
+  "cloud": {
+    "model": { "id": "arc-sage-1.0" },
+    "smol_model": { "id": "arc-swift-1.0" }
+  }
+}

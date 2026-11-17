@@ -19,11 +19,12 @@
 //! config sets up only its harness's one protocol (spec section 5.2): Hermes
 //! Responses, OpenClaw Chat Completions. The models, their names and their
 //! limits are the ones the router's `GET /v1/models` lists for the key, read
-//! once per launch ([`fetch_hosted_models`]): the main agent defaults to the
-//! listed ARC Sage (`product: arc-sage-1.0`) and, where the harness has a
-//! separate small/background model role, that role to the listed ARC Swift
-//! (`product: arc-swift-1.0`), so a contributor or ZDR key gets its own ids.
-//! Under `rayline run <harness> --local` every renderer keeps `rayline-auto` (the execution
+//! once per launch ([`fetch_hosted_models`]): the main agent defaults to
+//! `cloud.model.id` and, where the harness has a separate small/background
+//! model role, that role to `cloud.smol_model.id`, both as `settings.json`
+//! writes them. Rayline doesn't check those ids against the listing: one it
+//! doesn't have is offered by its id alone, with no name or limits.
+//! Under a local-mode `rayline run <harness>` every renderer keeps `rayline-auto` (the execution
 //! core's virtual model) and advertises the hybrid runtime's admitted limits
 //! instead ([`RenderContext::capabilities`]): a harness that asks for more
 //! output than the execution core admits has every turn refused.
@@ -54,6 +55,8 @@ use std::process::{Command, ExitCode};
 
 use serde_json::Value;
 
+use crate::config::Cloud;
+
 /// The router key a parent launch hands its child processes. Removed from the
 /// harness's environment so it never reaches the harness's tools.
 const ROUTER_KEY_ENV: &str = "RAYLINE_ROUTER_API_KEY";
@@ -61,7 +64,7 @@ const ROUTER_KEY_ENV: &str = "RAYLINE_ROUTER_API_KEY";
 /// episode on. Most harnesses send it under this name on their own; Hermes
 /// needs the name written into its config ([`hermes::SESSION_AFFINITY_KEY`]).
 pub const SESSION_AFFINITY_HEADER: &str = "x-session-affinity";
-/// The execution core's virtual model under `rayline run <harness> --local`.
+/// The execution core's virtual model under a local-mode `rayline run <harness>`.
 pub const ROUTER_MODEL: &str = crate::VIRTUAL_ROUTER_MODEL;
 
 /// A model's price in USD per million tokens, from the router's
@@ -74,24 +77,57 @@ pub(crate) struct ModelPrice {
     pub cache_write: f64,
 }
 
-/// A model a rendered config offers, at the limits it advertises.
+/// A model a rendered config offers.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct LaunchModel {
     pub id: String,
-    pub display_name: String,
-    pub context_window: u64,
-    pub max_output_tokens: u64,
-    /// The ARC product the model runs (`product` in `GET /v1/models`): the
-    /// same `arc-sage-1.0` for ARC Sage in every data mode. `None` for a
-    /// model that is no ARC product (hybrid's virtual model).
+    /// Its name and limits, which a config advertises. `None` for a
+    /// `cloud` model id the listing doesn't have: a config offers that one by
+    /// its id alone, and the harness falls back on its own defaults.
+    pub details: Option<ModelDetails>,
+    /// The ARC product the model runs (`product` in `GET /v1/models`), the
+    /// same for one product in every data mode. `None` for a model that is
+    /// no ARC product (hybrid's virtual model, or an unlisted id).
     pub product: Option<String>,
-    /// The input it accepts: `["text", "image"]` for a hosted model whose
-    /// listing has `capabilities.vision: true`, `["text"]` when false; the
-    /// core's admitted modalities under `--local`.
-    pub input_modalities: Vec<String>,
     /// Its row on the price card ([`LaunchModels::apply_arc_prices`]), for a
     /// harness that shows costs (omp); `None` when not read or not on it.
     pub price: Option<ModelPrice>,
+}
+
+/// What a config advertises about a model: from the listing in cloud mode,
+/// from the hybrid runtime's admitted limits in local mode.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ModelDetails {
+    pub display_name: String,
+    pub context_window: u64,
+    pub max_output_tokens: u64,
+    /// The input it accepts: `["text", "image"]` for a hosted model whose
+    /// listing has `capabilities.vision: true`, `["text"]` when false; the
+    /// core's admitted modalities in local mode.
+    pub input_modalities: Vec<String>,
+}
+
+impl LaunchModel {
+    /// A `cloud` model id the listing doesn't have, offered by its id alone.
+    fn unlisted(id: &str) -> Self {
+        Self {
+            id: id.to_owned(),
+            details: None,
+            product: None,
+            price: None,
+        }
+    }
+}
+
+/// Add a model's name, input modalities and limits to a pi, omp or OpenClaw
+/// model entry. An unlisted model ([`LaunchModel::unlisted`]) gets none.
+fn add_details(entry: &mut Value, model: &LaunchModel) {
+    if let Some(details) = &model.details {
+        entry["name"] = serde_json::json!(details.display_name);
+        entry["input"] = serde_json::json!(details.input_modalities);
+        entry["contextWindow"] = serde_json::json!(details.context_window);
+        entry["maxTokens"] = serde_json::json!(details.max_output_tokens);
+    }
 }
 
 /// The models a rendered config selects and offers.
@@ -106,18 +142,41 @@ pub(crate) struct LaunchModels {
 }
 
 impl LaunchModels {
-    /// A hosted launch: every model the router's `GET /v1/models` lists for
-    /// the key, which are the standard, contributor or ZDR ids by the
-    /// account's data mode. The main agent runs the entry whose `product` is
-    /// ARC Sage, the background role the one whose `product` is ARC Swift;
-    /// a listing without either is an error.
-    pub(crate) fn from_listing(body: &Value) -> Result<Self, String> {
+    /// A cloud-mode launch: every model the router's `GET /v1/models` lists
+    /// for the key ([`Self::listed_models`]), the main agent on `cloud.model.id`
+    /// and the background role on `cloud.smol_model.id`, as written.
+    #[cfg(test)]
+    pub(crate) fn from_listing(body: &Value, cloud: &Cloud) -> Result<Self, String> {
+        Ok(Self::for_cloud(Self::listed_models(body)?, cloud))
+    }
+
+    /// `offered` with the models `cloud` names selected, the main one first.
+    /// Rayline doesn't check those ids: one the listing doesn't have is added
+    /// by its id alone ([`LaunchModel::unlisted`]).
+    fn for_cloud(mut offered: Vec<LaunchModel>, cloud: &Cloud) -> Self {
+        let main = cloud.model.id.clone();
+        let background = cloud.smol_model.id.clone();
+        for id in [&main, &background] {
+            if !offered.iter().any(|model| &model.id == id) {
+                offered.push(LaunchModel::unlisted(id));
+            }
+        }
+        offered.sort_by_key(|model| model.id != main);
+        Self {
+            main,
+            background,
+            offered,
+        }
+    }
+
+    /// Every model the router's `GET /v1/models` lists for the key, with its
+    /// limits.
+    fn listed_models(body: &Value) -> Result<Vec<LaunchModel>, String> {
         let data = body
             .get("data")
             .and_then(Value::as_array)
             .ok_or("the response has no `data` list")?;
-        let mut offered = data
-            .iter()
+        data.iter()
             .map(|entry| {
                 let id = entry
                     .get("id")
@@ -136,44 +195,31 @@ impl LaunchModels {
                     .ok_or_else(|| format!("{id} has no capabilities.vision"))?;
                 Ok(LaunchModel {
                     id: id.to_owned(),
-                    display_name: entry
-                        .get("display_name")
-                        .and_then(Value::as_str)
-                        .ok_or_else(|| format!("{id} has no display_name"))?
-                        .to_owned(),
-                    context_window: limit("context_length")?,
-                    max_output_tokens: limit("max_output_tokens")?,
+                    details: Some(ModelDetails {
+                        display_name: entry
+                            .get("display_name")
+                            .and_then(Value::as_str)
+                            .ok_or_else(|| format!("{id} has no display_name"))?
+                            .to_owned(),
+                        context_window: limit("context_length")?,
+                        max_output_tokens: limit("max_output_tokens")?,
+                        input_modalities: if vision {
+                            vec!["text".to_owned(), "image".to_owned()]
+                        } else {
+                            vec!["text".to_owned()]
+                        },
+                    }),
                     product: entry
                         .get("product")
                         .and_then(Value::as_str)
                         .map(ToOwned::to_owned),
-                    input_modalities: if vision {
-                        vec!["text".to_owned(), "image".to_owned()]
-                    } else {
-                        vec!["text".to_owned()]
-                    },
                     price: None,
                 })
             })
-            .collect::<Result<Vec<_>, String>>()?;
-        let product_model = |product: &str| {
-            offered
-                .iter()
-                .find(|model| model.product.as_deref() == Some(product))
-                .map(|model| model.id.clone())
-                .ok_or_else(|| format!("no listed model has \"product\": \"{product}\""))
-        };
-        let main = product_model(crate::ARC_SAGE_MODEL)?;
-        let background = product_model(crate::ARC_SWIFT_MODEL)?;
-        offered.sort_by_key(|model| model.id != main);
-        Ok(Self {
-            main,
-            background,
-            offered,
-        })
+            .collect()
     }
 
-    /// `rayline run <harness> --local`: the execution core serves one virtual model, at
+    /// A local-mode `rayline run <harness>`: the execution core serves one virtual model, at
     /// the limits the hybrid runtime admits.
     pub(crate) fn hybrid(capabilities: &rayline_local_router::ModelCapabilities) -> Self {
         Self {
@@ -181,11 +227,13 @@ impl LaunchModels {
             background: ROUTER_MODEL.to_owned(),
             offered: vec![LaunchModel {
                 id: ROUTER_MODEL.to_owned(),
-                display_name: "Rayline router".to_owned(),
-                context_window: capabilities.context_window,
-                max_output_tokens: capabilities.max_output_tokens,
+                details: Some(ModelDetails {
+                    display_name: "Rayline router".to_owned(),
+                    context_window: capabilities.context_window,
+                    max_output_tokens: capabilities.max_output_tokens,
+                    input_modalities: capabilities.input_modalities.clone(),
+                }),
                 product: None,
-                input_modalities: capabilities.input_modalities.clone(),
                 price: None,
             }],
         }
@@ -227,18 +275,20 @@ impl LaunchModels {
     }
 }
 
-/// `GET /v1/models` with the launch's key: the models a hosted launch offers
-/// ([`LaunchModels::from_listing`]). Fails the launch when the router cannot
-/// say, rather than guessing ids for a data mode it did not name.
+/// `GET /v1/models` with the launch's key: the models a cloud-mode launch
+/// offers, with `cloud`'s selected ([`LaunchModels::for_cloud`]). Fails the
+/// launch when the router cannot say.
 pub(crate) async fn fetch_hosted_models(
     router_url: &str,
     key: &str,
+    cloud: &Cloud,
 ) -> Result<LaunchModels, String> {
     let url = format!("{router_url}/v1/models");
-    get_json(&url, Some(key))
+    let offered = get_json(&url, Some(key))
         .await
-        .and_then(|body| LaunchModels::from_listing(&body))
-        .map_err(|error| format!("couldn't read this key's models from {url}: {error}"))
+        .and_then(|body| LaunchModels::listed_models(&body))
+        .map_err(|error| format!("couldn't read this key's models from {url}: {error}"))?;
+    Ok(LaunchModels::for_cloud(offered, cloud))
 }
 
 /// The router's public ARC price card, `GET /v1/arc/prices`, applied to
@@ -378,6 +428,8 @@ pub struct RunRequest {
     pub harness: Harness,
     /// The hosted environment the loaded config selects.
     pub hosted: crate::status::HostedEnvironment,
+    /// `cloud`: the models the launch gives the harness.
+    pub cloud: crate::config::Cloud,
     /// Args passed through to the harness unchanged.
     pub args: Vec<OsString>,
 }
@@ -390,14 +442,14 @@ pub(crate) struct RenderContext<'a> {
     /// (e.g. `https://router.example.test`).
     pub router_url: &'a str,
     pub config_dir: &'a Path,
-    /// The limits `rayline run <harness> --local` admits (context window the harness may
+    /// The limits a local-mode `rayline run <harness>` admits (context window the harness may
     /// budget against, the core's output cap, input modalities). `None`: the
     /// hosted router's defaults.
     pub capabilities: Option<&'a rayline_local_router::ModelCapabilities>,
     /// The installed harness's major version ([`Harness::major_version`]).
     pub harness_major_version: Option<u64>,
     /// The models this launch selects and offers: the router's listing for a
-    /// hosted launch, [`LaunchModels::hybrid`] under `rayline run <harness> --local`.
+    /// hosted launch, [`LaunchModels::hybrid`] under a local-mode `rayline run <harness>`.
     pub models: LaunchModels,
 }
 
@@ -473,7 +525,7 @@ async fn prepare(request: RunRequest) -> Result<Command, String> {
         omp::warn_if_old(&binary);
     }
 
-    let mut models = fetch_hosted_models(&router_url, &key).await?;
+    let mut models = fetch_hosted_models(&router_url, &key, &request.cloud).await?;
     // omp shows each model's cost, from the price card.
     if harness == Harness::Omp {
         apply_hosted_prices(&router_url, &mut models).await?;
@@ -894,19 +946,34 @@ pub(crate) mod tests {
         json!({
             "object": "list",
             "data": [
-                entry(crate::ARC_SWIFT_MODEL, "ARC Swift"),
-                entry(crate::ARC_SAGE_MODEL, "ARC Sage")
+                entry("arc-swift-1.0", "ARC Swift"),
+                entry("arc-sage-1.0", "ARC Sage")
             ]
         })
     }
 
-    /// The models a standard key's hosted launch offers.
+    /// A `cloud` section naming the Sage and Swift ids [`listing`] has for
+    /// `mode`.
+    pub(crate) fn cloud(mode: Option<&str>) -> Cloud {
+        let id = |product: &str| crate::config::CloudModel {
+            id: mode.map_or_else(
+                || product.to_owned(),
+                |mode| product.replace("-1.0", &format!("-{mode}-1.0")),
+            ),
+        };
+        Cloud {
+            model: id("arc-sage-1.0"),
+            smol_model: id("arc-swift-1.0"),
+        }
+    }
+
+    /// The models a standard key's cloud-mode launch offers.
     pub(crate) fn hosted_models() -> LaunchModels {
-        LaunchModels::from_listing(&listing(None)).unwrap()
+        LaunchModels::from_listing(&listing(None), &cloud(None)).unwrap()
     }
 
     #[test]
-    fn a_listing_picks_sage_and_swift_by_product_and_keeps_its_limits() {
+    fn a_launch_runs_the_cloud_ids_as_written_with_their_listed_limits() {
         let mut body = listing(Some("contributor"));
         body["data"][0]["context_length"] = json!(200_000);
         body["data"].as_array_mut().unwrap().push(json!({
@@ -914,7 +981,7 @@ pub(crate) mod tests {
             "display_name": "Other", "context_length": 32_000, "max_output_tokens": 4_096,
             "capabilities": {"vision": false, "tools": true, "reasoning": true}
         }));
-        let models = LaunchModels::from_listing(&body).unwrap();
+        let models = LaunchModels::from_listing(&body, &cloud(Some("contributor"))).unwrap();
         assert_eq!(models.main, "arc-sage-contributor-1.0");
         assert_eq!(models.background, "arc-swift-contributor-1.0");
         let ids: Vec<_> = models
@@ -930,30 +997,144 @@ pub(crate) mod tests {
                 "other/model"
             ]
         );
-        assert_eq!(models.offered[1].context_window, 200_000);
-        assert_eq!(models.offered[2].display_name, "Other");
+        let details = |index: usize| models.offered[index].details.as_ref().unwrap();
+        assert_eq!(details(1).context_window, 200_000);
+        assert_eq!(details(2).display_name, "Other");
         assert_eq!(models.offered[2].product, None);
-        assert_eq!(models.offered[0].input_modalities, ["text", "image"]);
-        assert_eq!(models.offered[2].input_modalities, ["text"]);
+        assert_eq!(details(0).input_modalities, ["text", "image"]);
+        assert_eq!(details(2).input_modalities, ["text"]);
     }
 
     #[test]
-    fn a_listing_without_products_or_limits_is_an_error() {
+    fn the_main_and_background_models_are_any_listed_ids() {
         let mut body = listing(None);
-        for entry in body["data"].as_array_mut().unwrap() {
-            entry.as_object_mut().unwrap().remove("product");
-        }
+        body["data"].as_array_mut().unwrap().push(json!({
+            "id": "other/model", "object": "model", "owned_by": "other",
+            "display_name": "Other", "context_length": 32_000, "max_output_tokens": 4_096,
+            "capabilities": {"vision": false, "tools": true, "reasoning": true}
+        }));
+        let other = crate::config::CloudModel {
+            id: "other/model".to_owned(),
+        };
+        let swift = crate::config::CloudModel {
+            id: "arc-swift-1.0".to_owned(),
+        };
+        let models = LaunchModels::from_listing(
+            &body,
+            &Cloud {
+                model: other.clone(),
+                smol_model: other,
+            },
+        )
+        .unwrap();
+        assert_eq!(models.main, "other/model");
+        assert_eq!(models.background, "other/model");
+        assert_eq!(models.offered[0].id, "other/model");
+        let models = LaunchModels::from_listing(
+            &body,
+            &Cloud {
+                model: swift.clone(),
+                smol_model: swift,
+            },
+        )
+        .unwrap();
+        assert_eq!(models.main, "arc-swift-1.0");
+        assert_eq!(models.offered.len(), 3);
+    }
+
+    /// Rayline doesn't check a `cloud` id against the listing: one it doesn't
+    /// have runs as written, offered by its id alone.
+    #[test]
+    fn a_cloud_id_the_listing_does_not_have_is_offered_by_its_id_alone() {
+        let mut unlisted = cloud(None);
+        unlisted.model.id = "acme/unlisted-1".to_owned();
+        let models = LaunchModels::from_listing(&listing(None), &unlisted).unwrap();
+        assert_eq!(models.main, "acme/unlisted-1");
+        assert_eq!(models.background, "arc-swift-1.0");
+        assert_eq!(models.offered.len(), 3);
         assert_eq!(
-            LaunchModels::from_listing(&body).unwrap_err(),
-            "no listed model has \"product\": \"arc-sage-1.0\""
+            models.main_model(),
+            &LaunchModel::unlisted("acme/unlisted-1")
         );
+        assert!(
+            models.offered[1..]
+                .iter()
+                .all(|model| model.details.is_some())
+        );
+
+        let mut unlisted = cloud(None);
+        unlisted.smol_model.id = "acme/unlisted-small".to_owned();
+        let models = LaunchModels::from_listing(&listing(None), &unlisted).unwrap();
+        assert_eq!(models.main, "arc-sage-1.0");
+        assert_eq!(models.background, "acme/unlisted-small");
+        assert_eq!(
+            models.offered.last().unwrap(),
+            &LaunchModel::unlisted("acme/unlisted-small")
+        );
+    }
+
+    /// Each harness config lists an unlisted id with no name and no limits,
+    /// so the harness uses its own defaults for it.
+    #[test]
+    fn every_harness_config_lists_an_unlisted_id_without_limits() {
+        let unlisted = Cloud {
+            model: crate::config::CloudModel {
+                id: "acme/unlisted-1".to_owned(),
+            },
+            smol_model: crate::config::CloudModel {
+                id: "acme/unlisted-small".to_owned(),
+            },
+        };
+        let models = LaunchModels::from_listing(&json!({ "data": [] }), &unlisted).unwrap();
+        for harness in Harness::ALL {
+            let home = temp_dir(harness.name());
+            let dir = config_dir(&home, harness);
+            let ctx = RenderContext {
+                key: TEST_KEY,
+                router_url: TEST_URL,
+                config_dir: &dir,
+                capabilities: None,
+                harness_major_version: None,
+                models: models.clone(),
+            };
+            let plan = harness.plan(&ctx).unwrap();
+            let contents: String = plan
+                .files
+                .iter()
+                .map(|file| file.contents.as_str())
+                .collect();
+            assert!(contents.contains("acme/unlisted-1"), "{}", harness.name());
+            assert!(
+                contents.contains("acme/unlisted-small"),
+                "{}",
+                harness.name()
+            );
+            for limit in [
+                "context",
+                "maxTokens",
+                "\"limit\"",
+                "modalities",
+                "\"input\"",
+            ] {
+                assert!(
+                    !contents.contains(limit),
+                    "{} writes {limit}: {contents}",
+                    harness.name()
+                );
+            }
+            fs::remove_dir_all(home).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_listing_without_limits_is_an_error() {
         let mut body = listing(None);
         body["data"][1]
             .as_object_mut()
             .unwrap()
             .remove("max_output_tokens");
         assert_eq!(
-            LaunchModels::from_listing(&body).unwrap_err(),
+            LaunchModels::from_listing(&body, &cloud(None)).unwrap_err(),
             "arc-sage-1.0 has no max_output_tokens"
         );
         let mut body = listing(None);
@@ -962,7 +1143,7 @@ pub(crate) mod tests {
             .unwrap()
             .remove("display_name");
         assert_eq!(
-            LaunchModels::from_listing(&body).unwrap_err(),
+            LaunchModels::from_listing(&body, &cloud(None)).unwrap_err(),
             "arc-swift-1.0 has no display_name"
         );
         let mut body = listing(None);
@@ -971,14 +1152,16 @@ pub(crate) mod tests {
             .unwrap()
             .remove("vision");
         assert_eq!(
-            LaunchModels::from_listing(&body).unwrap_err(),
+            LaunchModels::from_listing(&body, &cloud(None)).unwrap_err(),
             "arc-sage-1.0 has no capabilities.vision"
         );
     }
 
     #[test]
     fn prices_come_from_each_ids_card_row() {
-        let mut models = LaunchModels::from_listing(&listing(Some("contributor"))).unwrap();
+        let mut models =
+            LaunchModels::from_listing(&listing(Some("contributor")), &cloud(Some("contributor")))
+                .unwrap();
         models
             .apply_arc_prices(&json!({"card": {"prices": {
                 "arc-sage-contributor-1.0": {
@@ -1002,7 +1185,7 @@ pub(crate) mod tests {
 
     #[test]
     fn an_incomplete_price_row_or_card_is_an_error() {
-        let mut models = LaunchModels::from_listing(&listing(None)).unwrap();
+        let mut models = hosted_models();
         assert_eq!(
             models
                 .apply_arc_prices(&json!({"card": {"prices": {

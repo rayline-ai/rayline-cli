@@ -65,15 +65,13 @@ pub(crate) fn plan(ctx: &RenderContext<'_>) -> Plan {
         .offered
         .iter()
         .map(|model| {
-            json!({
+            let mut entry = json!({
                 "id": model.id,
-                "name": model.display_name,
                 // ARC selects thinking effort; clients must not expose controls.
-                "reasoning": ctx.capabilities.is_some(),
-                "input": model.input_modalities,
-                "contextWindow": model.context_window,
-                "maxTokens": model.max_output_tokens
-            })
+                "reasoning": ctx.capabilities.is_some()
+            });
+            super::add_details(&mut entry, model);
+            entry
         })
         .collect();
     let models = json!({
@@ -161,9 +159,10 @@ mod tests {
     fn a_contributor_key_seeds_its_listed_sage() {
         let dir = super::super::tests::temp_dir("pi-contributor");
         let mut ctx = super::super::tests::render_context(&dir);
-        ctx.models = super::super::LaunchModels::from_listing(&super::super::tests::listing(Some(
-            "contributor",
-        )))
+        ctx.models = super::super::LaunchModels::from_listing(
+            &super::super::tests::listing(Some("contributor")),
+            &super::super::tests::cloud(Some("contributor")),
+        )
         .unwrap();
         super::super::write_files(&dir, &super::plan(&ctx).files).unwrap();
         let read = |name: &str| -> serde_json::Value {

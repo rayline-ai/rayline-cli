@@ -4,7 +4,7 @@
 //!
 //! opencode sends its session id as `x-session-affinity` on its own, which
 //! the gateway keys the episode on. Against the hosted router, `opencode -c` /
-//! `--session` keeps that episode; `rayline run opencode --local` refuses them,
+//! `--session` keeps that episode; a local-mode `rayline run opencode` refuses them,
 //! since a saved session lacks the execution core's private history.
 //!
 //! OpenCode 2 runs its agent in a shared background service (port 49374) that
@@ -33,18 +33,21 @@ pub(crate) fn plan(ctx: &RenderContext<'_>) -> Plan {
     let models = &ctx.models;
     let mut entries = serde_json::Map::new();
     for model in &models.offered {
-        let mut entry = json!({
-            "name": model.display_name,
-            "limit": { "context": model.context_window, "output": model.max_output_tokens },
-            "modalities": { "input": model.input_modalities, "output": ["text"] },
-            "tool_call": true
-        });
+        let mut entry = json!({ "tool_call": true });
+        if let Some(details) = &model.details {
+            entry["name"] = json!(details.display_name);
+            entry["limit"] =
+                json!({ "context": details.context_window, "output": details.max_output_tokens });
+            entry["modalities"] = json!({ "input": details.input_modalities, "output": ["text"] });
+        }
         if ctx.harness_major_version.is_some_and(|major| major < 2) {
-            let images = model
-                .input_modalities
-                .iter()
-                .any(|modality| modality == "image");
-            entry["attachment"] = json!(images);
+            if let Some(details) = &model.details {
+                let images = details
+                    .input_modalities
+                    .iter()
+                    .any(|modality| modality == "image");
+                entry["attachment"] = json!(images);
+            }
             entry["reasoning"] = json!(true);
         }
         entries.insert(model.id.clone(), entry);

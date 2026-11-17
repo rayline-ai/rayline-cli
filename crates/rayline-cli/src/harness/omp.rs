@@ -75,13 +75,10 @@ pub(crate) fn plan(ctx: &RenderContext<'_>) -> Plan {
             let hosted_arc = model.product.is_some();
             let mut entry = json!({
                 "id": model.id,
-                "name": model.display_name,
                 // ARC owns reasoning effort; do not expose omp thinking controls.
-                "reasoning": !hosted_arc,
-                "input": model.input_modalities,
-                "contextWindow": model.context_window,
-                "maxTokens": model.max_output_tokens
+                "reasoning": !hosted_arc
             });
+            super::add_details(&mut entry, model);
             // USD / million tokens, from the router's price card. A model
             // without a row there (hybrid's virtual model) shows no cost.
             if let Some(price) = model.price {

@@ -1,0 +1,179 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/rayline-ai/rayline-cli/schema/settings.schema.json",
+  "title": "Rayline settings.json",
+  "description": "The shape of ~/.config/rayline/settings.json (docs/spec.md section 5). Rayline doesn't read this schema: its loader is the only validator, and checks more than this (section 5.8). Tests check that every example in the docs passes it.",
+  "type": "object",
+  "required": ["mode"],
+  "additionalProperties": false,
+  "properties": {
+    "mode": { "enum": ["cloud", "local"] },
+    "cloud": { "$ref": "#/$defs/cloud" },
+    "local": { "$ref": "#/$defs/local" },
+    "environments": { "$ref": "#/$defs/environments" },
+    "update": { "$ref": "#/$defs/update" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "mode": { "const": "cloud" } } },
+      "then": { "required": ["cloud"] }
+    },
+    {
+      "if": { "properties": { "mode": { "const": "local" } } },
+      "then": { "required": ["local"] }
+    }
+  ],
+  "$defs": {
+    "text": { "type": "string", "minLength": 1 },
+    "url": { "type": "string", "pattern": "^https?://[^/?#]+" },
+    "cloudModel": {
+      "type": "object",
+      "required": ["id"],
+      "additionalProperties": false,
+      "properties": { "id": { "$ref": "#/$defs/text" } }
+    },
+    "cloud": {
+      "type": "object",
+      "required": ["model"],
+      "additionalProperties": false,
+      "properties": {
+        "model": { "$ref": "#/$defs/cloudModel" },
+        "smol_model": { "$ref": "#/$defs/cloudModel" }
+      }
+    },
+    "local": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "inference": { "$ref": "#/$defs/inference" },
+        "routing": { "$ref": "#/$defs/routing" }
+      }
+    },
+    "inference": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "endpoints": {
+          "type": "object",
+          "propertyNames": { "minLength": 1 },
+          "additionalProperties": { "$ref": "#/$defs/endpoint" }
+        },
+        "models": {
+          "type": "object",
+          "propertyNames": { "minLength": 1 },
+          "additionalProperties": { "$ref": "#/$defs/model" }
+        }
+      }
+    },
+    "endpoint": {
+      "type": "object",
+      "required": ["base_url", "protocols"],
+      "additionalProperties": false,
+      "properties": {
+        "base_url": { "$ref": "#/$defs/url" },
+        "protocols": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["anthropic_messages", "openai_chat", "openai_responses"] }
+        },
+        "api_key_env": { "$ref": "#/$defs/text" }
+      }
+    },
+    "model": {
+      "type": "object",
+      "required": ["endpoint", "model"],
+      "additionalProperties": false,
+      "properties": {
+        "endpoint": { "$ref": "#/$defs/text" },
+        "model": { "$ref": "#/$defs/text" },
+        "context_window": { "type": "integer", "minimum": 1 },
+        "max_output_tokens": { "type": "integer", "minimum": 1 },
+        "tokenizer": { "$ref": "#/$defs/text" },
+        "price": {
+          "type": "object",
+          "required": ["input", "output", "cache_read", "cache_write"],
+          "additionalProperties": false,
+          "properties": {
+            "input": { "type": "number", "minimum": 0 },
+            "output": { "type": "number", "minimum": 0 },
+            "cache_read": { "type": "number", "minimum": 0 },
+            "cache_write": { "type": "number", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "routing": {
+      "type": "object",
+      "required": ["router", "decisions_model", "policy"],
+      "additionalProperties": false,
+      "properties": {
+        "router": { "enum": ["cloud", "local"] },
+        "decisions_model": {
+          "type": "object",
+          "required": ["id"],
+          "additionalProperties": false,
+          "properties": {
+            "id": { "$ref": "#/$defs/text" },
+            "v_value": { "type": "number", "minimum": 0 }
+          }
+        },
+        "classifier_model": { "$ref": "#/$defs/text" },
+        "policy": {
+          "type": "object",
+          "required": ["preset"],
+          "additionalProperties": false,
+          "properties": {
+            "preset": { "$ref": "#/$defs/text" },
+            "overrides": { "type": "object" }
+          }
+        },
+        "arc_release": {
+          "type": "object",
+          "required": ["repo", "revision", "manifest_sha256"],
+          "additionalProperties": false,
+          "properties": {
+            "repo": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$",
+              "not": { "pattern": "(^|/)\\.\\.?(/|$)" }
+            },
+            "revision": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+            "manifest_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "dir": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$",
+              "not": { "pattern": "(^|/)\\.\\.?(/|$)" }
+            }
+          }
+        }
+      },
+      "if": { "properties": { "router": { "const": "local" } } },
+      "then": {
+        "properties": {
+          "decisions_model": { "not": { "required": ["v_value"] } }
+        }
+      }
+    },
+    "environments": {
+      "type": "object",
+      "propertyNames": { "pattern": "^[A-Za-z0-9_-]+$" },
+      "additionalProperties": {
+        "type": "object",
+        "required": ["base_url", "login_url"],
+        "additionalProperties": false,
+        "properties": {
+          "base_url": { "$ref": "#/$defs/url" },
+          "login_url": { "$ref": "#/$defs/url" }
+        }
+      }
+    },
+    "update": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "channel": { "enum": ["prod", "dev", "main"] }
+      }
+    }
+  }
+}

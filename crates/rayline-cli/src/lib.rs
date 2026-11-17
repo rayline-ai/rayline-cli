@@ -30,13 +30,6 @@ pub const DISPLAY_NAME: &str = "Rayline CLI";
 pub const CONFIG_DIR: &str = "rayline";
 pub const DOT_CONFIG_DIR: &str = ".rayline";
 pub const ROUTER_PROD_URL: &str = "https://api.rayline.ai";
-/// The model a hosted harness launch gives its main agent when the user picks
-/// none: ARC Sage, by its canonical public id (not the bare `arc-sage` alias,
-/// which tracks the newest ARC line).
-pub const ARC_SAGE_MODEL: &str = "arc-sage-1.0";
-/// The model a hosted harness launch gives subagents and background tasks,
-/// where the harness tells them apart from the main agent: ARC Swift.
-pub const ARC_SWIFT_MODEL: &str = "arc-swift-1.0";
 /// The virtual model of the local process: the hybrid execution core's only
 /// model. It names no hosted model; the hosted router refuses it.
 pub const VIRTUAL_ROUTER_MODEL: &str = "rayline-auto";
@@ -124,39 +117,36 @@ pub async fn run_argv(original_argv: &[OsString]) -> ExitCode {
             return pass_through(binary, arg);
         }
     }
-    let (mode, harness_protocol) = match &command {
+    let (load_command, harness_protocol) = match &command {
         cli::Command::Run(run) => (
-            match &run.config {
-                cli::ConfigFlag::Default => config::Mode::Cloud,
-                cli::ConfigFlag::Local => config::Mode::Local,
-                cli::ConfigFlag::File(file) => config::Mode::File(file),
+            config::Command::Run {
+                config: run.config.as_deref(),
+                mode: run.mode,
             },
             Some(run.launch.protocol()),
         ),
-        cli::Command::Local(cli::Local::Start {
-            config: Some(file), ..
-        }) => (config::Mode::LocalFile(file), None),
-        cli::Command::Local(cli::Local::Start { config: None, .. }) => (config::Mode::Local, None),
+        cli::Command::Local(cli::Local::Start { config, .. }) => (
+            config::Command::LocalStart {
+                config: config.as_deref(),
+            },
+            None,
+        ),
         cli::Command::Auth(_)
         | cli::Command::Local(cli::Local::Status { .. } | cli::Local::Stop)
         | cli::Command::Top { .. }
-        | cli::Command::Update(_) => (config::Mode::NoRouting, None),
+        | cli::Command::Update(_) => (config::Command::Other, None),
     };
     let settings = match config::load(&config::LoadOptions {
-        mode,
+        command: load_command,
         env: env.as_deref(),
         harness_protocol,
         router: match &command {
             cli::Command::Local(cli::Local::Start { router, .. }) => *router,
             _ => None,
         },
-        routing_defaults: if matches!(
-            &command,
-            cli::Command::Run(cli::Run {
-                config: cli::ConfigFlag::Local,
-                ..
-            })
-        ) {
+        // A local-mode run on the default file uses the `--router` defaults
+        // the running local process started from.
+        routing_defaults: if matches!(&command, cli::Command::Run(cli::Run { config: None, .. })) {
             hybrid::running_from_routing_defaults()
         } else {
             None
@@ -179,10 +169,13 @@ pub async fn run_argv(original_argv: &[OsString]) -> ExitCode {
             if hybrid::local_process_running() {
                 eprintln!(
                     "Note: a local process is running; this run uses Rayline Platform. \
-                     Add --local to use the local process."
+                     Add --mode local to use the local process."
                 );
             }
-            run_cloud(run.launch, hosted).await
+            let cloud = settings
+                .cloud
+                .expect("a cloud-mode run's config has `cloud`");
+            run_cloud(run.launch, hosted, cloud).await
         }
         cli::Command::Top { json } => {
             print_or_fail(top::render_top(&top::TopRequest { json }).await, "Error")
@@ -293,12 +286,17 @@ async fn run_local(run: cli::Run, settings: &config::Settings) -> ExitCode {
     hybrid::run_local(settings, name, &args).await
 }
 
-/// A cloud-mode run through the hosted router.
-async fn run_cloud(launch: cli::Launch, hosted: status::HostedEnvironment) -> ExitCode {
+/// A cloud-mode run through the hosted router, on the models of `cloud`.
+async fn run_cloud(
+    launch: cli::Launch,
+    hosted: status::HostedEnvironment,
+    cloud: config::Cloud,
+) -> ExitCode {
     match launch {
         cli::Launch::Claude { isolated, args } => {
             exec_claude(claude::RunRequest {
                 hosted,
+                cloud,
                 args,
                 isolated,
             })
@@ -308,6 +306,7 @@ async fn run_cloud(launch: cli::Launch, hosted: status::HostedEnvironment) -> Ex
             codex::run(codex::RunRequest {
                 codex_args: args,
                 hosted,
+                cloud,
             })
             .await
         }
@@ -315,11 +314,12 @@ async fn run_cloud(launch: cli::Launch, hosted: status::HostedEnvironment) -> Ex
             codex_app::run(codex_app::AppRunRequest {
                 codex_args: args,
                 hosted,
+                cloud,
             })
             .await
         }
         cli::Launch::CodexConfigure => {
-            let request = codex::ConfigureRequest { hosted };
+            let request = codex::ConfigureRequest { hosted, cloud };
             print_or_fail(
                 codex::configure(&request).await,
                 "Error: failed to configure Codex profile",
@@ -329,6 +329,7 @@ async fn run_cloud(launch: cli::Launch, hosted: status::HostedEnvironment) -> Ex
             harness::run(harness::RunRequest {
                 harness,
                 hosted,
+                cloud,
                 args,
             })
             .await

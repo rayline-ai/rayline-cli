@@ -1,5 +1,6 @@
 //! The installed binary refuses a bad command line or config before it runs
-//! anything (docs/spec.md sections 3 and 5.8).
+//! anything (docs/spec.md sections 3 and 5.8), and writes or converts the
+//! default config file only for a command that reads it (section 5.9).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -20,10 +21,14 @@ impl Home {
         Self(path)
     }
 
+    fn settings_file(&self) -> PathBuf {
+        self.0.join(".config").join("rayline").join("settings.json")
+    }
+
     fn settings(&self, json: &str) {
-        let dir = self.0.join(".config").join("rayline");
-        fs::create_dir_all(&dir).expect("settings dir");
-        fs::write(dir.join("settings.json"), json).expect("settings file");
+        let file = self.settings_file();
+        fs::create_dir_all(file.parent().expect("settings dir")).expect("settings dir");
+        fs::write(file, json).expect("settings file");
     }
 
     /// Runs `rayline` in the home directory with `PATH` empty, so a run that got as far as starting
@@ -65,11 +70,13 @@ impl Drop for Home {
     }
 }
 
-const ROUTING: &str = r#"{"routing": {"decisions_model": "arc-swift-1.0",
+const ROUTING: &str = r#"{"mode": "local", "local": {"routing": {"router": "cloud",
+    "decisions_model": {"id": "arc-swift-1.0"},
     "classifier_model": "anthropic/claude-haiku-5.5",
-    "policy": {"preset": "arc-policy.hybrid-default.v1"}}}"#;
+    "policy": {"preset": "arc-policy.hybrid-default.v1"}}}}"#;
 
-/// A `--config` file with `routing`, inside the temporary home.
+/// A `--config` file with `local.routing` and `mode` `local`, inside the
+/// temporary home.
 const ROUTING_FILE: &str = "routing.json";
 
 fn assert_fails(output: &Output, code: i32, stderr: &str) {
@@ -94,17 +101,114 @@ fn a_usage_error_exits_2() {
         );
     }
     assert_fails(
-        &home.run(&["run", "pi", "--local", "--config", "x.json"]),
+        &home.run(&["run", "pi", "--local"]),
         2,
-        "`--local` and `--config` can't be used together",
+        "unexpected `--local`",
+    );
+    assert_fails(
+        &home.run(&["local", "start", "--router", "hosted"]),
+        2,
+        "--router must be `cloud` or `local`, not `hosted`",
+    );
+    assert!(
+        !home.settings_file().exists(),
+        "a usage error reads no file"
     );
 }
 
 #[test]
-fn local_mode_without_routing_fails_before_anything_runs() {
+fn local_mode_without_local_fails_before_anything_runs() {
     let home = Home::new();
-    for args in [&["run", "pi", "--local"][..], &["local", "start"]] {
-        assert_fails(&home.run(args), 1, "`routing` is required in local mode");
+    // The default file a new user gets is in cloud mode, with no `local`.
+    for args in [&["run", "pi", "--mode", "local"][..], &["local", "start"]] {
+        assert_fails(&home.run(args), 1, "`local` is required in local mode");
+    }
+    home.settings(r#"{"mode": "local", "local": {}}"#);
+    for args in [&["run", "pi"][..], &["local", "start"]] {
+        assert_fails(
+            &home.run(args),
+            1,
+            "`local.routing` is required in local mode",
+        );
+    }
+}
+
+#[test]
+fn the_default_file_is_written_for_a_command_that_reads_it() {
+    let home = Home::new();
+    for args in [
+        &["--version"][..],
+        &["--help"],
+        &["run", "--help"],
+        &["local", "start", "--help"],
+        &["run", "claude", "--config", "missing.json"],
+    ] {
+        home.run(args);
+        assert!(!home.settings_file().exists(), "{args:?}");
+    }
+    let output = home.run(&["local", "status"]);
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        format!(
+            "Created {} with the default settings (`mode` `cloud`)\n",
+            home.settings_file().display()
+        )
+    );
+    let written = fs::read_to_string(home.settings_file()).expect("written");
+    assert!(written.starts_with("{\n  \"mode\": \"cloud\""), "{written}");
+}
+
+#[test]
+fn a_05_default_file_is_converted_by_a_command_that_reads_it() {
+    let home = Home::new();
+    let original = r#"{"routing": {"router": "hosted", "decisions_model": "arc-sage-1.0",
+        "policy": {"preset": "arc-policy.hybrid-default.v1"}}}"#;
+    home.settings(original);
+    for args in [&["--version"][..], &["--help"]] {
+        home.run(args);
+        assert_eq!(
+            fs::read_to_string(home.settings_file()).expect("kept"),
+            original
+        );
+    }
+    let output = home.run(&["local", "status"]);
+    assert_eq!(output.status.code(), Some(0));
+    let backup = home.settings_file().with_file_name("settings.json.bak");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        format!(
+            "Converted {} from the 0.5 shape (`mode` `local`); the original is {}\n",
+            home.settings_file().display(),
+            backup.display()
+        )
+    );
+    assert_eq!(fs::read_to_string(&backup).expect("backup"), original);
+    let converted = fs::read_to_string(home.settings_file()).expect("converted");
+    assert!(converted.contains("\"router\": \"cloud\""), "{converted}");
+    assert!(
+        converted.contains("\"decisions_model\": {\n        \"id\": \"arc-sage-1.0\""),
+        "{converted}"
+    );
+}
+
+#[test]
+fn a_05_config_file_fails_and_is_not_converted() {
+    let home = Home::new();
+    let original = r#"{"routing": {"decisions_model": "arc-swift-1.0",
+        "policy": {"preset": "arc-policy.hybrid-default.v1"}}}"#;
+    fs::write(home.0.join("old.json"), original).expect("old file");
+    for args in [
+        &["run", "pi", "--config", "old.json"][..],
+        &["local", "start", "--config", "old.json"],
+    ] {
+        assert_fails(&home.run(args), 1, "`routing` is not a known key");
+        assert_eq!(
+            fs::read_to_string(home.0.join("old.json")).expect("kept"),
+            original
+        );
+        assert!(!home.0.join("old.json.bak").exists());
+        assert!(!home.settings_file().exists());
     }
 }
 
@@ -168,7 +272,10 @@ fn an_unknown_env_fails_before_anything_runs() {
 #[test]
 fn a_bad_update_channel_fails_before_update_runs() {
     let home = Home::new();
-    home.settings(r#"{"update": {"channel": "nightly"}}"#);
+    home.settings(
+        r#"{"mode": "cloud", "cloud": {"model": {"id": "m"}},
+        "update": {"channel": "nightly"}}"#,
+    );
     assert_fails(&home.run(&["update", "--check"]), 1, "update.channel");
 }
 
@@ -178,11 +285,11 @@ fn local_mode_refuses_harness_args_before_starting_the_local_process() {
     home.settings(ROUTING);
     for (args, message) in [
         (
-            &["run", "pi", "--local", "--", "--resume"][..],
+            &["run", "pi", "--", "--resume"][..],
             "local mode requires a fresh harness session",
         ),
         (
-            &["run", "openclaw", "--local", "--", "--container", "c"],
+            &["run", "openclaw", "--", "--container", "c"],
             "OpenClaw container mode cannot use the hybrid gateway configuration",
         ),
     ] {
@@ -195,15 +302,9 @@ fn local_mode_refuses_the_kept_options_it_does_not_run() {
     let home = Home::new();
     home.settings(ROUTING);
     for (args, option) in [
-        (
-            &["run", "claude", "--local", "--isolated"][..],
-            "`--isolated`",
-        ),
-        (&["run", "codex", "app", "--local"], "`run codex app`"),
-        (
-            &["run", "codex", "configure", "--local"],
-            "`run codex configure`",
-        ),
+        (&["run", "claude", "--isolated"][..], "`--isolated`"),
+        (&["run", "codex", "app"], "`run codex app`"),
+        (&["run", "codex", "configure"], "`run codex configure`"),
     ] {
         assert_fails(
             &home.run(args),
@@ -215,16 +316,17 @@ fn local_mode_refuses_the_kept_options_it_does_not_run() {
 
 /// A config whose model names a tokenizer, so a start that got past the
 /// router key would download it.
-const LOCAL_WITH_TOKENIZER: &str = r#"{
-    "endpoints": {"ollama": {"base_url": "http://127.0.0.1:9",
-        "protocols": ["anthropic_messages", "openai_chat"]}},
-    "models": {"z-ai/glm-5.3-flash": {"endpoint": "ollama", "model": "glm",
-        "context_window": 1000000, "max_output_tokens": 32000,
-        "tokenizer": "zai-org/GLM-5.3-Flash",
-        "price": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}}},
-    "routing": {"decisions_model": "arc-swift-1.0",
+const LOCAL_WITH_TOKENIZER: &str = r#"{"mode": "local", "local": {
+    "inference": {
+        "endpoints": {"ollama": {"base_url": "http://127.0.0.1:9",
+            "protocols": ["anthropic_messages", "openai_chat"]}},
+        "models": {"z-ai/glm-5.3-flash": {"endpoint": "ollama", "model": "glm",
+            "context_window": 1000000, "max_output_tokens": 32000,
+            "tokenizer": "zai-org/GLM-5.3-Flash",
+            "price": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}}}},
+    "routing": {"router": "cloud", "decisions_model": {"id": "arc-swift-1.0"},
         "classifier_model": "anthropic/claude-haiku-5.5",
-        "policy": {"preset": "arc-policy.hybrid-default.v1"}}}"#;
+        "policy": {"preset": "arc-policy.hybrid-default.v1"}}}}"#;
 
 #[test]
 fn a_signed_out_local_start_fails_before_it_clears_state_or_downloads() {
@@ -250,13 +352,13 @@ fn a_signed_out_local_start_fails_before_it_clears_state_or_downloads() {
     let state = home.0.join(".rayline").join("local");
     fs::create_dir_all(&state).expect("state dir");
     let supervisor = format!(
-        r#"{{"pid": {}, "config": "/c.json", "env": null, "router": "hosted"}}"#,
+        r#"{{"pid": {}, "config": "/c.json", "env": null, "router": "cloud"}}"#,
         exited.id()
     );
     fs::write(state.join("supervisor.json"), &supervisor).expect("supervisor");
     fs::write(state.join("ready.json"), "{}").expect("ready");
 
-    for args in [&["local", "start"][..], &["run", "claude", "--local"]] {
+    for args in [&["local", "start"][..], &["run", "claude"]] {
         assert_fails(
             &home.run_exe(&exe, args),
             1,
@@ -294,7 +396,7 @@ fn a_lone_help_or_version_flag_runs_only_the_harness() {
         for flag in ["--help", "-h", "--version", "-v"] {
             for args in [
                 vec!["run", name, flag],
-                vec!["run", name, "--local", flag],
+                vec!["run", name, "--mode", "local", flag],
                 vec!["run", name, "--", flag],
             ] {
                 let output = home.run_exe_on(exe, &args, &bin);

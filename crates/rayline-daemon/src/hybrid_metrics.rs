@@ -136,7 +136,7 @@ impl RoutingMetadata {
         if self.local_decisions.is_some() {
             "local"
         } else {
-            "hosted"
+            "cloud"
         }
     }
 
@@ -402,13 +402,13 @@ mod tests {
         let mut metadata = RoutingMetadata::from_config(&config).unwrap();
         assert_eq!(
             metadata.router_summary(),
-            json!({"kind": "hosted", "model": "arc-swift-1.0"})
+            json!({"kind": "cloud", "model": "arc-swift-1.0"})
         );
         let metrics = RouterMetrics::new("hybrid");
         let hosted = RequestObservation::start(metrics.clone(), b"{}");
         metadata.record(&hosted, &receipt("rt_1"), "instance");
         let row = &metrics.snapshot().active[0];
-        assert_eq!(row.router.as_deref(), Some("hosted"));
+        assert_eq!(row.router.as_deref(), Some("cloud"));
         assert_eq!(row.decision_ms, None);
         assert_eq!(row.decision_event.as_deref(), Some("tool_result"));
         assert_eq!(row.task_class.as_deref(), Some("tool_result/explicit"));

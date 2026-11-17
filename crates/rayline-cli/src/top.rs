@@ -64,7 +64,7 @@ impl TopSource {
                 io::Error::new(
                     io::ErrorKind::ConnectionRefused,
                     "no local process is running. Start one with `rayline local start` or \
-                     `rayline run <harness> --local`.",
+                     `rayline run <harness> --mode local`.",
                 )
             } else {
                 error
@@ -605,7 +605,7 @@ fn router_line(snapshot: &Value) -> Option<String> {
         .unwrap_or_default();
     match router.get("kind").and_then(Value::as_str)? {
         "local" => Some(format!("Router: local ARC{model} on this machine")),
-        "hosted" => Some(format!("Router: hosted ARC{model} in Rayline Platform")),
+        "cloud" => Some(format!("Router: cloud ARC{model} in Rayline Platform")),
         _ => None,
     }
 }
@@ -1096,7 +1096,7 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "no local process is running. Start one with `rayline local start` or \
-             `rayline run <harness> --local`."
+             `rayline run <harness> --mode local`."
         );
     }
 
@@ -1110,7 +1110,7 @@ mod tests {
             assert_eq!(
                 error.to_string(),
                 "no local process is running. Start one with `rayline local start` or \
-             `rayline run <harness> --local`."
+             `rayline run <harness> --mode local`."
             );
         };
         let home = unique_test_dir("top-stale-state");
@@ -1303,20 +1303,20 @@ mod tests {
         );
         assert_eq!(
             router_line(&snapshot(
-                serde_json::json!({"kind": "hosted", "model": "arc-sage-1.0"})
+                serde_json::json!({"kind": "cloud", "model": "arc-sage-1.0"})
             )),
-            Some("Router: hosted ARC (arc-sage-1.0) in Rayline Platform".to_owned())
+            Some("Router: cloud ARC (arc-sage-1.0) in Rayline Platform".to_owned())
         );
         assert_eq!(
             router_line(&snapshot(
-                serde_json::json!({"kind": "hosted", "model": null})
+                serde_json::json!({"kind": "cloud", "model": null})
             )),
-            Some("Router: hosted ARC in Rayline Platform".to_owned())
+            Some("Router: cloud ARC in Rayline Platform".to_owned())
         );
         assert_eq!(router_line(&serde_json::json!({})), None);
 
-        let row = serde_json::json!({"router": "hosted", "decision_event": "tool_result"});
-        assert_eq!(router_cell(&row), "hosted");
+        let row = serde_json::json!({"router": "cloud", "decision_event": "tool_result"});
+        assert_eq!(router_cell(&row), "cloud");
         assert_eq!(router_cell(&serde_json::json!({})), "-");
         assert_eq!(
             router_cell(&serde_json::json!({"router": "local", "decision_ms": 1_250})),
