@@ -1398,18 +1398,28 @@ fn ready(paths: &Paths) -> io::Result<Value> {
 
 /// Read-only connection for top: never creates state or starts a runtime.
 /// The client's default credentials are safe only for this validated origin.
-/// An error of kind `NotFound` means no local process runs: `ready.json` is
-/// missing, unreadable or incomplete (left by a process that stopped or
-/// crashed), or names no live process.
+/// An error of kind `NotFound` means no local process runs, as `rayline local
+/// status` decides it: no `supervisor.json`, or one naming an exited process,
+/// whatever other state it left behind. While a process runs, `NotFound`
+/// also means its `ready.json` is missing or names no live process.
 pub(crate) async fn top_connection(
     state_dir: &Path,
 ) -> io::Result<(reqwest::Client, String, Value)> {
     let paths = Paths {
         dir: state_dir.to_owned(),
     };
-    let state = ready(&paths).map_err(|_| {
-        io::Error::new(
+    if !paths.supervisor().exists() || running(&paths)?.is_none() {
+        return Err(io::Error::new(
             io::ErrorKind::NotFound,
+            "no local process is running",
+        ));
+    }
+    let state = ready(&paths).map_err(|error| {
+        io::Error::new(
+            match error.kind() {
+                io::ErrorKind::NotFound => io::ErrorKind::NotFound,
+                _ => io::ErrorKind::Other,
+            },
             "local process readiness is unavailable or invalid",
         )
     })?;
@@ -1418,9 +1428,7 @@ pub(crate) async fn top_connection(
             .get(key)
             .and_then(Value::as_i64)
             .and_then(|pid| i32::try_from(pid).ok())
-            .ok_or_else(|| {
-                io::Error::new(io::ErrorKind::NotFound, "the local process is not live")
-            })?;
+            .ok_or_else(|| io::Error::other("the local process is not live"))?;
         if !process_exists(pid)? {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,
