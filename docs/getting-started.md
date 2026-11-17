@@ -203,9 +203,9 @@ the first command that reads it writes this default file and says so:
 | Codex, pi, Hermes Agent, OpenClaw | their model | not used |
 
 Rayline checks the whole file once, when it loads, and stops with an error
-that names the key it refuses. A settings file from Rayline 0.5, which has no
-`mode`, is converted the first time a command reads it: Rayline keeps the
-original as `settings.json.bak` and says so.
+that names the key it refuses. A settings file from an earlier release,
+which has no `mode`, is converted the first time a command reads it: Rayline
+keeps the original as `settings.json.bak` and says so.
 
 ## Local mode
 
@@ -240,8 +240,9 @@ the app instead.
 `~/.config/rayline/` holds only these files:
 
 - `settings.json`, which you write, and which Rayline writes when it is
-  missing or from Rayline 0.5.
-- `settings.json.bak`, the Rayline 0.5 file a conversion replaced.
+  missing or from an earlier release.
+- `settings.json.bak`, the file from an earlier release that a conversion
+  replaced.
 - `credentials.json`, which `rayline auth login` and `rayline auth logout`
   write.
 

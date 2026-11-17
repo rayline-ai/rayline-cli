@@ -5,7 +5,7 @@
 //! `--config`, applies the `RAYLINE_*` env overrides and validates the result
 //! once. A [`Settings`] value is valid by construction: code that holds one
 //! trusts it. Before it reads the default file, load writes it when it
-//! doesn't exist and converts it when it is in the 0.5 shape
+//! doesn't exist and converts it when it is in the earlier shape
 //! ([`prepare_default_file`]). [`check_local_start`] runs the checks the
 //! local process makes before it serves anything.
 
@@ -22,8 +22,8 @@ use serde_json::{Map, Value};
 use url::Url;
 
 /// The file `rayline` writes when `~/.config/rayline/settings.json` doesn't
-/// exist (spec section 5). Its `cloud` section is also the one the 0.5-shape
-/// conversion adds.
+/// exist (spec section 5). Its `cloud` section is also the one the
+/// conversion from the earlier shape adds.
 pub(crate) const DEFAULT_FILE: &str = include_str!("default-settings.json");
 
 /// A wire protocol an endpoint serves and a harness speaks.
@@ -663,7 +663,7 @@ pub(crate) const ENDPOINTS: &str = "local.inference.endpoints";
 pub(crate) const MODELS: &str = "local.inference.models";
 
 /// The default file's text, after writing the default file when it doesn't
-/// exist and converting it when it is in the 0.5 shape. Each prints one line
+/// exist and converting it when it is in the earlier shape. Each prints one line
 /// with `say`.
 fn prepare_default_file(file: &Path, say: &mut dyn FnMut(String)) -> Result<String, ConfigError> {
     let text = match fs::read_to_string(file) {
@@ -689,7 +689,7 @@ fn prepare_default_file(file: &Path, say: &mut dyn FnMut(String)) -> Result<Stri
         Ok(Value::Object(root)) if !root.contains_key("mode") => root,
         _ => return Ok(text),
     };
-    let (converted, mode) = convert_05(file, root)?;
+    let (converted, mode) = convert_earlier(file, root)?;
     let backup = file.with_file_name("settings.json.bak");
     fs::write(&backup, &text).map_err(|error| ConfigError::Write {
         file: backup.clone(),
@@ -697,7 +697,7 @@ fn prepare_default_file(file: &Path, say: &mut dyn FnMut(String)) -> Result<Stri
     })?;
     replace_file(file, converted.as_bytes())?;
     say(format!(
-        "Converted {} from the 0.5 shape (`mode` `{}`); the original is {}",
+        "Converted {} from the earlier shape (`mode` `{}`); the original is {}",
         file.display(),
         mode.as_str(),
         backup.display()
@@ -705,12 +705,12 @@ fn prepare_default_file(file: &Path, say: &mut dyn FnMut(String)) -> Result<Stri
     Ok(converted)
 }
 
-/// A file without `mode`, which is read as the 0.5 shape, in this shape,
+/// A file without `mode`, which is read as the earlier shape, in this shape,
 /// and its `mode`: `local` when it has `routing`, else `cloud`. A file that
-/// is not a valid 0.5 file is an error naming its 0.5 key, and nothing is
-/// converted.
+/// is not valid in the earlier shape is an error naming its key there, and
+/// nothing is converted.
 ///
-/// | 0.5 shape | This shape |
+/// | Earlier shape | This shape |
 /// |---|---|
 /// | `endpoints`, `models` | `local.inference.endpoints`, `local.inference.models` |
 /// | `routing` | `local.routing` |
@@ -718,14 +718,20 @@ fn prepare_default_file(file: &Path, say: &mut dyn FnMut(String)) -> Result<Stri
 /// | `routing.decisions_model` `"<id>"` | `local.routing.decisions_model` `{"id": "<id>"}` |
 /// | `environments`, `update` | the same |
 /// | – | `cloud` of [`DEFAULT_FILE`], and `mode` |
-fn convert_05(file: &Path, mut root: Map<String, Value>) -> Result<(String, Mode), ConfigError> {
+fn convert_earlier(
+    file: &Path,
+    mut root: Map<String, Value>,
+) -> Result<(String, Mode), ConfigError> {
     let err = |key: &str, problem: &str| ConfigError::Key {
         file: file.to_path_buf(),
         key: key.to_owned(),
-        problem: format!("{problem} (the file has no `mode`, so it is read as the 0.5 shape)"),
+        problem: format!("{problem} (the file has no `mode`, so it is read as the earlier shape)"),
     };
-    const KEYS_05: [&str; 5] = ["endpoints", "models", "routing", "environments", "update"];
-    if let Some(key) = root.keys().find(|key| !KEYS_05.contains(&key.as_str())) {
+    const EARLIER_KEYS: [&str; 5] = ["endpoints", "models", "routing", "environments", "update"];
+    if let Some(key) = root
+        .keys()
+        .find(|key| !EARLIER_KEYS.contains(&key.as_str()))
+    {
         return Err(err(key, "is not a known key"));
     }
     if let Some(Value::Object(routing)) = root.get("routing") {
@@ -771,7 +777,7 @@ fn convert_05(file: &Path, mut root: Map<String, Value>) -> Result<(String, Mode
     }
     if let Some(mut routing) = root.remove("routing") {
         if let Value::Object(routing) = &mut routing {
-            // 0.5 decided in the cloud when `router` was absent.
+            // The earlier shape decided in the cloud when `router` was absent.
             if routing.get("router").and_then(Value::as_str) != Some("local") {
                 routing.insert("router".to_owned(), Value::from(Router::Cloud.as_str()));
             }
@@ -795,7 +801,7 @@ fn convert_05(file: &Path, mut root: Map<String, Value>) -> Result<(String, Mode
     }
     entries.extend(root);
 
-    // The rest of a 0.5 file's rules are this shape's, under other keys.
+    // The rest of the earlier shape's rules are this shape's, under other keys.
     let doc = Doc { file };
     let converted = Value::Object(entries.iter().cloned().collect());
     doc.root(&converted)
@@ -804,14 +810,16 @@ fn convert_05(file: &Path, mut root: Map<String, Value>) -> Result<(String, Mode
             doc.check_model_endpoints(&local.endpoints, &local.models)
         })
         .map_err(|error| match error {
-            ConfigError::Key { key, problem, .. } => err(&key_05(&key), &key_05(&problem)),
+            ConfigError::Key { key, problem, .. } => {
+                err(&earlier_key(&key), &earlier_key(&problem))
+            }
             error => error,
         })?;
     Ok((render(&entries), mode))
 }
 
-/// `text` with the keys of this shape named as in the 0.5 shape.
-fn key_05(text: &str) -> String {
+/// `text` with the keys of this shape named as in the earlier shape.
+fn earlier_key(text: &str) -> String {
     text.replace("local.inference.", "")
         .replace("local.routing", "routing")
 }
@@ -2813,7 +2821,7 @@ pub(crate) mod tests {
         let glm = |name: &str| format!("local.inference.models.\"z-ai/glm-5.3-flash\".{name}");
         let cases: Vec<(String, String)> = vec![
             ("extra".to_owned(), "extra".to_owned()),
-            // The 0.5 top-level sections, in a file with `mode`.
+            // The earlier shape's top-level sections, in a file with `mode`.
             ("endpoints".to_owned(), "endpoints".to_owned()),
             ("models".to_owned(), "models".to_owned()),
             ("routing".to_owned(), "routing".to_owned()),
@@ -4195,7 +4203,7 @@ pub(crate) mod tests {
 
     /// Section 5.7: loading reads no env var but the table's, and of those
     /// only the ones of the sections the command uses, so nothing else
-    /// (`local.inference.*`, `environments.*`, `policy.overrides`, the 0.5
+    /// (`local.inference.*`, `environments.*`, `policy.overrides`, the earlier
     /// `RAYLINE_ROUTING_*` names, any other `RAYLINE_*`) can be overridden.
     #[test]
     fn loading_reads_only_the_override_table() {
@@ -4253,10 +4261,10 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn the_05_env_names_are_not_read() {
+    fn the_earlier_env_names_are_not_read() {
         let home = temp_home();
         write_default(&home, &example());
-        let names_05 = [
+        let earlier_names = [
             ("RAYLINE_ROUTING_ROUTER", "local"),
             ("RAYLINE_ROUTING_DECISIONS_MODEL", "arc-1.0"),
             ("RAYLINE_ROUTING_CLASSIFIER_MODEL", ""),
@@ -4264,7 +4272,7 @@ pub(crate) mod tests {
         ];
         for command in [run(None), START, Command::Other] {
             assert_eq!(
-                load_env(&home, opts(command), &names_05).expect("load"),
+                load_env(&home, opts(command), &earlier_names).expect("load"),
                 load(&home, opts(command)).expect("load"),
                 "{command:?}"
             );
@@ -4322,10 +4330,10 @@ pub(crate) mod tests {
         assert_eq!(settings.update.channel, UpdateChannel::Dev);
     }
 
-    // The 0.5 shape.
+    // The earlier shape.
 
-    /// A 0.5 file with every section.
-    fn file_05() -> Value {
+    /// A file in the earlier shape with every section.
+    fn earlier_file() -> Value {
         json!({
             "endpoints": example()["local"]["inference"]["endpoints"].clone(),
             "models": example()["local"]["inference"]["models"].clone(),
@@ -4340,9 +4348,9 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_05_default_file_is_converted_and_kept_as_a_backup() {
+    fn an_earlier_shape_default_file_is_converted_and_kept_as_a_backup() {
         let home = temp_home();
-        let original = serde_json::to_string_pretty(&file_05()).expect("JSON");
+        let original = serde_json::to_string_pretty(&earlier_file()).expect("JSON");
         let file = write_default_text(&home, &original);
         let backup = file.with_file_name("settings.json.bak");
         let (settings, said) = load_said(&home, opts(run(None)), &[]);
@@ -4350,7 +4358,7 @@ pub(crate) mod tests {
         assert_eq!(
             said,
             [format!(
-                "Converted {} from the 0.5 shape (`mode` `local`); the original is {}",
+                "Converted {} from the earlier shape (`mode` `local`); the original is {}",
                 file.display(),
                 backup.display()
             )]
@@ -4383,15 +4391,15 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_05_file_takes_its_mode_from_routing() {
-        let mut no_routing = file_05();
+    fn an_earlier_shape_file_takes_its_mode_from_routing() {
+        let mut no_routing = earlier_file();
         remove(&mut no_routing, "routing");
         for (doc, mode) in [
             (no_routing, "cloud"),
             (json!({}), "cloud"),
             (json!({"update": {"channel": "main"}}), "cloud"),
             (json!({"routing": {}}), "local"),
-            (file_05(), "local"),
+            (earlier_file(), "local"),
         ] {
             let home = temp_home();
             let file = write_default(&home, &doc);
@@ -4421,13 +4429,13 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_05_router_converts_to_cloud_unless_it_is_local() {
+    fn an_earlier_shape_router_converts_to_cloud_unless_it_is_local() {
         for (router, converted) in [
             (None, "cloud"),
             (Some("hosted"), "cloud"),
             (Some("local"), "local"),
         ] {
-            let mut doc = file_05();
+            let mut doc = earlier_file();
             if let Some(router) = router {
                 set(&mut doc, "routing router", json!(router));
             }
@@ -4464,7 +4472,7 @@ pub(crate) mod tests {
     fn every_command_that_reads_the_default_file_converts_it() {
         for command in [run(None), run(Some(Mode::Cloud)), START, Command::Other] {
             let home = temp_home();
-            let file = write_default(&home, &file_05());
+            let file = write_default(&home, &earlier_file());
             let (_, said) = load_said(&home, opts(command), &[]);
             assert_eq!(said.len(), 1, "{command:?}");
             assert!(
@@ -4477,7 +4485,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn an_invalid_05_file_is_an_error_naming_its_key_and_nothing_is_written() {
+    fn an_invalid_earlier_shape_file_is_an_error_naming_its_key_and_nothing_is_written() {
         let cases = [
             (json!({"hybrid": {}}), "hybrid", "is not a known key"),
             (json!({"cloud": {}}), "cloud", "is not a known key"),
@@ -4526,7 +4534,9 @@ pub(crate) mod tests {
                 key_error(result),
                 (
                     key.to_owned(),
-                    format!("{problem} (the file has no `mode`, so it is read as the 0.5 shape)")
+                    format!(
+                        "{problem} (the file has no `mode`, so it is read as the earlier shape)"
+                    )
                 ),
                 "{doc}"
             );
@@ -4554,9 +4564,12 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_05_config_file_is_a_load_error_and_is_not_converted() {
+    fn an_earlier_shape_config_file_is_a_load_error_and_is_not_converted() {
         let home = temp_home();
-        for (doc, key) in [(file_05(), "endpoints"), (json!({"update": {}}), "mode")] {
+        for (doc, key) in [
+            (earlier_file(), "endpoints"),
+            (json!({"update": {}}), "mode"),
+        ] {
             let file = write_file(&home, "old.json", &doc);
             for command in [run_file(&file), start_file(&file)] {
                 let (result, said) = load_said(&home, opts(command), &[]);

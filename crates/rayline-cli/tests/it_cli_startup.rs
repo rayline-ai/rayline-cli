@@ -160,7 +160,7 @@ fn the_default_file_is_written_for_a_command_that_reads_it() {
 }
 
 #[test]
-fn a_05_default_file_is_converted_by_a_command_that_reads_it() {
+fn an_earlier_shape_default_file_is_converted_by_a_command_that_reads_it() {
     let home = Home::new();
     let original = r#"{"routing": {"router": "hosted", "decisions_model": "arc-sage-1.0",
         "policy": {"preset": "arc-policy.hybrid-default.v1"}}}"#;
@@ -178,7 +178,7 @@ fn a_05_default_file_is_converted_by_a_command_that_reads_it() {
     assert_eq!(
         String::from_utf8_lossy(&output.stderr),
         format!(
-            "Converted {} from the 0.5 shape (`mode` `local`); the original is {}\n",
+            "Converted {} from the earlier shape (`mode` `local`); the original is {}\n",
             home.settings_file().display(),
             backup.display()
         )
@@ -193,7 +193,7 @@ fn a_05_default_file_is_converted_by_a_command_that_reads_it() {
 }
 
 #[test]
-fn a_05_config_file_fails_and_is_not_converted() {
+fn an_earlier_shape_config_file_fails_and_is_not_converted() {
     let home = Home::new();
     let original = r#"{"routing": {"decisions_model": "arc-swift-1.0",
         "policy": {"preset": "arc-policy.hybrid-default.v1"}}}"#;

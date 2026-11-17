@@ -513,23 +513,23 @@ Each scalar key Rayline defines can be overridden by one env var named `RAYLINE_
 2. An override value is validated like the file value; an invalid one is a load error.
 3. An override applies to the section a command uses. It replaces a value the file has; it never gives a required key the file lacks (section 5.8 item 5), though it may give an optional one (`cloud.smol_model.id`, `local.routing.decisions_model.v_value`, `local.routing.classifier_model`, `update.channel`). One for a section the file lacks is a load error for a command that uses that section (section 5.8 item 7), and is not read by one that doesn't.
 4. Whole entries (`local.inference.endpoints.*`, `local.inference.models.*`, `environments.*`, `local.routing.arc_release`) and ARC's `policy.overrides` have no env override. Put them in a file and pass it with `--config`.
-5. An env var named from a 0.5 key path (`RAYLINE_ROUTING_*`) is not read. No other `RAYLINE_*` env var changes Rayline's behaviour (section 7).
+5. An env var named from a key path of the earlier shape (`RAYLINE_ROUTING_*`) is not read. No other `RAYLINE_*` env var changes Rayline's behaviour (section 7).
 
 ### 5.8 Load errors
 
 Load refuses, naming the key:
 
-1. An unknown key at any level Rayline defines, anywhere in the file, including the section the command doesn't use. The 0.5 shape's top-level `endpoints`, `models` and `routing` are unknown keys in a file with `mode`.
+1. An unknown key at any level Rayline defines, anywhere in the file, including the section the command doesn't use. The earlier shape's top-level `endpoints`, `models` and `routing` are unknown keys in a file with `mode`.
 2. A wrong type, an empty string, or a value out of range.
 3. In a local-mode run, a `local.inference.endpoints` entry that doesn't list the protocol of the harness being run. Cloud mode doesn't use endpoints, and `rayline local start` has no harness, so neither checks this.
 4. A `local.inference.models` entry whose `endpoint` is not in `local.inference.endpoints`.
-5. A file without `mode`, unless it is the default file in the 0.5 shape (section 5.9). A cloud-mode run without `cloud`. Local mode or `rayline local start` without `local` or `local.routing`. When the file has no `local` section, the error prints one to paste (`routing` with `router` `cloud`, `decisions_model` `{ "id": "arc-swift-1.0" }` and `policy.preset` `arc-policy.prefer-local.v1`), says to add `classifier_model` to run Claude Code, and ends ``See https://docs.rayline.ai/rayline-cli/local-mode``. Which sections must be present depends on the command; `auth`, `top`, `update`, `local status` and `local stop` need neither. A section the file has missing a required key in the file, for every command: `cloud` without `model` or `model.id`, a `cloud.smol_model` without `id`, a `local.routing` without `router`, `decisions_model`, `decisions_model.id` or `policy.preset`. An env override doesn't give a missing required key.
+5. A file without `mode`, unless it is the default file in the earlier shape (section 5.9). A cloud-mode run without `cloud`. Local mode or `rayline local start` without `local` or `local.routing`. When the file has no `local` section, the error prints one to paste (`routing` with `router` `cloud`, `decisions_model` `{ "id": "arc-swift-1.0" }` and `policy.preset` `arc-policy.prefer-local.v1`), says to add `classifier_model` to run Claude Code, and ends ``See https://docs.rayline.ai/rayline-cli/local-mode``. Which sections must be present depends on the command; `auth`, `top`, `update`, `local status` and `local stop` need neither. A section the file has missing a required key in the file, for every command: `cloud` without `model` or `model.id`, a `cloud.smol_model` without `id`, a `local.routing` without `router`, `decisions_model`, `decisions_model.id` or `policy.preset`. An env override doesn't give a missing required key.
 6. `--env <name>` with no `environments.<name>` entry. `prod` gets no special case.
 7. An env override for a section the file lacks, for a command that uses that section: `RAYLINE_CLOUD_*` without `cloud`, and `RAYLINE_LOCAL_ROUTING_*` without `local.routing`. `rayline local start --router <cloud|local>` with no `local.routing`, and a local-mode `rayline run <harness>` with no `local.routing` while a local process started from those defaults runs, are the exceptions: the overrides apply to the built-in defaults (section 3.3 item 11).
 8. A `--config <file>` that doesn't exist. Only the default file is optional.
 9. A key repeated in one JSON object, an empty map key, a URL that isn't absolute `http` or `https`, a duplicate in `protocols`, or a `price` missing any of its four fields.
 10. A `local.routing.decisions_model.v_value` with `router` `local`, and, with `router` `local`, a `decisions_model.id` local decisions don't make (section 5.4). These are checked whichever section the command uses.
-11. A `--config <file>` with no `mode`: it is not converted (section 5.9), and its 0.5 keys are unknown keys.
+11. A `--config <file>` with no `mode`: it is not converted (section 5.9), and its keys of the earlier shape are unknown keys.
 
 When the local process starts, before it serves anything, it also refuses:
 
@@ -537,13 +537,13 @@ When the local process starts, before it serves anything, it also refuses:
 13. A model entry that is missing `context_window` or `max_output_tokens`. ARC knows no model today, so this applies to every entry (section 5.3 item 5).
 14. An `api_key_env` naming `RAYLINE_ROUTER_API_KEY`, which holds the Rayline router key.
 
-### 5.9 Migration from the 0.5 shape
+### 5.9 Migration from the earlier shape
 
-1. A command that reads the default file (section 5 item 3) converts a default file that is in the 0.5 shape to this shape and writes it back. A file with no `mode` key is in the 0.5 shape.
-2. The original is kept as `settings.json.bak` beside it, replacing any earlier `settings.json.bak`. The command prints to stderr ``Converted <file> from the 0.5 shape (`mode` `<mode>`); the original is <backup>``.
+1. A command that reads the default file (section 5 item 3) converts a default file that is in the earlier shape to this shape and writes it back. A file with no `mode` key is in the earlier shape, the shape of `settings.json` in the releases before this one.
+2. The original is kept as `settings.json.bak` beside it, replacing any earlier `settings.json.bak`. The command prints to stderr ``Converted <file> from the earlier shape (`mode` `<mode>`); the original is <backup>``.
 3. The conversion carries everything the file holds: every endpoint, model, `routing` key, environment and `update`. It drops nothing:
 
-   | 0.5 shape | This shape |
+   | Earlier shape | This shape |
    |---|---|
    | `endpoints` | `local.inference.endpoints` |
    | `models` | `local.inference.models` |
@@ -553,11 +553,11 @@ When the local process starts, before it serves anything, it also refuses:
    | `routing.decisions_model` `"<id>"` | `local.routing.decisions_model` `{ "id": "<id>" }` |
    | `environments`, `update` | the same |
    | – | `cloud` of the default file (example 1) |
-   | – | `mode`: `local` when the 0.5 file has `routing` (the result has the shape of example 2 or 3), `cloud` when it has none |
+   | – | `mode`: `local` when the file has `routing` (the result has the shape of example 2 or 3), `cloud` when it has none |
 
-4. Only a valid 0.5 file is converted. A file with no `mode` that holds a key 0.5 doesn't know, or a 0.5 value that is wrong, is a load error that names the 0.5 key and says the file is read as the 0.5 shape; nothing is written.
-5. A `--config` file in the 0.5 shape is a load error that names the key (section 5.8 item 11). It is not converted.
-6. Flags and env vars are not converted: `--local` and `--router hosted` are usage errors, and the 0.5 env names are not read (section 5.7 item 5).
+4. Only a file that is valid in the earlier shape is converted. A file with no `mode` that holds a key the earlier shape doesn't have, or a value it refuses, is a load error that names the key as the earlier shape spells it and says the file is read as the earlier shape; nothing is written.
+5. A `--config` file in the earlier shape is a load error that names the key (section 5.8 item 11). It is not converted.
+6. Flags and env vars are not converted: `--local` and `--router hosted` are usage errors, and the earlier shape's env names are not read (section 5.7 item 5).
 
 ## 6. `credentials.json`
 
@@ -657,8 +657,8 @@ Every other env var Rayline reads today is gone (section 10).
 
 Only these files:
 
-1. `settings.json`: written by the user, and by Rayline when it is missing (section 5 item 3) or in the 0.5 shape (section 5.9).
-2. `settings.json.bak`: the 0.5 file a conversion replaced (section 5.9).
+1. `settings.json`: written by the user, and by Rayline when it is missing (section 5 item 3) or in the earlier shape (section 5.9).
+2. `settings.json.bak`: the file in the earlier shape that a conversion replaced (section 5.9).
 3. `credentials.json`: written by `rayline auth login` and `rayline auth logout`.
 
 ### 8.2 `~/.rayline`
@@ -747,7 +747,7 @@ Everything below is deleted outright: code, tests, docs and help text.
 2. Files: `~/.config/rayline/cli.toml`, `router.json`, `router.<env>.json`, `claude-daemon-launches.json` and harness homes under `~/.config/rayline`; `~/.rayline/rld/`, `~/.rayline/hybrid/`, `~/.rayline/cc/`, `~/.rayline/codex-app-home/`, `~/.rayline/claude-desktop/`, `~/.rayline/claude-desktop.lock` and `~/.rayline/harness/claude-desktop/`. Rayline neither reads nor moves them.
 3. The old settings file location and its migration.
 4. Today's `credentials.json` shape (`version`, camelCase fields, `authKind`, `router_keys.<env>`, `apiKey`).
-5. The 0.5 `settings.json` shape in a file with `mode`: top-level `endpoints`, `models` and `routing`, `routing.router` `hosted` (`cloud` replaces it) and a string `decisions_model`. Only the conversion of section 5.9 reads it.
+5. The earlier shape's keys in a file with `mode`: top-level `endpoints`, `models` and `routing`, `routing.router` `hosted` (`cloud` replaces it) and a string `decisions_model`. Only the conversion of section 5.9 reads it.
 
 ### 10.4 Aliases, extra values and guesses
 
@@ -776,7 +776,7 @@ Everything below is deleted outright: code, tests, docs and help text.
 4. `RAYLINE_UPDATE_BASE_URL`, `RAYLINE_UPDATE_INSTALL_PATH`. Hidden `update` options replace them (section 4.2).
 5. The old local router, `rld` and proxy mode: `RAYLINE_MODEL_REPO`, `RAYLINE_MODEL_FILE`, `RAYLINE_MODEL_REVISION`, `RAYLINE_MODEL_SHA256`, `RAYLINE_LLAMA_TAG`, `RAYLINE_CTX_SIZE`, `RAYLINE_LOCAL_MODEL_ID`, `RAYLINE_NO_LOCAL_MODEL`, `RAYLINE_ADAPTER_PORT`, `RAYLINE_ADAPTER_UPSTREAM_MODEL`, `RAYLINE_ADAPTER_UPSTREAM_URL`, `RAYLINE_INJECTOR_PORT`, `RAYLINE_PROXY_PORT`, `RAYLINE_ISOLATED_PROXY_PORT`, `RAYLINE_ROUTER_URL`, `RAYLINE_DECISION_PLANE`, `RAYLINE_LOCAL_ROUTER_PORT`, `RAYLINE_ROUTER_CONFIG`, `RAYLINE_DATA_DIR`, `RAYLINE_PROXY_CA_CERT_PATH`, `RAYLINE_PROXY_CA_KEY_PATH`, `RAYLINE_UPSTREAM_CA_FILE`, `RAYLINE_ROUTE_STATUS_PATH`, `RAYLINE_ANTHROPIC_URL`, `RAYLINE_PROXY_ROUTING_MODE`, `RAYLINE_CLAUDE_ROUTING_MODE`, `RAYLINE_METRICS_PORT`, `RAYLINE_METRICS_URL`, `RLD_BIN`; proxy injection of `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, `NO_PROXY`, `NODE_EXTRA_CA_CERTS`; the old router config folder from `APPDATA` and `XDG_CONFIG_HOME`; `OLLAMA_HOST` and `LMSTUDIO_HOST`.
 6. Installer overrides: `RAYLINE_INSTALL_DIR` (`--install-dir` replaces it), `RAYLINE_RELEASE_BASE_URL` (the installer's hidden `--base-url` replaces it, section 4.4) and `RAYLINE_MINISIGN_PUBKEY` (the installers check no signature).
-7. The 0.5 settings overrides `RAYLINE_ROUTING_DECISIONS_MODEL`, `RAYLINE_ROUTING_CLASSIFIER_MODEL`, `RAYLINE_ROUTING_POLICY_PRESET` and `RAYLINE_ROUTING_ROUTER`. The `RAYLINE_LOCAL_ROUTING_*` overrides replace them (section 5.7).
+7. The settings overrides of earlier releases, `RAYLINE_ROUTING_DECISIONS_MODEL`, `RAYLINE_ROUTING_CLASSIFIER_MODEL`, `RAYLINE_ROUTING_POLICY_PRESET` and `RAYLINE_ROUTING_ROUTER`. The `RAYLINE_LOCAL_ROUTING_*` overrides replace them (section 5.7).
 
 ## 11. Done means tested
 
