@@ -48,6 +48,18 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   as a dev build on `prod`), `rayline update` and `rayline update --check` say
   so and name the command that installs that release, instead of "Already on
   latest".
+- `rayline run claude --model X` no longer puts subagents and background tasks
+  on X: they always run on ARC Swift, unless Claude Code's own settings pin
+  a subagent model
+  ([#325](https://github.com/rayline-ai/rayline-cli/pull/325)).
+
+### Removed
+
+- Rayline's own `--model` option for `rayline run codex`, `rayline run codex
+  app` and `rayline run codex configure`. A `--model` after `rayline run
+  codex` now goes to Codex unchanged, also in local mode, which refused it
+  before, and `rayline run codex configure --model` is a usage error
+  ([#325](https://github.com/rayline-ai/rayline-cli/pull/325)).
 
 ### Fixed
 
