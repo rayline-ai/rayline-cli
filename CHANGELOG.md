@@ -13,10 +13,82 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   `unelevated`, which needs no admin setup. Before, Codex had no sandbox
   setting there and rejected every command as "blocked by policy". A value
   already in the Rayline Codex home is kept.
-- A new conversation's first `local` decision no longer encodes the tool
-  definitions and system prompt it shares with an earlier conversation: about
-  0.1 s instead of about 3 s for Claude Code on Apple M-series, after the
-  first conversation since the local process started.
+
+## 0.5.5 (2026-11-17)
+
+### Added
+
+- `rayline local start --router hosted` with no `routing` section uses the
+  same defaults as `--router local` (`arc-swift-1.0`,
+  `arc-policy.prefer-local.v1`), so local mode with hosted decisions needs no
+  `settings.json`
+  ([#347](https://github.com/rayline-ai/rayline-cli/pull/347)).
+- `rayline update --version 0.5.5` takes a version without its build label
+  and reads the full version from that release's signed version file. A
+  version that doesn't exist fails with `release <version> does not exist`,
+  and one whose release names another version fails with
+  `release <version> names version <full>`.
+- `rayline run --help` lists `--local`, `--config`, `--isolated`, the Codex
+  subcommands and where harness arguments go. `rayline update --help` gets a
+  summary, a `--help` row and a note on Homebrew and Rayline.app installs.
+
+### Changed
+
+- **Faster first `local` decision in a new conversation.** A new conversation
+  continues ARC's encode from what it shares with an earlier one: the tool
+  definitions, the system prompt and everything else before its first
+  message. For Claude Code on Apple M-series, a new conversation's first
+  decision takes about 1.3 s instead of about 2 s
+  ([#342](https://github.com/rayline-ai/rayline-cli/pull/342),
+  [#346](https://github.com/rayline-ai/rayline-cli/pull/346)).
+- `rayline run <harness>` with only `--help`, `-h`, `--version` or `-v` runs
+  the harness with that flag and nothing else: no sign-in, no config, no
+  local process and no Claude Code daemon check. This now applies to every
+  harness, also with `--local`.
+- Signed out, Rayline says `Not signed in to Rayline. Run: rayline auth login`,
+  naming the environment only when `--env` names one.
+- `rayline top --json`, or `rayline top` when its output isn't a terminal,
+  with no local process says how to start one. State left behind by a local
+  process that stopped or crashed counts as no local process, there and in
+  the live view ([#349](https://github.com/rayline-ai/rayline-cli/pull/349)).
+- Local mode with no `settings.json` prints a `settings.json` to paste and
+  links the local mode docs.
+- Every `rayline local start` error for a machine that can't run `local`
+  decisions ends with the same fix: `rayline local start --router hosted`.
+- `rayline local start --help` and the Codex help say where decisions are
+  made in Rayline Platform terms.
+
+### Fixed
+
+- In local mode with hosted decisions, a Codex or Hermes turn on a Claude
+  model that thinks before it calls a tool now completes
+  ([#345](https://github.com/rayline-ai/rayline-cli/pull/345)).
+
+### Docs
+
+- The README and getting-started guide use the current install commands:
+  `curl -fsSL https://get.rayline.ai/install.sh | bash` and
+  `irm https://get.rayline.ai/install.ps1 | iex`
+  ([#343](https://github.com/rayline-ai/rayline-cli/pull/343)).
+- The local mode guide describes `rayline top`'s live view and `--json`, and
+  how `RAYLINE_ROUTING_*` overrides apply to the `--router` defaults.
+- The 0.5.4 notes gain a Removed entry for Rayline's `--model` option of
+  `rayline run codex` (#325).
+
+### Known limits
+
+- The first `local` decision of each new conversation still encodes what
+  follows the shared part again. For Claude Code on Apple M-series that is
+  about 1.3 s, and about 2 s for the first conversation since the local
+  process started. Later turns take about 0.1 s.
+- On Windows, every `local` start hashes the ARC files again; macOS and Linux
+  skip files unchanged since they were last checked.
+- A release's signed checksums aren't yet bound to its version
+  ([#333](https://github.com/rayline-ai/rayline-cli/issues/333)).
+
+### Rollback
+
+To go back to 0.5.4: `curl -fsSL https://get.rayline.ai/install.sh | bash -s -- --version 0.5.4`. The first `local` start then downloads 0.5.4's ARC encoder. Plain `rayline update` would install 0.5.5 again.
 
 ## 0.5.4 (2026-11-17)
 

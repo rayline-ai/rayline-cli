@@ -55,12 +55,20 @@ struct TopSource {
 }
 
 impl TopSource {
+    /// [`Self::open`], with one error for every no-local-process case (spec
+    /// section 3.4 item 3). A running process top can't use keeps its own
+    /// error.
     async fn connect(state_dir: &Path) -> io::Result<Self> {
         Self::open(state_dir).await.map_err(|error| {
-            io::Error::new(
-                io::ErrorKind::ConnectionRefused,
-                format!("no local process is running: {error}"),
-            )
+            if error.kind() == io::ErrorKind::NotFound {
+                io::Error::new(
+                    io::ErrorKind::ConnectionRefused,
+                    "no local process is running. Start one with `rayline local start` or \
+                     `rayline run <harness> --local`.",
+                )
+            } else {
+                error
+            }
         })
     }
 
@@ -872,6 +880,13 @@ mod tests {
         )
         .unwrap();
         fs::write(state_dir.join("gateway-token"), "test-private-token").unwrap();
+        fs::write(
+            state_dir.join("supervisor.json"),
+            serde_json::json!({"pid": std::process::id(), "config": "/c.json", "env": null,
+                "router": null})
+            .to_string(),
+        )
+        .unwrap();
         for (key, value) in health_override.as_object().unwrap() {
             state[key] = value.clone();
         }
@@ -1060,8 +1075,14 @@ mod tests {
                 .await
                 .unwrap_err()
                 .to_string();
-            assert!(error.contains("no local process is running"), "{error}");
-            assert!(error.contains("readiness") || error.contains("not live"));
+            // A live supervisor with unusable readiness is an error; one
+            // whose `ready.json` names an exited process (pid 0) is none.
+            assert!(
+                error.contains("readiness")
+                    || error.contains("not live")
+                    || error.starts_with("no local process is running. Start one"),
+                "{error}"
+            );
             assert!(!error.contains("private-token"));
         }
         fs::remove_dir_all(home).unwrap();
@@ -1072,7 +1093,70 @@ mod tests {
         let home = unique_test_dir("top-no-process");
         let error = render_top_from_home(&home, &JSON).await.unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::ConnectionRefused);
-        assert!(error.to_string().contains("no local process is running"));
+        assert_eq!(
+            error.to_string(),
+            "no local process is running. Start one with `rayline local start` or \
+             `rayline run <harness> --local`."
+        );
+    }
+
+    /// State a stopped or crashed process left behind is no local process,
+    /// with the same error as no state at all; a running process with
+    /// state top can't read keeps its own error.
+    #[tokio::test]
+    async fn top_with_stale_state_is_the_no_process_error() {
+        let no_process = |error: &io::Error| {
+            assert_eq!(error.kind(), io::ErrorKind::ConnectionRefused);
+            assert_eq!(
+                error.to_string(),
+                "no local process is running. Start one with `rayline local start` or \
+             `rayline run <harness> --local`."
+            );
+        };
+        let home = unique_test_dir("top-stale-state");
+        let state_dir = crate::hybrid::state_dir(&home);
+        fs::create_dir_all(&state_dir).unwrap();
+        let ready = state_dir.join("ready.json");
+        let supervisor = state_dir.join("supervisor.json");
+        // State without a supervisor record.
+        for state in [
+            "{}",
+            "not json",
+            r#"{"contract_version": 1, "ready": false}"#,
+        ] {
+            fs::write(&ready, state).unwrap();
+            no_process(&render_top_from_home(&home, &JSON).await.unwrap_err());
+        }
+        // A complete record of a process that has exited.
+        let server = hybrid_top_fixture(&home, serde_json::json!({})).await;
+        server.abort();
+        let mut exited = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--list")
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        exited.wait().unwrap();
+        let mut record: Value = serde_json::from_slice(&fs::read(&supervisor).unwrap()).unwrap();
+        record["pid"] = Value::from(exited.id());
+        fs::write(&supervisor, record.to_string()).unwrap();
+        no_process(&render_top_from_home(&home, &JSON).await.unwrap_err());
+        let mut live = None;
+        assert!(matches!(
+            refresh(&state_dir, &mut live).await,
+            Refresh::NotRunning
+        ));
+        // A running process whose `ready.json` top can't read.
+        record["pid"] = Value::from(std::process::id());
+        fs::write(&supervisor, record.to_string()).unwrap();
+        let mut state: Value = serde_json::from_slice(&fs::read(&ready).unwrap()).unwrap();
+        state.as_object_mut().unwrap().remove("capabilities");
+        fs::write(&ready, state.to_string()).unwrap();
+        let error = render_top_from_home(&home, &JSON)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("readiness"), "{error}");
+        fs::remove_dir_all(home).unwrap();
     }
 
     #[tokio::test]

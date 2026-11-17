@@ -207,8 +207,8 @@ Four `routing` keys can be set from the environment:
 - An override is validated the same way as the file value.
 - An override only changes a value. The config file still has to have a
   `routing` section, because the file decides the mode. The exception is
-  `rayline local start --router local` with no config file or no `routing`
-  section: the overrides apply to its built-in `routing` defaults, and so do
+  `rayline local start --router <local|hosted>` with no config file or no
+  `routing` section: the overrides apply to its built-in `routing` defaults, and so do
   they for a `rayline run <harness> --local` without `routing` while that
   local process runs.
 - Commands that use no `routing` (`auth`, `top`, `update`, `local status`,
@@ -232,7 +232,7 @@ so `rayline run pi --local` refuses it.
 
 | Command | Does |
 |---|---|
-| `rayline local start [--config <file>] [--router <local\|hosted>]` | Starts the local process from the default config file, or from `<file>`. The config must have a `routing` section, except with `--router local`. `--router` overrides `routing.router`. |
+| `rayline local start [--config <file>] [--router <local\|hosted>]` | Starts the local process from the default config file, or from `<file>`. The config must have a `routing` section, except with `--router`. `--router` overrides `routing.router`. |
 | `rayline local status [--json]` | Shows whether the local process is running, its address, and the config file and environment it was started from. `--json` prints it as JSON (see [Local decisions for your own Pi](#local-decisions-for-your-own-pi)). |
 | `rayline local stop` | Stops the local process. Your inference servers keep running. |
 | `rayline run <HARNESS> --local` | Runs the harness in local mode with `~/.config/rayline/settings.json`. Starts the local process if it isn't running. |
@@ -267,8 +267,8 @@ rayline auth login
 rayline local start --router local
 ```
 
-`--router local` needs no `settings.json`. Without a `routing` section it
-uses `arc-swift-1.0` and the `arc-policy.prefer-local.v1` preset.
+`--router` needs no `settings.json`. Without a `routing` section, `local` and
+`hosted` both use `arc-swift-1.0` and the `arc-policy.prefer-local.v1` preset.
 `routing.classifier_model` is needed only to run Claude Code.
 
 pi-arc finds the local Routes API with `rayline local status --json`:
@@ -338,7 +338,8 @@ error that names the key. It refuses:
    `rayline local start` runs no harness, so neither checks this.
 4. A model whose `endpoint` isn't in `endpoints`.
 5. Local mode without `routing`, or a `routing` section that is missing a
-   required key.
+   required key. When `settings.json` doesn't exist, the error prints one to
+   paste, with the hosted router.
 6. A routing env override when the config file has no `routing` section.
 7. A `--config <file>` that doesn't exist. Only the default file is optional.
 8. A key repeated in one JSON object, an empty map key, a URL that isn't an
