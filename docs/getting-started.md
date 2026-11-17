@@ -23,13 +23,13 @@ Commands:
 macOS and Linux:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/rayline-ai/rayline-cli/main/scripts/install-rayline.sh | sh
+curl -fsSL https://get.rayline.ai/install.sh | bash
 ```
 
 Windows PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/rayline-ai/rayline-cli/main/scripts/install-rayline.ps1 | iex
+irm https://get.rayline.ai/install.ps1 | iex
 ```
 
 The installer places `rayline`, `rayline-core` and `rayline-core-LICENSE` in

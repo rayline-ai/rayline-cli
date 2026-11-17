@@ -206,7 +206,13 @@ Four `routing` keys can be set from the environment:
   overrides, then flags.
 - An override is validated the same way as the file value.
 - An override only changes a value. The config file still has to have a
-  `routing` section, because the file decides the mode.
+  `routing` section, because the file decides the mode. The exception is
+  `rayline local start --router local` with no config file or no `routing`
+  section: the overrides apply to its built-in `routing` defaults, and so do
+  they for a `rayline run <harness> --local` without `routing` while that
+  local process runs.
+- Commands that use no `routing` (`auth`, `top`, `update`, `local status`,
+  `local stop`) don't read these env vars.
 - `endpoints`, `models`, `arc_release` and `policy.overrides` can't be set
   from the environment. Put them in a file and pass it with `--config`.
 
@@ -313,8 +319,12 @@ rayline top --json
 prints one snapshot and exits. Under its title, `top` names the router that
 decides, such as `Router: local ARC (arc-swift-1.0) on this machine` (the
 `router` key in `--json`), and each request shows the router that decided it,
-how long a local decision took and the event it was decided for. If no local process is running, `rayline top`
-says so and exits with an error.
+how long a local decision took and the event it was decided for.
+
+The live view waits for a local process: while none runs it shows
+`Local process: not running` and checks again on every refresh, and when the
+local process restarts it follows the new one. `--json`, or output that isn't
+a terminal, with no local process running says so and exits with an error.
 
 ## Config errors
 
