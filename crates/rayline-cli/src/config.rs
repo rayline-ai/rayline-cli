@@ -3476,6 +3476,17 @@ pub(crate) mod tests {
         };
         assert_eq!(
             load(&empty, run_on_cloud).expect("run").routing,
+            Some(cloud.clone())
+        );
+        // So does a `--config` file in local mode with no `local.routing`.
+        let file = empty.join("x.json");
+        fs::write(&file, r#"{"mode": "local", "local": {}}"#).expect("write");
+        let run_file_on_cloud = LoadOptions {
+            routing_defaults: Some(Router::Cloud),
+            ..opts(run_file(&file))
+        };
+        assert_eq!(
+            load(&empty, run_file_on_cloud).expect("run").routing,
             Some(cloud)
         );
         // Over a file's `local.routing`, only `router` changes.
