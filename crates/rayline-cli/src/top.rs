@@ -59,7 +59,13 @@ impl TopSource {
         Self::open(state_dir).await.map_err(|error| {
             io::Error::new(
                 io::ErrorKind::ConnectionRefused,
-                format!("no local process is running: {error}"),
+                if error.kind() == io::ErrorKind::NotFound {
+                    "no local process is running. Start one with `rayline local start` or \
+                     `rayline run <harness> --local`."
+                        .to_owned()
+                } else {
+                    format!("no local process is running: {error}")
+                },
             )
         })
     }
@@ -1061,7 +1067,12 @@ mod tests {
                 .unwrap_err()
                 .to_string();
             assert!(error.contains("no local process is running"), "{error}");
-            assert!(error.contains("readiness") || error.contains("not live"));
+            assert!(
+                error.contains("readiness")
+                    || error.contains("not live")
+                    || error.contains("Start one with `rayline local start`"),
+                "{error}"
+            );
             assert!(!error.contains("private-token"));
         }
         fs::remove_dir_all(home).unwrap();
@@ -1072,7 +1083,11 @@ mod tests {
         let home = unique_test_dir("top-no-process");
         let error = render_top_from_home(&home, &JSON).await.unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::ConnectionRefused);
-        assert!(error.to_string().contains("no local process is running"));
+        assert_eq!(
+            error.to_string(),
+            "no local process is running. Start one with `rayline local start` or \
+             `rayline run <harness> --local`."
+        );
     }
 
     #[tokio::test]

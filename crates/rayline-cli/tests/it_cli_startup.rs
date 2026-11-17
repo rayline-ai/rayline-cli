@@ -35,6 +35,11 @@ impl Home {
     /// Like [`Home::run`], with the binary at `exe`. The Hugging Face cache is
     /// `<home>/hf`.
     fn run_exe(&self, exe: &Path, args: &[&str]) -> Output {
+        self.run_exe_on(exe, args, Path::new(""))
+    }
+
+    /// Like [`Home::run_exe`], with `PATH` set to `path`.
+    fn run_exe_on(&self, exe: &Path, args: &[&str], path: &Path) -> Output {
         let mut command = Command::new(exe);
         for (name, _) in std::env::vars_os() {
             if name.to_string_lossy().starts_with("RAYLINE_") {
@@ -46,7 +51,7 @@ impl Home {
             .current_dir(&self.0)
             .env("HOME", &self.0)
             .env("USERPROFILE", &self.0)
-            .env("PATH", "")
+            .env("PATH", path)
             .env("HF_HOME", self.0.join("hf"))
             .env_remove("HF_HUB_CACHE")
             .output()
@@ -252,7 +257,11 @@ fn a_signed_out_local_start_fails_before_it_clears_state_or_downloads() {
     fs::write(state.join("ready.json"), "{}").expect("ready");
 
     for args in [&["local", "start"][..], &["run", "claude", "--local"]] {
-        assert_fails(&home.run_exe(&exe, args), 1, "Not logged in to prod");
+        assert_fails(
+            &home.run_exe(&exe, args),
+            1,
+            "Not signed in to Rayline. Run: rayline auth login",
+        );
         assert_eq!(
             fs::read_to_string(state.join("supervisor.json")).expect("supervisor kept"),
             supervisor
@@ -260,4 +269,51 @@ fn a_signed_out_local_start_fails_before_it_clears_state_or_downloads() {
         assert!(state.join("ready.json").exists());
         assert!(!home.0.join("hf").exists());
     }
+}
+
+/// A lone `--help`, `-h`, `--version` or `-v` goes straight to the harness:
+/// signed out, with no settings file and no local process, nothing else runs.
+#[cfg(unix)]
+#[test]
+fn a_lone_help_or_version_flag_runs_only_the_harness() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let home = Home::new();
+    let bin = home.0.join("bin");
+    fs::create_dir_all(&bin).expect("bin dir");
+    let harnesses = [
+        "claude", "codex", "opencode", "pi", "omp", "hermes", "openclaw",
+    ];
+    for name in harnesses {
+        let script = bin.join(name);
+        fs::write(&script, format!("#!/bin/sh\necho \"{name} $*\"\nexit 3\n")).expect("script");
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+    let exe = Path::new(env!("CARGO_BIN_EXE_rayline"));
+    for name in harnesses {
+        for flag in ["--help", "-h", "--version", "-v"] {
+            for args in [
+                vec!["run", name, flag],
+                vec!["run", name, "--local", flag],
+                vec!["run", name, "--", flag],
+            ] {
+                let output = home.run_exe_on(exe, &args, &bin);
+                assert_eq!(output.status.code(), Some(3), "{args:?}");
+                assert_eq!(
+                    String::from_utf8_lossy(&output.stdout),
+                    format!("{name} {flag}\n"),
+                    "{args:?}"
+                );
+                assert!(output.stderr.is_empty(), "{args:?}");
+            }
+        }
+    }
+    // Anything more than the one flag is a launch, which needs a sign-in.
+    assert_fails(
+        &home.run_exe_on(exe, &["run", "claude", "--help", "x"], &bin),
+        1,
+        "Not signed in to Rayline. Run: rayline auth login",
+    );
+    assert!(!home.0.join(".rayline").exists());
+    assert!(!home.0.join(".config").exists());
 }

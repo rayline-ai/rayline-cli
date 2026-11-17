@@ -108,7 +108,14 @@ pub async fn run(
     channel: UpdateChannel,
 ) -> Result<UpdateResult, UpdateError> {
     let home = crate::home().map_err(|error| UpdateError::Install(error.to_string()))?;
-    run_on(request, channel, &home, crate::MINISIGN_PUBLIC_KEYS).await
+    run_on(
+        request,
+        channel,
+        &home,
+        crate::RELEASES_URL,
+        crate::MINISIGN_PUBLIC_KEYS,
+    )
+    .await
 }
 
 /// The pointer file naming the latest release on `channel`.
@@ -120,11 +127,13 @@ fn latest_pointer(channel: UpdateChannel) -> &'static str {
     }
 }
 
-/// `run` with the keys release signatures are checked against.
+/// `run` with the GitHub release downloads a bare `--version` is resolved
+/// from, and the keys release signatures are checked against.
 async fn run_on(
     request: &UpdateRequest,
     channel: UpdateChannel,
     home: &Path,
+    releases_url: &str,
     pubkeys: &[&str],
 ) -> Result<UpdateResult, UpdateError> {
     let base_url = request
@@ -158,7 +167,7 @@ async fn run_on(
     let current = Version::parse(crate::RAYLINE_VERSION)
         .map_err(|_| UpdateError::InvalidVersion(crate::RAYLINE_VERSION.to_owned()))?;
     let target = match &request.pinned_version {
-        Some(version) => version.clone(),
+        Some(version) => full_version(releases_url, version, pubkeys).await?,
         None => fetch_latest_version(base_url, channel, pubkeys).await?,
     };
 
@@ -257,21 +266,35 @@ impl Drop for TempDir {
     }
 }
 
-/// Releases are published under their full version, build label included
-/// (`cli/v0.2.12+ee1afb00b6cd/`), and there is no index to resolve a bare
-/// `X.Y.Z` from. A missing release named without a build label says so.
-fn bare_version_hint(target: &Version, error: UpdateError) -> UpdateError {
-    match error {
-        UpdateError::Network(message)
-            if !target.normalized.contains('+') && message.ends_with("HTTP 404") =>
-        {
-            UpdateError::Network(format!(
-                "release {} was not found. Releases are published under their full version including the build label; run `rayline update --version {}+<build>` with the full version from the release notes (`rayline --version` prints it for an installed release).",
-                target.public, target.public
-            ))
+/// `version` with its build label. Releases are published under their full
+/// version (`cli/v0.2.12+ee1afb00b6cd/`), so a version without one is
+/// resolved from its GitHub release's signed `latest.txt`, which must name
+/// the same version.
+async fn full_version(
+    releases_url: &str,
+    version: &Version,
+    pubkeys: &[&str],
+) -> Result<Version, UpdateError> {
+    if version.normalized.contains('+') {
+        return Ok(version.clone());
+    }
+    let url = format!("{releases_url}/v{}/latest.txt", version.public);
+    let not_found = |error| match error {
+        UpdateError::Network(message) if message.ends_with("HTTP 404") => {
+            UpdateError::Network(format!("release {} does not exist", version.public))
         }
         error => error,
+    };
+    let pointer = fetch_pointer_bytes(&url).await.map_err(not_found)?;
+    let signature = fetch_pointer_bytes(&format!("{url}.minisig")).await?;
+    let full = parse_verified_latest(&pointer, &signature, pubkeys)?;
+    if full.public != version.public {
+        return Err(UpdateError::Network(format!(
+            "release {} names version {}",
+            version.public, full.normalized
+        )));
     }
+    Ok(full)
 }
 
 /// What `rayline update` decides for `target`, the version asked for
@@ -461,9 +484,7 @@ async fn fetch_verified_sums(
 
     // Download checksums and its signature first so we can verify before
     // trusting any artifact bytes.
-    download_to(&checksums_url_for(base_url, version), &sums_path)
-        .await
-        .map_err(|error| bare_version_hint(target, error))?;
+    download_to(&checksums_url_for(base_url, version), &sums_path).await?;
     download_to(&checksums_sig_url_for(base_url, version), &sig_path).await?;
 
     // Verify signature BEFORE reading or trusting the checksums file.
@@ -1867,23 +1888,6 @@ mod tests {
         assert_eq!(version("18446744073709551615.0.0").base, [u64::MAX, 0, 0]);
     }
 
-    #[test]
-    fn a_missing_bare_version_names_the_full_form() {
-        let not_found = || UpdateError::Network("GET x returned HTTP 404".to_owned());
-        let UpdateError::Network(message) = bare_version_hint(&version("0.2.12"), not_found())
-        else {
-            panic!("network error expected");
-        };
-        assert!(message.contains("--version 0.2.12+<build>"), "{message}");
-        // A full version, or another failure, keeps its own error.
-        assert_eq!(
-            bare_version_hint(&version("0.2.12+ee1afb00b6cd"), not_found()),
-            not_found()
-        );
-        let other = UpdateError::Network("GET x returned HTTP 500".to_owned());
-        assert_eq!(bare_version_hint(&version("0.2.12"), other.clone()), other);
-    }
-
     // ── Signature verification tests ─────────────────────────────────────────
 
     // Test public key (matches the .minisig in tests/fixtures/SHA256SUMS.minisig)
@@ -2075,6 +2079,24 @@ mod tests {
         files
     }
 
+    /// GitHub release downloads whose `latest.txt` names TEST_RELEASE.
+    fn releases() -> FakeReleaseServer {
+        let pointer = format!("/v{TEST_RELEASE}/latest.txt");
+        FakeReleaseServer::start(Files::from([
+            (
+                format!("{pointer}.minisig"),
+                signed_fixture("latest.txt.minisig"),
+            ),
+            (pointer, signed_fixture("latest.txt")),
+        ]))
+    }
+
+    /// The keys of the test release's SHA256SUMS and its `latest.txt`.
+    const KEYS: &[&str] = &[RELEASE_TEST_PUBKEY, LATEST_TEST_PUBKEY];
+
+    /// For a run that resolves no version.
+    const UNUSED_RELEASES: &str = "http://127.0.0.1:9";
+
     /// A home directory without `.rayline`: no encoder to refresh.
     fn no_home() -> PathBuf {
         std::env::temp_dir().join("rayline-update-test-no-home")
@@ -2122,7 +2144,14 @@ mod tests {
                 check_only: true,
                 ..request
             };
-            let result = run_on(&request, channel, &no_home(), &[LATEST_TEST_PUBKEY]).await?;
+            let result = run_on(
+                &request,
+                channel,
+                &no_home(),
+                UNUSED_RELEASES,
+                &[LATEST_TEST_PUBKEY],
+            )
+            .await?;
             assert_eq!(result.exit_code, 1, "{}", result.message);
             assert!(
                 result.message.contains(&format!("\u{2192} {TEST_RELEASE}")),
@@ -2153,7 +2182,8 @@ mod tests {
             &dry_run,
             UpdateChannel::Prod,
             &no_home(),
-            &[RELEASE_TEST_PUBKEY],
+            &releases().base_url,
+            KEYS,
         )
         .await?;
         assert!(
@@ -2172,7 +2202,8 @@ mod tests {
             &request,
             UpdateChannel::Prod,
             &no_home(),
-            &[RELEASE_TEST_PUBKEY],
+            &releases().base_url,
+            KEYS,
         )
         .await?;
         assert_eq!(result.exit_code, 0, "{}", result.message);
@@ -2335,7 +2366,14 @@ mod tests {
             dry_run: true,
             ..request.clone()
         };
-        let result = run_on(&dry_run, UpdateChannel::Prod, &home, &[RELEASE_TEST_PUBKEY]).await?;
+        let result = run_on(
+            &dry_run,
+            UpdateChannel::Prod,
+            &home,
+            &releases().base_url,
+            KEYS,
+        )
+        .await?;
         let new = arc_dir(&home).join(TEST_RELEASE);
         assert!(
             result
@@ -2346,10 +2384,16 @@ mod tests {
         );
         // The release lists no encoder for this platform: the update stops
         // before anything is replaced, and the fetched encoder stays.
-        let error = run_on(&request, UpdateChannel::Prod, &home, &[RELEASE_TEST_PUBKEY])
-            .await
-            .unwrap_err()
-            .to_string();
+        let error = run_on(
+            &request,
+            UpdateChannel::Prod,
+            &home,
+            &releases().base_url,
+            KEYS,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
         assert!(
             error.contains("no sha256 entry for rayline-arc-encoder-"),
             "{error}"
@@ -2451,7 +2495,8 @@ mod tests {
             &request,
             UpdateChannel::Prod,
             &no_home(),
-            &[RELEASE_TEST_PUBKEY],
+            &releases().base_url,
+            KEYS,
         )
         .await;
         let Err(UpdateError::Checksum(message)) = result else {
@@ -2475,7 +2520,8 @@ mod tests {
             &request,
             UpdateChannel::Prod,
             &no_home(),
-            &[RELEASE_TEST_PUBKEY],
+            &releases().base_url,
+            KEYS,
         )
         .await;
         let Err(UpdateError::Network(message)) = result else {
@@ -2501,6 +2547,7 @@ mod tests {
             &request,
             UpdateChannel::Prod,
             &no_home(),
+            &releases().base_url,
             crate::MINISIGN_PUBLIC_KEYS,
         )
         .await;
@@ -2511,6 +2558,66 @@ mod tests {
         assert_eq!(fs::read_dir(&install)?.count(), 1);
         assert_eq!(fs::read(exe(&install, crate::CLI_BIN))?, b"installed");
         fs::remove_dir_all(install)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_bare_version_resolves_its_build_label_from_the_release() -> TestResult {
+        let pointer = |version: &str| format!("/v{version}/latest.txt");
+        let releases = FakeReleaseServer::start(Files::from([
+            (pointer(TEST_RELEASE), b"99.0.0+0123abcd\n".to_vec()),
+            (
+                format!("{}.minisig", pointer(TEST_RELEASE)),
+                b"signature".to_vec(),
+            ),
+            (pointer("98.0.0"), signed_fixture("latest.txt")),
+            (
+                format!("{}.minisig", pointer("98.0.0")),
+                signed_fixture("latest.txt.minisig"),
+            ),
+        ]));
+        let signed = FakeReleaseServer::start(Files::from([
+            (pointer(TEST_RELEASE), signed_fixture("latest.txt")),
+            (
+                format!("{}.minisig", pointer(TEST_RELEASE)),
+                signed_fixture("latest.txt.minisig"),
+            ),
+        ]));
+        let keys = &[LATEST_TEST_PUBKEY];
+        // A signed `latest.txt` gives the full version.
+        assert_eq!(
+            full_version(&signed.base_url, &version(TEST_RELEASE), keys).await?,
+            version(TEST_RELEASE)
+        );
+        assert_eq!(
+            signed.requests(),
+            [
+                pointer(TEST_RELEASE),
+                format!("{}.minisig", pointer(TEST_RELEASE))
+            ]
+        );
+        // A full version is used as given, with nothing fetched.
+        let full = version("99.0.0+0123abcd");
+        assert_eq!(full_version(UNUSED_RELEASES, &full, keys).await?, full);
+        // An unsigned `latest.txt` is refused.
+        assert!(matches!(
+            full_version(&releases.base_url, &version(TEST_RELEASE), keys).await,
+            Err(UpdateError::Signature(_))
+        ));
+        // A release whose `latest.txt` names another version is refused.
+        assert_eq!(
+            full_version(&releases.base_url, &version("98.0.0"), keys)
+                .await
+                .unwrap_err(),
+            UpdateError::Network("release 98.0.0 names version 99.0.0".to_owned())
+        );
+        // A release that doesn't exist says so.
+        assert_eq!(
+            full_version(&releases.base_url, &version("97.0.0"), keys)
+                .await
+                .unwrap_err(),
+            UpdateError::Network("release 97.0.0 does not exist".to_owned())
+        );
         Ok(())
     }
 }

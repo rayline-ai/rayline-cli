@@ -5,7 +5,33 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 
 ## Unreleased
 
+### Added
+
+- `rayline local start --router hosted` with no `routing` section uses the
+  same defaults as `--router local` (`arc-swift-1.0`,
+  `arc-policy.prefer-local.v1`), so local mode with hosted decisions needs no
+  `settings.json`.
+- `rayline update --version 0.5.3` takes a version without its build label
+  and finds the full version from that release. A version that doesn't exist
+  fails with `release <version> does not exist`.
+- `rayline run --help` lists `--local`, `--config`, `--isolated`, the Codex
+  subcommands and where harness arguments go. `rayline update --help` gets a
+  summary, a `--help` row and a note on Homebrew and Rayline.app installs.
+
 ### Changed
+
+- `rayline run <harness>` with only `--help`, `-h`, `--version` or `-v` runs
+  the harness with that flag and nothing else: no sign-in, no config, no
+  local process and no Claude Code daemon check.
+- Signed out, Rayline says `Not signed in to Rayline. Run: rayline auth login`,
+  naming the environment only when `--env` names one.
+- `rayline top --json` with no local process says how to start one.
+- Local mode with no `settings.json` prints a `settings.json` to paste and
+  links the local mode docs.
+- Every `rayline local start` error for a machine that can't run `local`
+  decisions ends with the same fix: `rayline local start --router hosted`.
+- `rayline local start --help` and the Codex help say where decisions are
+  made in Rayline Platform terms.
 
 - A new conversation's first `local` decision no longer encodes the tool
   definitions and system prompt it shares with an earlier conversation: about

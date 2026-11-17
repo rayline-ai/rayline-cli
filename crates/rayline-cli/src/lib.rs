@@ -41,6 +41,9 @@ pub const ARC_SWIFT_MODEL: &str = "arc-swift-1.0";
 /// model. It names no hosted model; the hosted router refuses it.
 pub const VIRTUAL_ROUTER_MODEL: &str = "rayline-auto";
 pub const UPDATE_BASE_URL: &str = "https://get.rayline.ai";
+/// The GitHub release downloads, where a release's signed `latest.txt` names
+/// its full version.
+pub const RELEASES_URL: &str = "https://github.com/rayline-ai/rayline-cli/releases/download";
 pub const INSTALLER_URL: &str = "https://get.rayline.ai/install.sh";
 pub const CLAUDE_LAUNCHES_SUFFIX: &str = ".rayline/harness/claude-code/daemon-launches.json";
 pub const RAYLINE_VERSION: &str = env!("RAYLINE_VERSION");
@@ -116,6 +119,11 @@ pub async fn run_argv(original_argv: &[OsString]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    if let cli::Command::Run(run) = &command {
+        if let Some((binary, arg)) = run.launch.info_only() {
+            return pass_through(binary, arg);
+        }
+    }
     let (mode, harness_protocol) = match &command {
         cli::Command::Run(run) => (
             match &run.config {
@@ -142,13 +150,17 @@ pub async fn run_argv(original_argv: &[OsString]) -> ExitCode {
             cli::Command::Local(cli::Local::Start { router, .. }) => *router,
             _ => None,
         },
-        routing_defaults: matches!(
+        routing_defaults: if matches!(
             &command,
             cli::Command::Run(cli::Run {
                 config: cli::ConfigFlag::Local,
                 ..
             })
-        ) && hybrid::running_from_routing_defaults(),
+        ) {
+            hybrid::running_from_routing_defaults()
+        } else {
+            None
+        },
     }) {
         Ok(settings) => settings,
         Err(error) => {
@@ -361,24 +373,33 @@ async fn exec_claude(request: crate::claude::RunRequest) -> ExitCode {
     }
     eprintln!("{}", "─".repeat(72));
 
-    exec_or_status(&mut command)
+    exec_or_status(&mut command, "claude")
+}
+
+/// Runs `binary` with `arg` alone, as [`cli::Launch::info_only`] finds it.
+fn pass_through(binary: &str, arg: &OsString) -> ExitCode {
+    let Some(path) = harness::find_on_path(binary) else {
+        eprintln!("Error: `{binary}` not found on PATH");
+        return ExitCode::from(1);
+    };
+    exec_or_status(Command::new(path).arg(arg), binary)
 }
 
 #[cfg(unix)]
-fn exec_or_status(command: &mut Command) -> ExitCode {
+fn exec_or_status(command: &mut Command, binary: &str) -> ExitCode {
     use std::os::unix::process::CommandExt;
 
     let error = command.exec();
-    eprintln!("rayline: failed to exec claude: {error}");
+    eprintln!("rayline: failed to exec {binary}: {error}");
     ExitCode::from(127)
 }
 
 #[cfg(not(unix))]
-fn exec_or_status(command: &mut Command) -> ExitCode {
+fn exec_or_status(command: &mut Command, binary: &str) -> ExitCode {
     match command.status() {
         Ok(status) => crate::child_exit_code(status),
         Err(error) => {
-            eprintln!("rayline: failed to run claude: {error}");
+            eprintln!("rayline: failed to run {binary}: {error}");
             ExitCode::from(127)
         }
     }
