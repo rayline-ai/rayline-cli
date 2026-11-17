@@ -95,9 +95,6 @@ struct Supervisor {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
 enum RouterSource {
-    /// A local process a 0.5 Rayline started with router `hosted` keeps
-    /// that word in its record; reading it lets this Rayline stop it.
-    #[serde(alias = "hosted")]
     Cloud,
     Local {
         repo: String,
@@ -3099,22 +3096,6 @@ mod tests {
             serde_json::from_value::<Supervisor>(written).unwrap(),
             record
         );
-    }
-
-    /// A process a 0.5 Rayline started with router `hosted` is still read,
-    /// as `cloud`, so this Rayline can show and stop it.
-    #[test]
-    fn a_record_from_0_5_with_router_hosted_is_read_as_cloud() {
-        let record: Supervisor = serde_json::from_value(serde_json::json!({
-            "pid": 1,
-            "config": "/c.json",
-            "router": {"mode": "hosted"},
-            "decisions_model": "arc-swift-1.0",
-        }))
-        .unwrap();
-        assert_eq!(record.router, Some(RouterSource::Cloud));
-        let written = serde_json::to_value(&record).unwrap();
-        assert_eq!(written["router"], serde_json::json!({"mode": "cloud"}));
     }
 
     #[cfg(windows)]
