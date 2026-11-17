@@ -535,9 +535,15 @@ fn load_from(
         })?,
         None => raw.mode,
     };
-    // Which of `cloud` and `local` the command uses. Every section's shape
-    // is checked above; the required keys, which env overrides may give, and
-    // the overrides themselves only in the sections the command uses.
+    // Every section's shape is checked above, and the required keys of the
+    // sections the file has here, for every command: an env override
+    // replaces a value, it never gives a missing one.
+    doc.check_required(
+        raw.cloud.as_ref(),
+        raw.local.as_ref().and_then(|local| local.routing.as_ref()),
+    )?;
+    // Which of `cloud` and `local` the command uses: the sections it needs,
+    // and the only ones whose env overrides it reads.
     let (uses_cloud, uses_local) = match options.command {
         Command::Run { mode: flag, .. } => {
             let local = flag.unwrap_or(mode) == Mode::Local;
@@ -895,7 +901,7 @@ struct RawSettings {
     update: Option<UpdateChannel>,
 }
 
-/// A model object as written: its `id` may still come from an env override.
+/// A model object as written.
 #[derive(Default)]
 struct RawModel {
     id: Option<String>,
@@ -916,8 +922,7 @@ struct RawLocal {
     routing: Option<RawRouting>,
 }
 
-/// `local.routing` as written: its required keys may still come from env
-/// overrides.
+/// `local.routing` as written, or the `--router` defaults.
 #[derive(Default)]
 struct RawRouting {
     decisions_model: Option<RawModel>,
@@ -930,7 +935,8 @@ struct RawRouting {
 }
 
 /// The `id` override of a model object, and its `v_value` override where it
-/// has one. Either one creates the object when the file doesn't have it.
+/// has one. Either one creates the object when the file doesn't have it,
+/// which only an optional one (`cloud.smol_model`) can be.
 fn apply_model_overrides(
     model: &mut Option<RawModel>,
     env: &EnvLookup<'_>,
@@ -1411,6 +1417,41 @@ impl<'a> Doc<'a> {
             .id
             .ok_or_else(|| self.err(child(key, "id"), "is required"))?;
         Ok((id, model.v_value))
+    }
+
+    /// The required keys of the `cloud` and `local.routing` the file has, as
+    /// written: `cloud.model` and its `id`, a `cloud.smol_model`'s `id`, and
+    /// `local.routing`'s `decisions_model` with its `id`, `router` and
+    /// `policy.preset`.
+    fn check_required(
+        &self,
+        cloud: Option<&RawCloud>,
+        routing: Option<&RawRouting>,
+    ) -> Result<(), ConfigError> {
+        let model = |model: Option<&RawModel>, key: &str| match model {
+            None => Err(self.err(key, "is required")),
+            Some(RawModel { id: None, .. }) => Err(self.err(child(key, "id"), "is required")),
+            Some(_) => Ok(()),
+        };
+        if let Some(cloud) = cloud {
+            model(cloud.model.as_ref(), "cloud.model")?;
+            if let Some(smol_model) = &cloud.smol_model {
+                model(Some(smol_model), "cloud.smol_model")?;
+            }
+        }
+        if let Some(routing) = routing {
+            model(
+                routing.decisions_model.as_ref(),
+                "local.routing.decisions_model",
+            )?;
+            if routing.router.is_none() {
+                return Err(self.err("local.routing.router", "is required"));
+            }
+            if routing.preset.is_none() {
+                return Err(self.err("local.routing.policy.preset", "is required"));
+            }
+        }
+        Ok(())
     }
 
     /// `cloud` with its required keys present.
@@ -2493,6 +2534,20 @@ pub(crate) mod tests {
                 json!({ "mode": "local", "cloud": cloud }),
             ),
             (
+                "local without routing",
+                json!({ "mode": "local", "local": {} }),
+            ),
+            ("cloud mode with a local.routing without router", {
+                let mut value = valid_local.clone();
+                value["mode"] = json!("cloud");
+                value["cloud"] = cloud.clone();
+                value["local"]["routing"]
+                    .as_object_mut()
+                    .expect("routing")
+                    .remove("router");
+                value
+            }),
+            (
                 "an empty cloud id",
                 with(valid_cloud.clone(), "/cloud/model/id", json!("")),
             ),
@@ -3319,41 +3374,46 @@ pub(crate) mod tests {
         }
     }
 
-    /// Env overrides may give the required keys of a section, so they are
-    /// checked only in the sections the command uses.
+    /// A section the file has needs its required keys for every command,
+    /// including one that uses neither section; which sections must be
+    /// there depends on the command.
     #[test]
-    fn required_keys_are_checked_only_in_the_sections_the_command_uses() {
+    fn required_keys_are_checked_in_every_section_the_file_has() {
+        for (path, key) in [
+            (
+                format!("{RT} decisions_model"),
+                "local.routing.decisions_model",
+            ),
+            (
+                format!("{RT} decisions_model id"),
+                "local.routing.decisions_model.id",
+            ),
+            (format!("{RT} router"), "local.routing.router"),
+            (format!("{RT} policy"), "local.routing.policy.preset"),
+            ("cloud model".to_owned(), "cloud.model"),
+            ("cloud model id".to_owned(), "cloud.model.id"),
+            ("cloud smol_model id".to_owned(), "cloud.smol_model.id"),
+        ] {
+            let mut doc = example();
+            remove(&mut doc, &path);
+            for command in [
+                run(Some(Mode::Cloud)),
+                run(Some(Mode::Local)),
+                START,
+                Command::Other,
+            ] {
+                assert_eq!(
+                    key_error(load_doc_for(&doc, command)),
+                    (key.to_owned(), "is required".to_owned()),
+                    "{path} {command:?}"
+                );
+            }
+        }
+        // Without the section, only a command that uses it fails.
         let mut doc = example();
-        remove(&mut doc, &format!("{RT} decisions_model"));
-        remove(&mut doc, &format!("{RT} router"));
-        remove(&mut doc, "cloud model");
-        load_doc_for(&doc, Command::Other).expect("neither section is used");
-        assert_eq!(
-            key_error(load_doc_for(&doc, run(Some(Mode::Cloud)))).0,
-            "cloud.model"
-        );
-        assert_eq!(
-            key_error(load_doc_for(&doc, run(Some(Mode::Local)))).0,
-            "local.routing.decisions_model"
-        );
-        // `local stop` and `local status` load a file whose routing gets its
-        // required keys from env vars they don't have.
-        let home = temp_home();
-        write_default(&home, &doc);
-        load(&home, opts(Command::Other)).expect("stop and status load");
-        let routing = load_env(
-            &home,
-            opts(START),
-            &[
-                ("RAYLINE_LOCAL_ROUTING_ROUTER", "local"),
-                ("RAYLINE_LOCAL_ROUTING_DECISIONS_MODEL_ID", "arc-sage-1.0"),
-            ],
-        )
-        .expect("start")
-        .routing
-        .expect("routing");
-        assert_eq!(routing.router, Router::Local);
-        assert_eq!(routing.decisions_model.id, "arc-sage-1.0");
+        remove(&mut doc, "cloud");
+        load_doc_for(&doc, Command::Other).expect("no `cloud`");
+        load_doc_for(&doc, run(Some(Mode::Local))).expect("local mode, no `cloud`");
     }
 
     #[test]
@@ -3946,62 +4006,77 @@ pub(crate) mod tests {
         assert_eq!(settings.update.channel, UpdateChannel::Main);
     }
 
+    /// An env override replaces a value the file has; it doesn't give a
+    /// required key the file lacks. It may give an optional one.
     #[test]
-    fn env_overrides_fill_keys_missing_from_the_file() {
+    fn env_overrides_do_not_give_missing_required_keys() {
+        let all = [
+            ("RAYLINE_CLOUD_MODEL_ID", "m"),
+            ("RAYLINE_LOCAL_ROUTING_ROUTER", "cloud"),
+            ("RAYLINE_LOCAL_ROUTING_DECISIONS_MODEL_ID", "arc-swift-1.0"),
+            (
+                "RAYLINE_LOCAL_ROUTING_POLICY_PRESET",
+                "arc-policy.prefer-local.v1",
+            ),
+        ];
+        for (path, key) in [
+            (
+                format!("{RT} decisions_model"),
+                "local.routing.decisions_model",
+            ),
+            (
+                format!("{RT} decisions_model id"),
+                "local.routing.decisions_model.id",
+            ),
+            (format!("{RT} router"), "local.routing.router"),
+            (format!("{RT} policy"), "local.routing.policy.preset"),
+            ("cloud model".to_owned(), "cloud.model"),
+        ] {
+            let home = temp_home();
+            let mut doc = example();
+            remove(&mut doc, &path);
+            write_default(&home, &doc);
+            for command in [run(Some(Mode::Cloud)), run(Some(Mode::Local)), START] {
+                assert_eq!(
+                    key_error(load_env(&home, opts(command), &all)),
+                    (key.to_owned(), "is required".to_owned()),
+                    "{path} {command:?}"
+                );
+            }
+        }
+        // A v_value alone gives the decisions model no id either.
         let home = temp_home();
         let mut doc = example();
-        remove(&mut doc, "mode");
-        remove(&mut doc, &format!("{RT} decisions_model"));
-        remove(&mut doc, &format!("{RT} router"));
-        remove(&mut doc, &format!("{RT} policy"));
-        remove(&mut doc, "cloud smol_model");
-        remove(&mut doc, "cloud model");
-        remove(&mut doc, "update");
-        set(&mut doc, "mode", json!("local"));
+        remove(&mut doc, &format!("{RT} decisions_model id"));
         write_default(&home, &doc);
-        let settings = load_env(
-            &home,
-            opts(run(None)),
-            &[
-                ("RAYLINE_LOCAL_ROUTING_ROUTER", "cloud"),
-                ("RAYLINE_LOCAL_ROUTING_DECISIONS_MODEL_ID", "arc-swift-1.0"),
-                (
-                    "RAYLINE_LOCAL_ROUTING_POLICY_PRESET",
-                    "arc-policy.prefer-local.v1",
-                ),
-                ("RAYLINE_UPDATE_CHANNEL", "dev"),
-            ],
-        )
-        .expect("load");
-        let routing = settings.routing.expect("routing");
-        assert_eq!(routing.router, Router::Cloud);
-        assert_eq!(routing.decisions_model.id, "arc-swift-1.0");
-        assert_eq!(routing.policy.preset, "arc-policy.prefer-local.v1");
-        assert_eq!(routing.policy.overrides, None);
-        assert_eq!(settings.update.channel, UpdateChannel::Dev);
-        // A v_value alone gives the decisions model no id.
         assert_eq!(
             key_error(load_env(
                 &home,
-                opts(run(None)),
-                &[
-                    ("RAYLINE_LOCAL_ROUTING_ROUTER", "cloud"),
-                    ("RAYLINE_LOCAL_ROUTING_DECISIONS_MODEL_V_VALUE", "1"),
-                    ("RAYLINE_LOCAL_ROUTING_POLICY_PRESET", "p"),
-                ],
+                opts(START),
+                &[("RAYLINE_LOCAL_ROUTING_DECISIONS_MODEL_V_VALUE", "1")],
             )),
             (
                 "local.routing.decisions_model.id".to_owned(),
                 "is required".to_owned()
             )
         );
-        let cloud_settings = load_env(
+        // Optional keys: `cloud.smol_model` and `update.channel`.
+        let home = temp_home();
+        let mut doc = example();
+        remove(&mut doc, "cloud smol_model");
+        remove(&mut doc, "update");
+        write_default(&home, &doc);
+        let settings = load_env(
             &home,
             opts(run(Some(Mode::Cloud))),
-            &[("RAYLINE_CLOUD_MODEL_ID", "m")],
+            &[
+                ("RAYLINE_CLOUD_SMOL_MODEL_ID", "s"),
+                ("RAYLINE_UPDATE_CHANNEL", "dev"),
+            ],
         )
         .expect("load");
-        assert_eq!(cloud_settings.cloud, Some(cloud("m", "m")));
+        assert_eq!(settings.cloud.expect("cloud").smol_model.id, "s");
+        assert_eq!(settings.update.channel, UpdateChannel::Dev);
     }
 
     #[test]
@@ -4320,7 +4395,14 @@ pub(crate) mod tests {
         ] {
             let home = temp_home();
             let file = write_default(&home, &doc);
-            load_said(&home, opts(Command::Other), &[]).0.expect("load");
+            let loaded = load_said(&home, opts(Command::Other), &[]).0;
+            if doc == json!({"routing": {}}) {
+                // Converted as it is: the empty `local.routing` then misses
+                // its required keys.
+                assert_eq!(key_error(loaded).0, "local.routing.decisions_model");
+            } else {
+                loaded.expect("load");
+            }
             let converted = parse_json(&fs::read_to_string(&file).expect("converted"))
                 .ok()
                 .expect("JSON");

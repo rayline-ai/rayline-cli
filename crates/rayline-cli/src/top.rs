@@ -212,7 +212,7 @@ const TOTALS: &[&str] = &[
     "completed_requests",
     "errored_requests",
     "local_requests",
-    "remote_requests",
+    "cloud_requests",
     "input_tokens",
     "output_tokens",
 ];
@@ -457,11 +457,11 @@ fn draw_top_summary(
         y,
         width,
         &format!(
-            "overall completed={}  errors={}  local={}  remote={}  input={}  output={}",
+            "overall completed={}  errors={}  local={}  cloud={}  input={}  output={}",
             totals_u64(totals, "completed_requests"),
             totals_u64(totals, "errored_requests"),
             totals_u64(totals, "local_requests"),
-            totals_u64(totals, "remote_requests"),
+            totals_u64(totals, "cloud_requests"),
             totals_u64(totals, "input_tokens"),
             totals_u64(totals, "output_tokens"),
         ),
@@ -652,7 +652,7 @@ fn top_table_header(width: u16) -> String {
 }
 
 fn top_table_row(row: &Value, width: u16) -> String {
-    let target = truncate_cell(top_target_cell(row), 8);
+    let target = truncate_cell(value_str(row, "target"), 8);
     let state = truncate_cell(value_str(row, "state"), 10);
     let output_tokens = count_cell(row, "output_tokens");
     let ttft = ms_cell(row, "ttft_ms");
@@ -703,7 +703,7 @@ fn format_top_snapshot(snapshot: &Value) -> String {
 
 fn format_top_row(row: &Value) -> String {
     let request_id = value_str(row, "request_id");
-    let target = top_target_cell(row);
+    let target = value_str(row, "target");
     let model = value_str(row, "executed_model");
     let state = value_str(row, "state");
     let ttft = ms_cell(row, "ttft_ms");
@@ -765,14 +765,6 @@ fn percent_cell(row: &Value, key: &str) -> String {
         .and_then(Value::as_f64)
         .map(|value| format!("{}%", format_compact_number(value * 100.0, 0)))
         .unwrap_or_else(|| "-".to_owned())
-}
-
-/// The row's execution target; the hosted router is shown as `cloud`.
-fn top_target_cell(row: &Value) -> &str {
-    match value_str(row, "target") {
-        "remote" => "cloud",
-        target => target,
-    }
 }
 
 /// The model that served the row, then the routing preset when there is one.
@@ -910,8 +902,8 @@ mod tests {
                     serde_json::json!({"runtime": "rayline-local", "instance_id": "test-core",
                         "pid": std::process::id(), "core_pid": std::process::id(),
                         "totals": {"completed_requests": 1, "errored_requests": 0, "local_requests": 0,
-                            "remote_requests": 1, "input_tokens": 0, "output_tokens": 12}, "active": [],
-                        "recent": [{"request_id": "hybrid_1", "target": "remote", "state": "completed",
+                            "cloud_requests": 1, "input_tokens": 0, "output_tokens": 12}, "active": [],
+                        "recent": [{"request_id": "hybrid_1", "target": "cloud", "state": "completed",
                             "executed_model": null, "requested_model": "virtual-model", "output_tokens": 12}]})
                 };
                 if !health_request {
@@ -962,7 +954,7 @@ mod tests {
                 "runtime": "rayline-local", "instance_id": "second-core",
                 "pid": std::process::id(), "core_pid": std::process::id(),
                 "totals": {"completed_requests": 0, "errored_requests": 0, "local_requests": 0,
-                    "remote_requests": 0, "input_tokens": 0, "output_tokens": 0},
+                    "cloud_requests": 0, "input_tokens": 0, "output_tokens": 0},
                 "active": [], "recent": []}}),
         )
         .await;
@@ -1011,7 +1003,7 @@ mod tests {
         assert_eq!(snapshot["runtime"], "rayline-local");
         assert_eq!(snapshot["recent"][0]["executed_model"], Value::Null);
         assert_eq!(snapshot["recent"][0]["output_tokens"], 12);
-        assert_eq!(top_target_cell(&snapshot["recent"][0]), "cloud");
+        assert_eq!(value_str(&snapshot["recent"][0], "target"), "cloud");
         assert!(!top_model_cell(&snapshot["recent"][0]).contains("virtual-model"));
 
         fs::write(
@@ -1162,7 +1154,7 @@ mod tests {
     #[tokio::test]
     async fn malformed_snapshots_are_errors_never_panics() {
         let totals = serde_json::json!({"completed_requests": 0, "errored_requests": 0,
-            "local_requests": 0, "remote_requests": 0, "input_tokens": 0, "output_tokens": 0});
+            "local_requests": 0, "cloud_requests": 0, "input_tokens": 0, "output_tokens": 0});
         let valid = serde_json::json!({"runtime": "rayline-local", "pid": std::process::id(),
             "core_pid": std::process::id(), "instance_id": "test-core",
             "active": [], "recent": [], "totals": totals});
@@ -1335,9 +1327,9 @@ mod tests {
     #[test]
     fn top_row_color_highlights_local_requests() {
         let local = serde_json::json!({ "target": "local" });
-        let remote = serde_json::json!({ "target": "remote" });
+        let cloud = serde_json::json!({ "target": "cloud" });
 
         assert_eq!(top_row_color(&local), Some(Color::DarkCyan));
-        assert_eq!(top_row_color(&remote), None);
+        assert_eq!(top_row_color(&cloud), None);
     }
 }

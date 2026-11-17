@@ -216,8 +216,8 @@ One file: `~/.config/rayline/settings.json`. `--config <file>` takes a file of t
 | `environments` | object (section 5.5) | no | Internal environments. |
 | `update` | object (section 5.6) | no | The release channel. |
 
-1. A file may hold both `cloud` and `local`. The section a command uses must be present and complete; the other may be absent. `rayline local start` reads `local` whatever `mode` says.
-2. The whole file is validated at load, including the section the command doesn't use: an unknown key or a wrong value anywhere is a load error (section 5.8).
+1. A file may hold both `cloud` and `local`. The section a command uses must be present; the other may be absent. A section the file has must be complete, whichever command reads it. `rayline local start` reads `local` whatever `mode` says.
+2. The whole file is validated at load, including the section the command doesn't use: an unknown key, a wrong value or a missing required key anywhere is a load error (section 5.8).
 3. When `~/.config/rayline/settings.json` doesn't exist, a command that reads it writes the default file (example 1) and prints to stderr ``Created <file> with the default settings (`mode` `cloud`)``. Every command reads it, `auth`, `top`, `update`, `local status` and `local stop` included, except `--version`, `--help`, a usage error and a command with `--config <file>`. A default file with no `mode` is converted the same way (section 5.9).
 4. `settings.json` has no `$schema` key. `schema/settings.schema.json` (JSON Schema draft 2020-12) describes the shape for readers and tests. Rayline doesn't read it: load is the only validator.
 
@@ -511,7 +511,7 @@ Each scalar key Rayline defines can be overridden by one env var named `RAYLINE_
 
 1. Precedence, lowest to highest: built-in defaults, the config file, env overrides, flags.
 2. An override value is validated like the file value; an invalid one is a load error.
-3. An override applies to the section a command uses. One for a section the file lacks is a load error for a command that uses that section (section 5.8 item 7), and is not read by one that doesn't.
+3. An override applies to the section a command uses. It replaces a value the file has; it never gives a required key the file lacks (section 5.8 item 5), though it may give an optional one (`cloud.smol_model.id`, `local.routing.decisions_model.v_value`, `local.routing.classifier_model`, `update.channel`). One for a section the file lacks is a load error for a command that uses that section (section 5.8 item 7), and is not read by one that doesn't.
 4. Whole entries (`local.inference.endpoints.*`, `local.inference.models.*`, `environments.*`, `local.routing.arc_release`) and ARC's `policy.overrides` have no env override. Put them in a file and pass it with `--config`.
 5. An env var named from a 0.5 key path (`RAYLINE_ROUTING_*`) is not read. No other `RAYLINE_*` env var changes Rayline's behaviour (section 7).
 
@@ -523,7 +523,7 @@ Load refuses, naming the key:
 2. A wrong type, an empty string, or a value out of range.
 3. In a local-mode run, a `local.inference.endpoints` entry that doesn't list the protocol of the harness being run. Cloud mode doesn't use endpoints, and `rayline local start` has no harness, so neither checks this.
 4. A `local.inference.models` entry whose `endpoint` is not in `local.inference.endpoints`.
-5. A file without `mode`, unless it is the default file in the 0.5 shape (section 5.9). A cloud-mode run without `cloud`, or `cloud` missing `model`. Local mode or `rayline local start` without `local` or `local.routing`, or `local.routing` missing a required key. When the file has no `local` section, the error prints one to paste (`routing` with `router` `cloud`, `decisions_model` `{ "id": "arc-swift-1.0" }` and `policy.preset` `arc-policy.prefer-local.v1`), says to add `classifier_model` to run Claude Code, and ends ``See https://docs.rayline.ai/rayline-cli/local-mode``. These are checked in the section the command uses; `auth`, `top`, `update`, `local status` and `local stop` use neither.
+5. A file without `mode`, unless it is the default file in the 0.5 shape (section 5.9). A cloud-mode run without `cloud`. Local mode or `rayline local start` without `local` or `local.routing`. When the file has no `local` section, the error prints one to paste (`routing` with `router` `cloud`, `decisions_model` `{ "id": "arc-swift-1.0" }` and `policy.preset` `arc-policy.prefer-local.v1`), says to add `classifier_model` to run Claude Code, and ends ``See https://docs.rayline.ai/rayline-cli/local-mode``. Which sections must be present depends on the command; `auth`, `top`, `update`, `local status` and `local stop` need neither. A section the file has missing a required key in the file, for every command: `cloud` without `model` or `model.id`, a `cloud.smol_model` without `id`, a `local.routing` without `router`, `decisions_model`, `decisions_model.id` or `policy.preset`. An env override doesn't give a missing required key.
 6. `--env <name>` with no `environments.<name>` entry. `prod` gets no special case.
 7. An env override for a section the file lacks, for a command that uses that section: `RAYLINE_CLOUD_*` without `cloud`, and `RAYLINE_LOCAL_ROUTING_*` without `local.routing`. `rayline local start --router <cloud|local>` with no `local.routing`, and a local-mode `rayline run <harness>` with no `local.routing` while a local process started from those defaults runs, are the exceptions: the overrides apply to the built-in defaults (section 3.3 item 11).
 8. A `--config <file>` that doesn't exist. Only the default file is optional.

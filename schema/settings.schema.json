@@ -43,6 +43,7 @@
     },
     "local": {
       "type": "object",
+      "required": ["routing"],
       "additionalProperties": false,
       "properties": {
         "inference": { "$ref": "#/$defs/inference" },

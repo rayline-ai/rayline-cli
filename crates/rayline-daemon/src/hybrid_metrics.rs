@@ -236,7 +236,7 @@ impl RoutingMetadata {
         // A receipt whose candidates don't all run in one place has no target.
         let target = kind.map(|kind| match kind {
             DeploymentKind::Local => "local",
-            DeploymentKind::Cloud => "remote",
+            DeploymentKind::Cloud => "cloud",
         });
         let route_id = header(headers, "x-rayline-route-id");
         let event = header(headers, "x-rayline-event");
@@ -333,7 +333,7 @@ impl RequestObservation {
         self.metrics.record(MetricsUpdate::RouteDecided {
             request_id: self.id.clone(),
             route_id: None,
-            target: Some("remote".to_owned()),
+            target: Some("cloud".to_owned()),
             endpoint_id: None,
             requested_model: None,
             policy: Some("classifier cloud pin".to_owned()),
@@ -536,13 +536,13 @@ mod tests {
             let snapshot = metrics.snapshot();
             assert!(snapshot.recent[0].target.is_none(), "{config}");
             assert!(snapshot.recent[0].endpoint_id.is_none());
-            assert_eq!(snapshot.totals.remote_requests, 0);
+            assert_eq!(snapshot.totals.cloud_requests, 0);
             assert_eq!(snapshot.totals.local_requests, 0);
         }
     }
 
     #[test]
-    fn a_cloud_model_over_several_protocols_counts_as_remote_without_an_endpoint() {
+    fn a_cloud_model_over_several_protocols_counts_as_cloud_without_an_endpoint() {
         let metadata = RoutingMetadata::from_config(&json!({
             "deployments": [
                 {"id":"m-messages","kind":"cloud","wire_model":"m"},
@@ -568,9 +568,9 @@ mod tests {
         metadata.record(&observation, &headers, "instance");
         observation.finish(200, None);
         let snapshot = metrics.snapshot();
-        assert_eq!(snapshot.recent[0].target.as_deref(), Some("remote"));
+        assert_eq!(snapshot.recent[0].target.as_deref(), Some("cloud"));
         assert!(snapshot.recent[0].endpoint_id.is_none());
-        assert_eq!(snapshot.totals.remote_requests, 1);
+        assert_eq!(snapshot.totals.cloud_requests, 1);
     }
 
     #[test]

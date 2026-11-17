@@ -368,8 +368,9 @@ error that names the key. It refuses:
    `rayline local start` runs no harness, so neither checks this.
 4. A model whose `endpoint` isn't in `local.inference.endpoints`.
 5. Local mode without `local.routing`, or a `local.routing` section that is
-   missing a required key. When the file has no `local` section, the error
-   prints one to paste, with the cloud router.
+   missing a required key, whatever the mode. An env override doesn't give a
+   missing key. When the file has no `local` section, the error prints one
+   to paste, with the cloud router.
 6. A `local.routing` env override when the config file has no `local.routing`
    section.
 7. A `decisions_model.v_value`, or a `decisions_model.id` other than
