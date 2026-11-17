@@ -141,7 +141,7 @@ pub struct Routing {
     pub policy: Policy,
     pub router: Router,
     pub arc_release: Option<ArcRelease>,
-    /// The file has no `routing`: this is the `--router local` defaults.
+    /// The file has no `routing`: this is the `--router` defaults.
     pub defaults: bool,
 }
 
@@ -266,7 +266,7 @@ pub struct LoadOptions<'a> {
     pub routing_defaults: Option<Router>,
 }
 
-/// `rayline local start --router local` with no `routing` in the file:
+/// `rayline local start --router` with no `routing` in the file:
 /// the routing it starts with.
 pub const DEFAULT_DECISIONS_MODEL: &str = "arc-swift-1.0";
 pub const DEFAULT_POLICY_PRESET: &str = "arc-policy.prefer-local.v1";
