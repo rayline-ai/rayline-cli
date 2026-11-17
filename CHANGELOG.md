@@ -14,7 +14,9 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   ([#347](https://github.com/rayline-ai/rayline-cli/pull/347)).
 - `rayline update --version 0.5.5` takes a version without its build label
   and reads the full version from that release's signed version file. A
-  version that doesn't exist fails with `release <version> does not exist`.
+  version that doesn't exist fails with `release <version> does not exist`,
+  and one whose release names another version fails with
+  `release <version> names version <full>`.
 - `rayline run --help` lists `--local`, `--config`, `--isolated`, the Codex
   subcommands and where harness arguments go. `rayline update --help` gets a
   summary, a `--help` row and a note on Homebrew and Rayline.app installs.
@@ -25,7 +27,7 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   continues ARC's encode from what it shares with an earlier one: the tool
   definitions, the system prompt and everything else before its first
   message. For Claude Code on Apple M-series, a new conversation's first
-  decision takes about 1.2 s instead of about 2 s
+  decision takes about 1.3 s instead of about 2 s
   ([#342](https://github.com/rayline-ai/rayline-cli/pull/342),
   [#346](https://github.com/rayline-ai/rayline-cli/pull/346)).
 - `rayline run <harness>` with only `--help`, `-h`, `--version` or `-v` runs
@@ -47,8 +49,8 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 
 ### Fixed
 
-- In local mode, a Codex or Hermes turn on a Claude model that thinks before
-  it calls a tool now completes
+- In local mode with hosted decisions, a Codex or Hermes turn on a Claude
+  model that thinks before it calls a tool now completes
   ([#345](https://github.com/rayline-ai/rayline-cli/pull/345)).
 
 ### Docs
@@ -66,7 +68,7 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 
 - The first `local` decision of each new conversation still encodes what
   follows the shared part again. For Claude Code on Apple M-series that is
-  about 1.2 s, and about 2 s for the first conversation since the local
+  about 1.3 s, and about 2 s for the first conversation since the local
   process started. Later turns take about 0.1 s.
 - On Windows, every `local` start hashes the ARC files again; macOS and Linux
   skip files unchanged since they were last checked.
