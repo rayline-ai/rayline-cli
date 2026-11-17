@@ -10,7 +10,7 @@
 //!
 //! The gateway therefore sends a classifier request straight to Rayline Platform:
 //! the Decisions router's `/v1/messages`, with the Decisions credential and
-//! `routing.classifier_model` (passed as `--classifier-model`) as the model.
+//! `local.routing.classifier_model` (passed as `--classifier-model`) as the model.
 
 use bytes::Bytes;
 use serde_json::Value;

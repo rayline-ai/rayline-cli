@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 # Acceptance matrix: real turns per harness x config profile x case.
 #   profiles: config files, each passed as `rayline run <harness> --config
-#             <file>`. A file with a `routing` section runs in local mode,
-#             one without runs in cloud mode. Default: the committed profiles
-#             in scripts/acceptance/profiles/ (cloud; local with the hosted
-#             router and ARC Swift decisions; local with the hosted router
-#             and ARC Sage decisions; local with the local router). ARC picks
-#             the model of every turn, so local cells also report the models
-#             that executed.
+#             <file>`, which runs in the file's `mode`. Default: the
+#             committed profiles in scripts/acceptance/profiles/ (cloud;
+#             local with the cloud router and ARC Swift decisions; local with
+#             the cloud router and ARC Sage decisions; local with the local
+#             router). ARC picks the model of every turn, so local cells also
+#             report the models that executed.
 #   cases:    plain  one turn, a fixed answer
 #             tool   the model must read a file and add
 #             heavy  an MCP tool set whose schemas carry top-level oneOf/anyOf/
@@ -371,8 +370,8 @@ done
 if [ -n "$PROFILES" ]; then
   read -r -a profile_files <<<"$PROFILES"
 else
-  profile_files=("$PROFILE_DIR/cloud.json" "$PROFILE_DIR/local-hosted-arc-swift.json"
-    "$PROFILE_DIR/local-hosted-arc-sage.json" "$PROFILE_DIR/local-router-local.json")
+  profile_files=("$PROFILE_DIR/cloud.json" "$PROFILE_DIR/local-cloud-arc-swift.json"
+    "$PROFILE_DIR/local-cloud-arc-sage.json" "$PROFILE_DIR/local-router-local.json")
 fi
 read -r -a cases <<<"$CASES"
 [ ${#profile_files[@]} -gt 0 ] || { echo "PROFILES is empty" >&2; usage; }
@@ -388,9 +387,8 @@ installed python3 || { echo "python3 is needed (MCP tool server, session ids)" >
 case $RAYLINE in
   */*) RAYLINE=$(cd "$(dirname "$RAYLINE")" && pwd)/$(basename "$RAYLINE") || exit 2 ;;
 esac
-# Each profile's name is its file name without `.json`, and its mode follows
-# `rayline run --config`: local when the file has a `routing` section, cloud
-# when it doesn't.
+# Each profile's name is its file name without `.json`, and its mode is the
+# file's `mode`, as `rayline run --config` reads it.
 profile_names=()
 profile_modes=()
 for i in "${!profile_files[@]}"; do
@@ -405,7 +403,10 @@ for i in "${!profile_files[@]}"; do
     open my $fh, "<", $file or die "profile $file: $!\n";
     my $config = eval { JSON::PP->new->decode(do { local $/; <$fh> }) };
     ref $config eq "HASH" or die "profile $file: not a JSON object\n";
-    print exists $config->{routing} ? "local" : "cloud";
+    my $mode = $config->{mode} // "";
+    $mode eq "cloud" || $mode eq "local"
+      or die "profile $file: `mode` must be `cloud` or `local`\n";
+    print $mode;
   ' "$file") || exit 2
   profile_names+=("$name")
   profile_modes+=("$kind")

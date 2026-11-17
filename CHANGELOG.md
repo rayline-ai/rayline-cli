@@ -13,6 +13,53 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   `unelevated`, which needs no admin setup. Before, Codex had no sandbox
   setting there and rejected every command as "blocked by policy". A value
   already in the Rayline Codex home is kept.
+- **`settings.json` has a new shape (breaking).** It holds a required `mode`
+  (`cloud` or `local`), a `cloud` section with the two models a cloud-mode run
+  uses, and a `local` section with `inference` (`endpoints`, `models`) and
+  `routing`. The cloud models (ARC Sage and ARC Swift by default) come from
+  `cloud.model` and `cloud.smol_model` instead of from Rayline. When the file
+  doesn't exist, Rayline writes the default file and says so. Rayline checks
+  the whole file, including the section a run doesn't use: a section the file
+  has needs its required keys, and an env override doesn't give a missing
+  one. See [Getting started](docs/getting-started.md#settings) and
+  [Local mode](docs/local-mode.md).
+- A `~/.config/rayline/settings.json` from an earlier release (one with no
+  `mode`) is converted the first time a command reads it, and the original
+  is kept as `settings.json.bak`. A `--config` file with no `mode` is an
+  error and isn't converted.
+- **`rayline run <harness> --local` is replaced by `--mode local` (breaking),**
+  or `"mode": "local"` in the file. `--mode` and `--config` combine, and a
+  `--config` file runs in its own `mode`. `rayline run --help` and the
+  messages that say how to start a local process name `--mode local`.
+- **`router` `hosted` is now `cloud` (breaking)** in `local.routing.router`,
+  `rayline local start --router`, `rayline top` and `rayline local status
+  --json`. `local.routing.router` is required. `rayline local start --router
+  cloud` with no `local.routing` uses the defaults `--router hosted` used, and
+  the `rayline local start` errors end with `rayline local start --router
+  cloud`. Stop the local process (`rayline local stop`) before updating from
+  an earlier release: this version can't read the record of an earlier
+  release's process started with router `hosted`.
+- Local mode with no `local` section is an error that says `local` is
+  required and links the local mode docs. It no longer prints a
+  `settings.json` to paste.
+- Every `rayline run pi` and `rayline run omp` sets the models from the
+  config: pi's `defaultProvider` and `defaultModel`, and omp's `modelRoles`
+  `default`, `smol`, `slow` and `plan`, so a changed `cloud.model` reaches a
+  pi or omp that has run before. Every other setting in pi's `settings.json`
+  and omp's `config.yml` stays as the harness wrote it. A model picked in pi
+  or omp is replaced at the next launch.
+- `rayline top` says `cloud` instead of `remote`: `target` `cloud` and
+  `totals.cloud_requests` in `--json`, and `cloud=` in the live view's
+  totals.
+- Rayline doesn't check `cloud.model.id` or `cloud.smol_model.id`; the API
+  validates them when the model is called. An id the key's model listing
+  doesn't have goes into the opencode, pi, omp, OpenClaw and Hermes configs
+  with no limits, and the harness uses its own defaults.
+- `local.routing.decisions_model` is an object, `{ "id": "arc-swift-1.0" }`.
+  With `router` `cloud` it can carry a `v_value`.
+- The env overrides follow the new key paths: `RAYLINE_MODE`,
+  `RAYLINE_CLOUD_MODEL_ID`, `RAYLINE_CLOUD_SMOL_MODEL_ID` and
+  `RAYLINE_LOCAL_ROUTING_*`. `RAYLINE_ROUTING_*` is no longer read.
 
 ## 0.5.5 (2026-11-17)
 

@@ -15,7 +15,7 @@ use std::process::{Command, Stdio};
 
 use serde_json::json;
 
-use super::{Plan, RenderContext, yaml_file};
+use super::{Plan, RenderContext, merged_file, to_yaml, yaml_file, yaml_merge};
 
 pub(crate) const PROVIDER_ID: &str = "rayline";
 /// First omp that sends `X-Claude-Code-Session-Id` in `auth: apiKey` mode.
@@ -66,7 +66,15 @@ pub(super) fn parse_version(text: &str) -> Option<(u64, u64, u64)> {
         })
 }
 
-pub(crate) fn plan(ctx: &RenderContext<'_>) -> Plan {
+/// The `config.yml` keys Rayline sets on every launch.
+const ROLES: &[&[&str]] = &[
+    &["modelRoles", "default"],
+    &["modelRoles", "smol"],
+    &["modelRoles", "slow"],
+    &["modelRoles", "plan"],
+];
+
+pub(crate) fn plan(ctx: &RenderContext<'_>) -> Result<Plan, String> {
     let launch = &ctx.models;
     let entries: Vec<_> = launch
         .offered
@@ -75,13 +83,10 @@ pub(crate) fn plan(ctx: &RenderContext<'_>) -> Plan {
             let hosted_arc = model.product.is_some();
             let mut entry = json!({
                 "id": model.id,
-                "name": model.display_name,
                 // ARC owns reasoning effort; do not expose omp thinking controls.
-                "reasoning": !hosted_arc,
-                "input": model.input_modalities,
-                "contextWindow": model.context_window,
-                "maxTokens": model.max_output_tokens
+                "reasoning": !hosted_arc
             });
+            super::add_details(&mut entry, model);
             // USD / million tokens, from the router's price card. A model
             // without a row there (hybrid's virtual model) shows no cost.
             if let Some(price) = model.price {
@@ -108,29 +113,27 @@ pub(crate) fn plan(ctx: &RenderContext<'_>) -> Plan {
             }
         }
     });
-    // omp writes its settings to config.yml, so only seed it. `smol` is its
-    // small/fast role (side calls, quick subagent work): ARC Swift.
-    let config = |main: &str, smol: &str| {
-        let main = format!("{PROVIDER_ID}/{main}");
-        json!({
-            "modelRoles": {
-                "default": main,
-                "smol": format!("{PROVIDER_ID}/{smol}"),
-                "slow": main,
-                "plan": main
-            }
-        })
-    };
-    let config_file = yaml_file(
-        "config.yml",
-        &config(&launch.main, &launch.background),
-        false,
-    );
-    Plan {
-        files: vec![yaml_file("models.yml", &models, true), config_file],
+    // omp also saves its own settings to config.yml, so each launch sets only
+    // Rayline's roles ([`ROLES`]) there and keeps every other line as omp
+    // wrote it. `smol` is omp's small/fast role (side calls, quick subagent
+    // work).
+    let main = format!("{PROVIDER_ID}/{}", launch.main);
+    let config = json!({
+        "modelRoles": {
+            "default": main,
+            "smol": format!("{PROVIDER_ID}/{}", launch.background),
+            "slow": main,
+            "plan": main
+        }
+    });
+    let config_file = merged_file(ctx.config_dir, "config.yml", to_yaml(&config), |existing| {
+        yaml_merge::merge(existing, &config, ROLES)
+    })?;
+    Ok(Plan {
+        files: vec![yaml_file("models.yml", &models), config_file],
         env_set: vec![("PI_CODING_AGENT_DIR", ctx.config_dir.as_os_str().to_owned())],
         env_remove: vec!["CLAUDE_CONFIG_DIR", "OMP_PROFILE", "PI_PROFILE"],
-    }
+    })
 }
 
 #[cfg(test)]
@@ -155,10 +158,58 @@ mod tests {
     }
 
     #[test]
+    fn each_launch_sets_rayline_s_roles_and_keeps_omp_s_settings() {
+        let dir = super::super::tests::temp_dir("omp-saved");
+        let ctx = super::super::tests::render_context(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = dir.join("config.yml");
+        // As omp writes it (Bun's YAML.stringify), with roles picked in omp.
+        let saved = "\
+lastChangelogVersion: 18.21.0
+modelRoles:
+  default: other/model-a
+  commit: other/model-b
+  smol: rayline/rayline-router
+theme:
+  dark: titanium
+enabledModels:
+  - rayline/arc-sage-1.0
+  - a:b
+disabledExtensions: []
+note: \"line one\\nline two\"
+";
+        std::fs::write(&config, saved).unwrap();
+        super::super::write_files(&dir, &super::plan(&ctx).unwrap().files).unwrap();
+        let expected = "\
+lastChangelogVersion: 18.21.0
+modelRoles:
+  default: \"rayline/arc-sage-1.0\"
+  commit: other/model-b
+  smol: \"rayline/arc-swift-1.0\"
+  slow: \"rayline/arc-sage-1.0\"
+  plan: \"rayline/arc-sage-1.0\"
+theme:
+  dark: titanium
+enabledModels:
+  - rayline/arc-sage-1.0
+  - a:b
+disabledExtensions: []
+note: \"line one\\nline two\"
+";
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), expected);
+
+        // A file the merge cannot split is refused, not rewritten.
+        std::fs::write(&config, "theme: {dark: titanium}\n").unwrap();
+        let error = super::plan(&ctx).unwrap_err();
+        assert!(error.starts_with("cannot update "), "{error}");
+        assert!(error.contains("config.yml"), "{error}");
+    }
+
+    #[test]
     fn hosted_picker_excludes_legacy_but_hybrid_keeps_its_virtual_model() {
         let dir = super::super::tests::temp_dir("omp-model-roster");
         let mut ctx = super::super::tests::render_context(&dir);
-        let hosted = super::plan(&ctx);
+        let hosted = super::plan(&ctx).unwrap();
         assert!(!hosted.files[0].contents.contains("id: \"rayline-auto\""));
         let capabilities = rayline_local_router::ModelCapabilities {
             context_window: 16384,
@@ -167,7 +218,7 @@ mod tests {
         };
         ctx.capabilities = Some(&capabilities);
         ctx.models = super::super::LaunchModels::hybrid(&capabilities);
-        let hybrid = super::plan(&ctx);
+        let hybrid = super::plan(&ctx).unwrap();
         assert!(hybrid.files[0].contents.contains("id: \"rayline-auto\""));
         assert!(!hybrid.files[0].contents.contains("id: \"arc-sage-1.0\""));
     }
