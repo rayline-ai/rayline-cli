@@ -159,6 +159,8 @@ rayline update --check
 
 Its options are **kept for review** (section 9). The channel comes from `update.channel` (section 5.6).
 
+With no `--version` or `--force`, when the running version is newer than the channel's latest release, `rayline update` and `rayline update --check` replace nothing, exit 0 and print ``Already up to date: <version> is newer than the latest <channel> release (<latest>). To install that release instead, run: rayline update --version <latest>``, where `<version>` is the running version without its build label and `<latest>` is the release's full version. When the running version is the latest, they print ``Already on latest (<version>).``
+
 `rayline update` installs the ARC encoder (section 5.4 item 2) only when `~/.rayline/arc/` already holds one: it then downloads the new version's encoder files into `~/.rayline/arc/<version>/`, each checked against the release's signed `SHA256SUMS`, and after a successful update, while no local process runs, removes every other version directory in `~/.rayline/arc/` (a running local process restarts its encoder from its own). Otherwise it downloads no encoder. Downloads stream to disk; one fails when connecting takes over 30 seconds or no data arrives for 60 seconds.
 
 `rayline update` refuses Homebrew and Rayline.app installs: with any of its options (`--check`, `--version`, `--force`, `--dry-run`), it replaces nothing and exits 0. When the binary it would replace is inside a `.app` bundle, it prints ``rayline is managed by Rayline.app. Update the app to update the CLI:`` and, on the next line, ``re-download from https://get.rayline.ai``. When that binary is under `brew --prefix` (with `brew` on `PATH`), it prints ``Installed via Homebrew. Run `brew upgrade rayline` to update.``
