@@ -3,6 +3,17 @@
 User-facing changes in each Rayline release. Install commands and signed
 assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock/releases).
 
+## Unreleased
+
+### Changed
+
+- **`rayline run codex` and `rayline run codex app` on Windows can run shell
+  commands.** The Codex config Rayline writes now has a `[windows] sandbox`
+  setting: yours from `~/.codex/config.toml` when you set one, else
+  `unelevated`, which needs no admin setup. Before, Codex had no sandbox
+  setting there and rejected every command as "blocked by policy". A value
+  already in the Rayline Codex home is kept.
+
 ## 0.5.4 (2026-11-17)
 
 ### Added
@@ -27,12 +38,6 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 
 ### Changed
 
-- **`rayline run codex` and `rayline run codex app` on Windows can run shell
-  commands.** The Codex config Rayline writes now has a `[windows] sandbox`
-  setting: yours from `~/.codex/config.toml` when you set one, else
-  `unelevated`, which needs no admin setup. Before, Codex had no sandbox
-  setting there and rejected every command as "blocked by policy". A value
-  already in the Rayline Codex home is kept.
 - **Installing and updating Rayline no longer download the ARC encoder.** The
   installers fetch only `rayline`, `rayline-core` and `rayline-core-LICENSE`.
   The first `rayline local start` (or `rayline run ... --local` that starts
