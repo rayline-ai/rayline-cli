@@ -3,7 +3,7 @@
 User-facing changes in each Rayline release. Install commands and signed
 assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock/releases).
 
-## 0.5.6 (2026-11-17)
+## Unreleased
 
 ### Changed
 
@@ -13,6 +13,11 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   the session first: if the router can't be reached, you stay logged in and
   can run it again. If the router says the session is already invalid,
   logout still signs you out locally and reports it.
+
+## 0.5.6 (2026-11-17)
+
+### Changed
+
 - **`settings.json` has a new shape (breaking).** It holds a required `mode`
   (`cloud` or `local`), a `cloud` section with the two models a cloud-mode run
   uses, and a `local` section with `inference` (`endpoints`, `models`) and
