@@ -96,12 +96,17 @@ fn relative_l2(a: &[f32], b: &[f32]) -> f64 {
     (diff / norm).sqrt()
 }
 
-/// The largest relative L2 between matching rows.
+/// The largest relative L2 between matching rows. A row that isn't finite
+/// fails.
 fn worst(a: &[Vec<f32>], b: &[Vec<f32>]) -> f64 {
     assert_eq!(a.len(), b.len());
     a.iter()
         .zip(b)
-        .map(|(x, y)| relative_l2(x, y))
+        .map(|(x, y)| {
+            let error = relative_l2(x, y);
+            assert!(error.is_finite(), "a row's error is {error}");
+            error
+        })
         .fold(0.0, f64::max)
 }
 
@@ -393,7 +398,14 @@ pub async fn run() {
             .floats
             .iter()
             .zip(&full.floats)
-            .map(|((path, x), (_, y))| (path.as_str(), (x - y).abs() / y.abs().max(1e-9)))
+            .map(|((path, x), (_, y))| {
+                let difference = (x - y).abs() / y.abs().max(1e-9);
+                assert!(
+                    difference.is_finite(),
+                    "{preset}: {path} differs by {difference}"
+                );
+                (path.as_str(), difference)
+            })
             .fold(("", 0.0), |a, b| if b.1 > a.1 { b } else { a });
         println!(
             "decision {preset}: {} tokens restored, rows worst relative L2 {rows:.3e}, \
