@@ -384,7 +384,7 @@ Rayline Platform (prod) is built in and has no entry. It serves every protocol a
    | Hermes | `model.default` | not used |
    | OpenClaw | `agents.defaults.model.primary` | not used |
 
-5. Every launch, in either mode, sets these. pi's `settings.json` and omp's `config.yml` also hold settings the harness saves itself, so in those two files a launch sets only Rayline's keys (pi `defaultProvider` and `defaultModel`; omp `modelRoles` `default`, `smol`, `slow` and `plan`) and keeps every other entry as the harness wrote it. A model picked in pi or omp is replaced at the next launch. A file Rayline can't update that way (invalid JSON, or YAML other than what omp writes, such as a non-empty flow collection or an anchor) is an error that names the file, and Rayline leaves it unchanged.
+5. Every launch, in either mode, sets these. pi's `settings.json` and omp's `config.yml` also hold settings the harness saves itself, so in those two files a launch sets only Rayline's keys (pi `defaultProvider` and `defaultModel`; omp `modelRoles` `default`, `smol`, `slow` and `plan`) and keeps every other entry as the harness wrote it. A model picked in pi or omp is replaced at the next launch. A file Rayline can't update that way (invalid JSON, or YAML laid out other than omp writes it, such as a non-empty flow collection or an anchor) is an error that names the file, and Rayline leaves it unchanged. Rayline doesn't otherwise check that `config.yml` is valid YAML: an invalid escape in a quoted value, for example, is kept as written.
 
 ### 5.2 `local.inference.endpoints`
 
