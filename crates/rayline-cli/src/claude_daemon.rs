@@ -63,9 +63,7 @@ pub struct LaunchRecord<'a> {
 
 impl LaunchPreflight<'_> {
     pub fn resolve(self) -> Result<PreflightOutcome, RunError> {
-        let state = if crate::claude::claude_agent_view_disabled()
-            || crate::claude::starts_no_session(self.request.args)
-        {
+        let state = if crate::claude::claude_agent_view_disabled() {
             None
         } else {
             inspect_running_daemon(self.config_dir, pid_is_alive).map_err(RunError::DaemonProbe)?
