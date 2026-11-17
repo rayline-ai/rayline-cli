@@ -52,6 +52,8 @@ pub(crate) const RAYLINE_ENV_NAME_ENV: &str = "RAYLINE_ENV_NAME";
 pub struct RunRequest {
     /// The hosted environment the loaded config selects.
     pub hosted: crate::status::HostedEnvironment,
+    /// `cloud`: the models the launch gives the harness.
+    pub cloud: crate::config::Cloud,
     pub args: Vec<OsString>,
     /// Run against an isolated Claude config dir (`~/.rayline/harness/claude-code`) so this
     /// session can start its own background-agents supervisor alongside a
@@ -161,9 +163,9 @@ async fn run_command_from_home(
     let router_url = hosted.base_url.clone();
     let key = crate::status::router_key(hosted, home).await?;
 
-    // A hosted launch's ARC models are the ids the router lists for the key,
-    // which follow the account's data mode.
-    let hosted_models = crate::harness::fetch_hosted_models(&router_url, &key)
+    // A cloud-mode launch runs the ids `cloud` names, at the limits the
+    // router lists for the key.
+    let hosted_models = crate::harness::fetch_hosted_models(&router_url, &key, &request.cloud)
         .await
         .map_err(RunError::Router)?;
     let model = hosted_models.main.clone();
@@ -730,6 +732,7 @@ connection: close
                 base_url: router_url.clone(),
                 login_url: "http://127.0.0.1:9/cli-auth".to_owned(),
             },
+            cloud: crate::harness::tests::cloud(None),
             args: Vec::new(),
             isolated: false,
         };
@@ -1250,9 +1253,11 @@ mod arc_default_tests {
     /// `(subagent model, force, haiku model)` for a key's data mode (`None`:
     /// standard).
     fn roles(mode: Option<&str>) -> (Option<String>, Option<String>, Option<String>) {
-        let models =
-            crate::harness::LaunchModels::from_listing(&crate::harness::tests::listing(mode))
-                .unwrap();
+        let models = crate::harness::LaunchModels::from_listing(
+            &crate::harness::tests::listing(mode),
+            &crate::harness::tests::cloud(mode),
+        )
+        .unwrap();
         let switches = role_model_env_switches(&models);
         let value = |key: &str| {
             switches

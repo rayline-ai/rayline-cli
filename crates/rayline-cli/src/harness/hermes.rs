@@ -18,14 +18,14 @@
 //! then ignore it, so declaring it never fails a launch.
 //!
 //! Hermes sends a session key on both wires (the header on Messages,
-//! `prompt_cache_key` on Responses). Under `rayline run <harness> --local`
+//! `prompt_cache_key` on Responses). Under a local-mode `rayline run <harness>`
 //! only Responses is written, and its key satisfies the execution core's
 //! `session_identity_required` check. One Hermes call skips the affinity
 //! merge: the summary it requests on reaching its iteration cap, on Messages
 //! only.
 //!
 //! The `rayline-resp` provider (`--provider rayline-resp`, the only provider
-//! under `rayline run <harness> --local`) speaks Responses and declares no header: Hermes sends
+//! under a local-mode `rayline run <harness>`) speaks Responses and declares no header: Hermes sends
 //! a `prompt_cache_key` there that is distinct per session and per delegate
 //! child, which the router's ladder and the hybrid core both read as the
 //! conversation, so each child lands in its own episode. A header would rank
@@ -100,7 +100,10 @@ pub(crate) fn plan(ctx: &RenderContext<'_>) -> Result<Plan, String> {
             .offered
             .iter()
             .map(|model| {
-                let mut entry = json!({ "context_length": model.context_window });
+                let mut entry = json!({});
+                if let Some(details) = &model.details {
+                    entry["context_length"] = json!(details.context_window);
+                }
                 if prompt_caching {
                     entry[PROMPT_CACHING_KEY] = json!(true);
                 }
@@ -135,15 +138,19 @@ pub(crate) fn plan(ctx: &RenderContext<'_>) -> Result<Plan, String> {
             json!({ MESSAGES_PROVIDER: messages, RESPONSES_PROVIDER: responses }),
         )
     };
-    let config = json!({
+    let mut config = json!({
         "model": {
             "provider": format!("custom:{default_provider}"),
-            "default": launch.main,
-            "context_length": launch.main_model().context_window
+            "default": launch.main
         },
         "providers": providers,
         "fallback_providers": []
     });
+    // An unlisted main model has no context length to write, and the merge
+    // removes one an earlier launch wrote.
+    if let Some(details) = &launch.main_model().details {
+        config["model"]["context_length"] = json!(details.context_window);
+    }
     let path = ctx.config_dir.join(CONFIG_FILE);
     let (contents, merged_from) = match fs::read_to_string(&path) {
         Ok(existing) => {
@@ -162,7 +169,6 @@ pub(crate) fn plan(ctx: &RenderContext<'_>) -> Result<Plan, String> {
         files: vec![ConfigFile {
             name: CONFIG_FILE,
             contents,
-            overwrite: true,
             merged_from,
         }],
         env_set: vec![("HERMES_HOME", ctx.config_dir.as_os_str().to_owned())],

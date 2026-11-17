@@ -29,7 +29,7 @@ Commands:
 ";
 
 pub(crate) const RUN_HELP: &str = "\
-Usage: rayline run <HARNESS> [--local | --config <file>] [HARNESS ARGS]...
+Usage: rayline run <HARNESS> [--mode <cloud|local>] [--config <file>] [HARNESS ARGS]...
 
 Harnesses:
   claude           Claude Code
@@ -41,10 +41,10 @@ Harnesses:
   openclaw         OpenClaw
 
 Options:
-  --local           Run through the local Rayline process (local mode)
-  --config <file>   Use <file> instead of ~/.config/rayline/settings.json;
-                    local mode if it has a `routing` section
-  --isolated        claude only: use a separate Claude Code config folder
+  --mode <cloud|local>  The mode for this run, over the config's `mode`;
+                        local runs through the local Rayline process
+  --config <file>       Use <file> instead of ~/.config/rayline/settings.json
+  --isolated            claude only: use a separate Claude Code config folder
 
 Codex:
   rayline run codex app [WORKSPACE]   Launch the Codex desktop app
@@ -124,17 +124,18 @@ Commands:
 ";
 
 const LOCAL_START_HELP: &str = "\
-Usage: rayline local start [--config <file>] [--router <local|hosted>]
+Usage: rayline local start [--config <file>] [--router <cloud|local>]
 
-Start the local process from ~/.config/rayline/settings.json, or from <file>.
-The config must have a `routing` section, except with `--router`: without one,
-it uses arc-swift-1.0 and arc-policy.prefer-local.v1.
+Start the local process from the `local` section of
+~/.config/rayline/settings.json, or of <file>, whatever `mode` says. The config
+must have `local.routing`, except with `--router`: without it, it uses
+arc-swift-1.0 and arc-policy.prefer-local.v1.
 
 Options:
   --config <file>                Read the config from <file> instead of the default file
-  --router <local|hosted>        Where ARC makes routing decisions: local (this
-                                 machine) or hosted (Rayline Platform). Overrides
-                                 routing.router.
+  --router <cloud|local>         Where ARC makes routing decisions: cloud (Rayline
+                                 Platform) or local (this machine). Overrides
+                                 local.routing.router.
   --help                         Show this message and exit
 ";
 
@@ -228,7 +229,7 @@ pub(crate) enum Local {
     /// `--config <file>`, or `None` for the default file.
     Start {
         config: Option<PathBuf>,
-        /// `--router`, over `routing.router`.
+        /// `--router`, over `local.routing.router`.
         router: Option<crate::config::Router>,
     },
     Status {
@@ -237,22 +238,15 @@ pub(crate) enum Local {
     Stop,
 }
 
-/// `rayline run <HARNESS> [--local | --config <file>] ...`.
+/// `rayline run <HARNESS> [--mode <cloud|local>] [--config <file>] ...`
+/// (section 3.2).
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Run {
-    pub config: ConfigFlag,
+    /// `--config <file>`, or `None` for the default file.
+    pub config: Option<PathBuf>,
+    /// `--mode`, over the config's `mode`.
+    pub mode: Option<crate::config::Mode>,
     pub launch: Launch,
-}
-
-/// Which config a run reads (section 3.2).
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum ConfigFlag {
-    /// Neither flag: the default file, cloud mode.
-    Default,
-    /// `--local`: the default file, local mode.
-    Local,
-    /// `--config <file>`: local mode if the file has `routing`.
-    File(PathBuf),
 }
 
 /// The harness and its kept options (section 9).
@@ -681,7 +675,7 @@ fn parse_local_start(args: &mut Args<'_>) -> Result<OrHelp<Local>, UsageError> {
                 let value = args.value(name, inline, LOCAL_START)?;
                 let parsed = crate::config::Router::parse(value).ok_or_else(|| {
                     LOCAL_START.error(format!(
-                        "--router must be `local` or `hosted`, not `{value}`"
+                        "--router must be `cloud` or `local`, not `{value}`"
                     ))
                 })?;
                 set_once(&mut router, parsed, name, LOCAL_START)?;
@@ -803,7 +797,7 @@ impl RunGrammar {
 
 #[derive(Default)]
 struct RunOptions {
-    local: bool,
+    mode: Option<crate::config::Mode>,
     config: Option<PathBuf>,
     isolated: bool,
     /// What goes to the harness.
@@ -825,7 +819,7 @@ fn parse_run(args: &mut Args<'_>) -> Result<OrHelp<Run>, UsageError> {
         Some("--help") => return Ok(Err(RUN_HELP)),
         Some(arg) if arg.starts_with('-') => {
             return Err(RUN.error(format!(
-                "the harness comes first, before {}: `rayline run <HARNESS> [--local | --config <file>]`",
+                "the harness comes first, before {}: `rayline run <HARNESS> [--mode <cloud|local>] [--config <file>]`",
                 shown(arg)
             )));
         }
@@ -861,11 +855,6 @@ fn parse_run(args: &mut Args<'_>) -> Result<OrHelp<Run>, UsageError> {
     let Some(options) = run_options(args, grammar)? else {
         return Ok(Err(grammar.help.text));
     };
-    let config = match (options.local, options.config) {
-        (true, _) => ConfigFlag::Local,
-        (false, Some(file)) => ConfigFlag::File(file),
-        (false, None) => ConfigFlag::Default,
-    };
     let launch = match target {
         Target::Claude => Launch::Claude {
             isolated: options.isolated,
@@ -879,7 +868,11 @@ fn parse_run(args: &mut Args<'_>) -> Result<OrHelp<Run>, UsageError> {
             args: options.args,
         },
     };
-    Ok(Ok(Run { config, launch }))
+    Ok(Ok(Run {
+        config: options.config,
+        mode: options.mode,
+        launch,
+    }))
 }
 
 /// Reads the Rayline options of a run, which come first (section 3.2): up to
@@ -902,24 +895,21 @@ fn run_options(args: &mut Args<'_>, grammar: RunGrammar) -> Result<Option<RunOpt
                 args.next();
                 break;
             }
-            "--local" if flag => {
+            "--mode" => {
                 args.next();
-                if options.config.is_some() {
-                    return Err(both_config_flags(help));
-                }
-                if options.local {
-                    return Err(help.error("`--local` given more than once"));
-                }
-                options.local = true;
+                let value = args.value(name, inline, help)?;
+                let mode = crate::config::Mode::parse(value).ok_or_else(|| {
+                    help.error(format!("--mode must be `cloud` or `local`, not `{value}`"))
+                })?;
+                set_once(&mut options.mode, mode, name, help)?;
             }
             "--config" => {
                 args.next();
-                if options.local {
-                    return Err(both_config_flags(help));
-                }
                 let file = args.value(name, inline, help)?;
                 set_once(&mut options.config, PathBuf::from(file), name, help)?;
             }
+            // Not a Rayline option, and not passed to the harness either.
+            "--local" => return Err(unexpected(help, text)),
             "--isolated" if flag && grammar.isolated => {
                 args.next();
                 if options.isolated {
@@ -938,13 +928,10 @@ fn run_options(args: &mut Args<'_>, grammar: RunGrammar) -> Result<Option<RunOpt
     Ok(Some(options))
 }
 
-fn both_config_flags(help: Help) -> UsageError {
-    help.error("`--local` and `--config` can't be used together")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Mode;
 
     fn argv(args: &[&str]) -> Vec<OsString> {
         std::iter::once("rayline")
@@ -1110,7 +1097,7 @@ mod tests {
         assert_eq!(
             error(&["run", "nope"]),
             "rayline: unknown harness `nope`\n\n\
-             Usage: rayline run <HARNESS> [--local | --config <file>] [HARNESS ARGS]...\n\
+             Usage: rayline run <HARNESS> [--mode <cloud|local>] [--config <file>] [HARNESS ARGS]...\n\
              Run `rayline run --help` for details."
         );
     }
@@ -1118,7 +1105,7 @@ mod tests {
     // ── run <HARNESS> (section 3.2) ──────────────────────────────────────
 
     #[test]
-    fn every_harness_runs_in_cloud_mode_with_neither_flag() {
+    fn every_harness_runs_on_the_default_file_with_neither_flag() {
         for (name, launch) in [
             ("claude", claude(&[])),
             ("codex", Launch::Codex { args: Vec::new() }),
@@ -1131,7 +1118,8 @@ mod tests {
             assert_eq!(
                 run(&["run", name]),
                 Run {
-                    config: ConfigFlag::Default,
+                    config: None,
+                    mode: None,
                     launch
                 },
                 "{name}"
@@ -1156,35 +1144,59 @@ mod tests {
     }
 
     #[test]
-    fn local_and_config_select_the_config() {
-        assert_eq!(run(&["run", "pi", "--local"]).config, ConfigFlag::Local);
+    fn mode_and_config_select_the_mode_and_the_file() {
+        assert_eq!(
+            run(&["run", "pi", "--mode", "local"]).mode,
+            Some(Mode::Local)
+        );
+        assert_eq!(run(&["run", "pi", "--mode=cloud"]).mode, Some(Mode::Cloud));
         assert_eq!(
             run(&["run", "pi", "--config", "my.json"]).config,
-            ConfigFlag::File(PathBuf::from("my.json"))
+            Some(PathBuf::from("my.json"))
         );
         assert_eq!(
             run(&["run", "pi", "--config=my.json"]).config,
-            ConfigFlag::File(PathBuf::from("my.json"))
+            Some(PathBuf::from("my.json"))
         );
+        for args in [
+            &["run", "claude", "--mode", "local", "--config", "x.json"][..],
+            &["run", "claude", "--config", "x.json", "--mode", "local"],
+            &["run", "codex", "app", "--config=x.json", "--mode=local"],
+        ] {
+            let run = run(args);
+            assert_eq!(run.mode, Some(Mode::Local), "{args:?}");
+            assert_eq!(run.config, Some(PathBuf::from("x.json")), "{args:?}");
+        }
     }
 
     #[test]
-    fn local_and_config_together_are_a_usage_error() {
+    fn mode_takes_only_cloud_or_local() {
+        for value in ["hosted", "Local", "json"] {
+            assert_error(
+                &["run", "pi", "--mode", value],
+                &format!("--mode must be `cloud` or `local`, not `{value}`"),
+            );
+        }
+        assert_error(&["run", "pi", "--mode"], "`--mode` needs a value");
+    }
+
+    #[test]
+    fn local_is_a_usage_error() {
         for args in [
-            &["run", "claude", "--local", "--config", "x.json"][..],
-            &["run", "claude", "--config", "x.json", "--local"],
-            &["run", "codex", "--config=x.json", "--local"],
-            &["run", "codex", "app", "--local", "--config", "x.json"],
+            &["run", "claude", "--local"][..],
+            &["run", "pi", "--mode", "local", "--local"],
+            &["run", "codex", "app", "--local"],
+            &["run", "codex", "--local", "app"],
         ] {
-            assert_error(args, "`--local` and `--config` can't be used together");
+            assert_error(args, "unexpected `--local`");
         }
     }
 
     #[test]
     fn a_flag_given_twice_is_a_usage_error() {
         assert_error(
-            &["run", "pi", "--local", "--local"],
-            "`--local` given more than once",
+            &["run", "pi", "--mode", "local", "--mode", "local"],
+            "`--mode` given more than once",
         );
         assert_error(
             &["run", "pi", "--config", "a", "--config", "b"],
@@ -1201,7 +1213,7 @@ mod tests {
         for args in [
             &["run", "pi", "--config"][..],
             &["run", "pi", "--config="],
-            &["run", "pi", "--config", "--local"],
+            &["run", "pi", "--config", "--mode"],
         ] {
             assert_error(args, "`--config` needs a value");
         }
@@ -1218,7 +1230,7 @@ mod tests {
     #[test]
     fn the_harness_comes_before_rayline_options() {
         for args in [
-            &["run", "--local", "claude"][..],
+            &["run", "--mode", "local", "claude"][..],
             &["run", "--config", "x.json", "pi"],
         ] {
             let error = error(args);
@@ -1232,15 +1244,18 @@ mod tests {
     #[test]
     fn the_first_other_argument_and_everything_after_go_to_the_harness() {
         assert_eq!(
-            run(&["run", "claude", "--local", "-p", "hi", "--config", "x.json"]),
+            run(&[
+                "run", "claude", "--mode", "local", "-p", "hi", "--config", "x.json"
+            ]),
             Run {
-                config: ConfigFlag::Local,
+                config: None,
+                mode: Some(Mode::Local),
                 launch: claude(&["-p", "hi", "--config", "x.json"]),
             }
         );
         assert_eq!(
-            run(&["run", "pi", "--model", "m", "--local"]).launch,
-            harness(Harness::Pi, &["--model", "m", "--local"])
+            run(&["run", "pi", "--model", "m", "--mode", "json", "--local"]).launch,
+            harness(Harness::Pi, &["--model", "m", "--mode", "json", "--local"])
         );
         assert_eq!(
             run(&["run", "claude", "--model", "opus", "--isolated"]).launch,
@@ -1251,17 +1266,22 @@ mod tests {
     #[test]
     fn everything_after_double_dash_goes_to_the_harness() {
         assert_eq!(
-            run(&["run", "claude", "--local", "--", "--config", "x", "--"]),
+            run(&[
+                "run", "claude", "--mode", "local", "--", "--config", "x", "--"
+            ]),
             Run {
-                config: ConfigFlag::Local,
+                config: None,
+                mode: Some(Mode::Local),
                 launch: claude(&["--config", "x", "--"]),
             }
         );
+        // A harness's own `--mode` (Pi's) or `--local` follows `--`.
         assert_eq!(
-            run(&["run", "hermes", "--", "--local"]),
+            run(&["run", "pi", "--", "--mode", "json", "--local"]),
             Run {
-                config: ConfigFlag::Default,
-                launch: harness(Harness::Hermes, &["--local"]),
+                config: None,
+                mode: None,
+                launch: harness(Harness::Pi, &["--mode", "json", "--local"]),
             }
         );
         assert_eq!(
@@ -1281,9 +1301,10 @@ mod tests {
             assert_eq!(args, os(&["--help"]), "{name}");
         }
         assert_eq!(
-            run(&["run", "codex", "--local", "--help"]),
+            run(&["run", "codex", "--mode", "local", "--help"]),
             Run {
-                config: ConfigFlag::Local,
+                config: None,
+                mode: Some(Mode::Local),
                 launch: Launch::Codex {
                     args: os(&["--help"]),
                 },
@@ -1302,7 +1323,8 @@ mod tests {
             (
                 Some("dev".to_owned()),
                 Command::Run(Run {
-                    config: ConfigFlag::Default,
+                    config: None,
+                    mode: None,
                     launch: claude(&[]),
                 })
             )
@@ -1373,16 +1395,17 @@ mod tests {
             }
         );
         assert_eq!(
-            run(&["run", "codex", "--local", "-m", "m"]),
+            run(&["run", "codex", "--mode", "local", "-m", "m"]),
             Run {
-                config: ConfigFlag::Local,
+                config: None,
+                mode: Some(Mode::Local),
                 launch: Launch::Codex {
                     args: os(&["-m", "m"]),
                 },
             }
         );
         assert_eq!(
-            run(&["run", "claude", "--local", "--model", "m"]).launch,
+            run(&["run", "claude", "--mode", "local", "--model", "m"]).launch,
             claude(&["--model", "m"])
         );
         assert_eq!(
@@ -1418,7 +1441,8 @@ mod tests {
         assert_eq!(
             run(&["run", "codex", "app", "~/work"]),
             Run {
-                config: ConfigFlag::Default,
+                config: None,
+                mode: None,
                 launch: Launch::CodexApp {
                     args: os(&["~/work"]),
                 },
@@ -1426,9 +1450,10 @@ mod tests {
         );
         // With a Rayline option first, `app` is Codex CLI's own argument.
         assert_eq!(
-            run(&["run", "codex", "--local", "app"]),
+            run(&["run", "codex", "--mode", "local", "app"]),
             Run {
-                config: ConfigFlag::Local,
+                config: None,
+                mode: Some(Mode::Local),
                 launch: Launch::Codex { args: os(&["app"]) },
             }
         );
@@ -1754,13 +1779,13 @@ mod tests {
                 &[
                     "local",
                     "start",
-                    "--router=hosted",
+                    "--router=cloud",
                     "--config",
                     "/tmp/h.json",
                 ],
                 Local::Start {
                     config: Some(PathBuf::from("/tmp/h.json")),
-                    router: Some(crate::config::Router::Hosted),
+                    router: Some(crate::config::Router::Cloud),
                 },
             ),
             (&["local", "stop"], Local::Stop),
@@ -1782,6 +1807,12 @@ mod tests {
             "`--config` given more than once",
         );
         assert_error(&["local", "start", "--config"], "`--config` needs a value");
+        for value in ["hosted", "Cloud"] {
+            assert_error(
+                &["local", "start", "--router", value],
+                &format!("--router must be `cloud` or `local`, not `{value}`"),
+            );
+        }
         assert_error(&["local", "stop", "now"], "unexpected `now`");
         assert_error(
             &["local", "status", "--env", "dev"],
@@ -1801,11 +1832,12 @@ mod tests {
     #[test]
     fn an_argument_that_is_not_utf8_goes_to_a_harness_unchanged() {
         assert_eq!(
-            parse(&then_not_utf8(&["run", "claude", "--local"])),
+            parse(&then_not_utf8(&["run", "claude", "--mode", "local"])),
             Ok(Parsed::Command {
                 env: None,
                 command: Command::Run(Run {
-                    config: ConfigFlag::Local,
+                    config: None,
+                    mode: Some(Mode::Local),
                     launch: Launch::Claude {
                         isolated: false,
                         args: vec![not_utf8()],
@@ -1818,7 +1850,8 @@ mod tests {
             Ok(Parsed::Command {
                 env: None,
                 command: Command::Run(Run {
-                    config: ConfigFlag::Default,
+                    config: None,
+                    mode: None,
                     launch: Launch::Harness {
                         harness: Harness::Pi,
                         args: vec![not_utf8()],
