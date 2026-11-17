@@ -49,6 +49,14 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   so and name the command that installs that release, instead of "Already on
   latest".
 
+### Removed
+
+- Rayline's own `--model` option for `rayline run codex`, `rayline run codex
+  app` and `rayline run codex configure`. A `--model` after `rayline run
+  codex` now goes to Codex unchanged, and `rayline run codex configure
+  --model` is a usage error
+  ([#325](https://github.com/rayline-ai/rayline-cli/pull/325)).
+
 ### Fixed
 
 - Linux release builds no longer fail when a package mirror is mid-sync.
