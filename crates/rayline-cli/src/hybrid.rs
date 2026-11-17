@@ -1398,14 +1398,22 @@ fn ready(paths: &Paths) -> io::Result<Value> {
 
 /// Read-only connection for top: never creates state or starts a runtime.
 /// The client's default credentials are safe only for this validated origin.
-/// An error of kind `NotFound` means no local process runs: `ready.json` is
-/// missing or names no live process.
+/// An error of kind `NotFound` means no local process runs, as `rayline local
+/// status` decides it: no `supervisor.json`, or one naming an exited process,
+/// whatever other state it left behind. While a process runs, `NotFound`
+/// also means its `ready.json` is missing or names no live process.
 pub(crate) async fn top_connection(
     state_dir: &Path,
 ) -> io::Result<(reqwest::Client, String, Value)> {
     let paths = Paths {
         dir: state_dir.to_owned(),
     };
+    if !paths.supervisor().try_exists()? || running(&paths)?.is_none() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "no local process is running",
+        ));
+    }
     let state = ready(&paths).map_err(|error| {
         io::Error::new(
             match error.kind() {
