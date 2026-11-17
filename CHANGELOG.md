@@ -3,7 +3,7 @@
 User-facing changes in each Rayline release. Install commands and signed
 assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock/releases).
 
-## Unreleased
+## 0.5.4 (2026-11-17)
 
 ### Added
 
@@ -14,6 +14,16 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   [Local mode](docs/local-mode.md).
 - `rayline local start` with `local` decisions fails when the ARC encoder finds
   no GPU it can use, instead of running ARC on the CPU.
+- `rayline run <harness> --local` works with no `routing` in `settings.json`
+  while a local process started by `rayline local start --router local` from
+  its defaults is running: the run uses the same defaults. Claude Code still
+  needs `routing.classifier_model`; `rayline local start` and
+  `rayline run claude --local` say so with a ready-to-paste snippet.
+- A cloud `rayline run` notes when a local process is running: "Note: a local
+  process is running; this run uses Rayline Platform. Add --local to use the
+  local process."
+- `rayline top`'s live view waits for a local process that isn't running yet,
+  and follows one that restarts, instead of exiting.
 
 ### Changed
 
@@ -41,6 +51,29 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 - Rayline no longer uses an encoder installed beside `rayline` by 0.5.3 and
   earlier. You can delete `rayline-arc-encoder`, `rayline-arc-encoder-LICENSE`
   and, on Windows, the `cublas*.dll` files from the folder `rayline` is in.
+- When the installed `rayline` is newer than the channel's latest release (such
+  as a dev build on `prod`), `rayline update` and `rayline update --check` say
+  so and name the command that installs that release, instead of "Already on
+  latest".
+
+### Fixed
+
+- Linux release builds no longer fail when a package mirror is mid-sync.
+
+### Known limits
+
+- On Windows, every `local` start hashes the ARC files again (the release,
+  the encoder weights, the encoder and its DLLs); macOS and Linux skip files
+  unchanged since they were last checked.
+- The first `local` decision of each new conversation encodes its whole
+  prompt: about 1 s per 10k prompt tokens on Apple M-series, so about 3 s for
+  Claude Code's first turn. Later turns take about 0.1 s.
+- A release's signed checksums aren't yet bound to its version
+  ([#333](https://github.com/rayline-ai/rayline-cli/issues/333)).
+
+### Rollback
+
+To go back to 0.5.3: `curl -fsSL https://get.rayline.ai/install.sh | bash -s -- --version 0.5.3`, then, for `local` decisions, `rayline update --version 0.5.3+3bc25bc98f31` to install its ARC encoder. Plain `rayline update` would install 0.5.4 again.
 
 ## 0.5.3 (2026-11-16)
 
