@@ -3,6 +3,17 @@
 User-facing changes in each Rayline release. Install commands and signed
 assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock/releases).
 
+## Unreleased
+
+### Changed
+
+- **`rayline auth logout` also removes the router key from the harness
+  configs Rayline wrote** under `~/.rayline/harness/` and from the Codex
+  `rayline` profile; each file keeps its other settings. Logout now revokes
+  the session first: if the router can't be reached, you stay logged in and
+  can run it again. If the router says the session is already invalid,
+  logout still signs you out locally and reports it.
+
 ## 0.5.4 (2026-11-17)
 
 ### Added
@@ -27,12 +38,6 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 
 ### Changed
 
-- **`rayline auth logout` also removes the router key from the harness
-  configs Rayline wrote** under `~/.rayline/harness/` and from the Codex
-  `rayline` profile; each file keeps its other settings. Logout now revokes
-  the session first: if the router can't be reached, you stay logged in and
-  can run it again. If the router says the session is already invalid,
-  logout still signs you out locally and reports it.
 - **Installing and updating Rayline no longer download the ARC encoder.** The
   installers fetch only `rayline`, `rayline-core` and `rayline-core-LICENSE`.
   The first `rayline local start` (or `rayline run ... --local` that starts
