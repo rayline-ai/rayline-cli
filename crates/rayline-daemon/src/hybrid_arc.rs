@@ -900,7 +900,7 @@ mod tests {
     /// Prefix snapshots against full encodes, on synthetic inputs only:
     /// `ARC_ENCODER_BIN=... ARC_ENCODER_MODEL=... ARC_RUNTIME_RELEASE=...
     /// cargo test -p rayline-daemon --release -- --ignored --nocapture prefix_snapshots`.
-    /// Any encoder binary and GGUF; about 45 s on an M-series Mac.
+    /// Any encoder binary and GGUF; about two minutes on an M-series Mac.
     #[tokio::test(flavor = "multi_thread")]
     #[ignore = "needs ARC_ENCODER_BIN, ARC_ENCODER_MODEL and ARC_RUNTIME_RELEASE"]
     async fn prefix_snapshots_read_and_decide_as_a_full_encode() {
