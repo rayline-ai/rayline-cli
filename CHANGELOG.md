@@ -58,7 +58,7 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 
 ### Rollback
 
-To go back to 0.5.5: run `rayline local stop`, then `rayline update --version 0.5.5`, which replaces the `rayline` you run on macOS, Linux and Windows. It doesn't replace a Homebrew or Rayline.app install. Both commands read `settings.json` first, so if 0.5.6 refuses yours, move it aside before you run them; 0.5.6 then writes the default file. 0.5.5 refuses the new `settings.json` keys (`mode`, `cloud`, `local`) as unknown, so after the downgrade put back the file 0.5.6 converted, `~/.config/rayline/settings.json.bak`, as `settings.json`, or remove `settings.json`. Plain `rayline update` installs the latest release on the channel set in `update.channel`, which can be 0.5.6 again.
+To go back to 0.5.5: run `rayline local stop`, then `rayline update --version 0.5.5`, which replaces the `rayline` you run on macOS, Linux and Windows. It doesn't replace a Homebrew or Rayline.app install. Both commands check your settings first: if 0.5.6 refuses them, fix what the error names, or move `settings.json` aside so that 0.5.6 writes the default file. 0.5.5 refuses the new `settings.json` keys (`mode`, `cloud`, `local`) as unknown, so after the downgrade rename `settings.json`, which keeps any change made in 0.5.6, and put back the file 0.5.6 converted, `~/.config/rayline/settings.json.bak`, as `settings.json` if you have one. Plain `rayline update` installs the latest release on your update channel when it is newer than 0.5.5, which can be 0.5.6 again.
 
 ## 0.5.5 (2026-11-17)
 
