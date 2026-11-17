@@ -11,6 +11,10 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   configured environment: "Not logged in" (from `rayline auth status` and
   every launch) and the login timeout and expiry messages, which also say to
   run it again.
+- A new conversation's first `local` decision no longer encodes the tool
+  definitions and system prompt it shares with an earlier conversation: about
+  0.1 s instead of about 3 s for Claude Code on Apple M-series, after the
+  first conversation since the local process started.
 
 ## 0.5.4 (2026-11-17)
 
@@ -57,6 +61,18 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   as a dev build on `prod`), `rayline update` and `rayline update --check` say
   so and name the command that installs that release, instead of "Already on
   latest".
+- `rayline run claude --model X` no longer puts subagents and background tasks
+  on X: they always run on ARC Swift, unless Claude Code's own settings pin
+  a subagent model
+  ([#325](https://github.com/rayline-ai/rayline-cli/pull/325)).
+
+### Removed
+
+- Rayline's own `--model` option for `rayline run codex`, `rayline run codex
+  app` and `rayline run codex configure`. A `--model` after `rayline run
+  codex` now goes to Codex unchanged, also in local mode, which refused it
+  before, and `rayline run codex configure --model` is a usage error
+  ([#325](https://github.com/rayline-ai/rayline-cli/pull/325)).
 
 ### Fixed
 
