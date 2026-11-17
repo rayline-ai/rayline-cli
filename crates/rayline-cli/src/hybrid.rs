@@ -1408,7 +1408,7 @@ pub(crate) async fn top_connection(
     let paths = Paths {
         dir: state_dir.to_owned(),
     };
-    if !paths.supervisor().exists() || running(&paths)?.is_none() {
+    if !paths.supervisor().try_exists()? || running(&paths)?.is_none() {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
             "no local process is running",
