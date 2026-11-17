@@ -1,7 +1,7 @@
 //! Fetches a model's tokenizer and chat template from Hugging Face, the repo
-//! its `models.*.tokenizer` names, for the local process's prompt counter
-//! (`--token-counter-dir`). A model with no `tokenizer` is counted by the
-//! core.
+//! its `local.inference.models.*.tokenizer` names, for the local process's
+//! prompt counter (`--token-counter-dir`). A model with no `tokenizer` is
+//! counted by the core.
 
 use std::path::{Path, PathBuf};
 

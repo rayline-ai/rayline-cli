@@ -331,8 +331,8 @@ async fn all_protocols_preserve_body_and_identity_then_stop_owned_core() {
     let snapshot = top_snapshot(&client, &url, &token).await;
     assert_eq!(snapshot["totals"]["local_requests"], 0);
     assert_eq!(
-        snapshot["totals"]["remote_requests"], 0,
-        "missing receipts must not imply remote routing"
+        snapshot["totals"]["cloud_requests"], 0,
+        "missing receipts must not imply cloud routing"
     );
     let events: Vec<Value> = fs::read_to_string(runtime.dir.join("events.jsonl"))
         .unwrap()
@@ -467,7 +467,7 @@ async fn derived_models_sharing_a_worker_attribute_the_executed_deployment() {
     let client = reqwest::Client::builder().no_proxy().build().unwrap();
     for (index, (model, deployment, target, wire)) in [
         ("local-model", "local", "local", "local-wire"),
-        ("cloud-model", "cloud", "remote", "cloud-wire"),
+        ("cloud-model", "cloud", "cloud", "cloud-wire"),
         ("local-model", "local", "local", "local-wire"),
     ]
     .into_iter()
@@ -501,7 +501,7 @@ async fn derived_models_sharing_a_worker_attribute_the_executed_deployment() {
     }
     let snapshot = top_snapshot(&client, &url, &token).await;
     assert_eq!(snapshot["totals"]["local_requests"], 2);
-    assert_eq!(snapshot["totals"]["remote_requests"], 1);
+    assert_eq!(snapshot["totals"]["cloud_requests"], 1);
 }
 
 #[tokio::test]
@@ -939,8 +939,8 @@ async fn auto_mode_classifier_goes_to_haiku_on_the_cloud_router_and_other_turns_
     assert!(snapshot["recent"][0]["target"].is_null());
     assert_eq!(snapshot["totals"]["local_requests"], 0);
     assert_eq!(
-        snapshot["totals"]["remote_requests"], 2,
-        "receipt-less ordinary turn counted as remote"
+        snapshot["totals"]["cloud_requests"], 2,
+        "receipt-less ordinary turn counted as cloud"
     );
     let events = fs::read_to_string(runtime.dir.join("events.jsonl")).unwrap();
     assert_eq!(
