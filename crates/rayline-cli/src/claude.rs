@@ -105,7 +105,8 @@ fn max_context_tokens(
         .offered
         .iter()
         .find(|model| model.id == hosted.main)
-        .map(|model| Some(model.context_window.to_string()))
+        .and_then(|model| model.details.as_ref())
+        .map(|details| Some(details.context_window.to_string()))
         .ok_or_else(|| {
             RunError::Router(format!(
                 "the router's model list doesn't describe its main model {}",
@@ -1294,7 +1295,7 @@ mod arc_default_tests {
             .unwrap();
         assert_eq!(
             max_context_tokens(&models, true).unwrap(),
-            Some(main.context_window.to_string())
+            Some(main.details.as_ref().unwrap().context_window.to_string())
         );
         assert_eq!(max_context_tokens(&models, false).unwrap(), None);
 
