@@ -167,7 +167,7 @@ async fn run_on(
     let current = Version::parse(crate::RAYLINE_VERSION)
         .map_err(|_| UpdateError::InvalidVersion(crate::RAYLINE_VERSION.to_owned()))?;
     let target = match &request.pinned_version {
-        Some(version) => full_version(releases_url, version, pubkeys).await?,
+        Some(version) => full_version(releases_url, version, &current, pubkeys).await?,
         None => fetch_latest_version(base_url, channel, pubkeys).await?,
     };
 
@@ -267,16 +267,21 @@ impl Drop for TempDir {
 }
 
 /// `version` with its build label. Releases are published under their full
-/// version (`cli/v0.2.12+ee1afb00b6cd/`), so a version without one is
-/// resolved from its GitHub release's signed `latest.txt`, which must name
-/// the same version.
+/// version (`cli/v0.2.12+ee1afb00b6cd/`). A version without one is the
+/// running version, `current`, when it names it; otherwise it is resolved
+/// from its GitHub release's signed `latest.txt`, which must name the same
+/// version.
 async fn full_version(
     releases_url: &str,
     version: &Version,
+    current: &Version,
     pubkeys: &[&str],
 ) -> Result<Version, UpdateError> {
     if version.normalized.contains('+') {
         return Ok(version.clone());
+    }
+    if version.public == current.public {
+        return Ok(current.clone());
     }
     let url = format!("{releases_url}/v{}/latest.txt", version.public);
     let not_found = |error| match error {
@@ -2584,9 +2589,16 @@ mod tests {
             ),
         ]));
         let keys = &[LATEST_TEST_PUBKEY];
+        let running = version("1.0.0+running");
+        // The running version, named without its label, is itself; nothing
+        // is fetched.
+        assert_eq!(
+            full_version(UNUSED_RELEASES, &version("1.0.0"), &running, keys).await?,
+            running
+        );
         // A signed `latest.txt` gives the full version.
         assert_eq!(
-            full_version(&signed.base_url, &version(TEST_RELEASE), keys).await?,
+            full_version(&signed.base_url, &version(TEST_RELEASE), &running, keys).await?,
             version(TEST_RELEASE)
         );
         assert_eq!(
@@ -2598,22 +2610,25 @@ mod tests {
         );
         // A full version is used as given, with nothing fetched.
         let full = version("99.0.0+0123abcd");
-        assert_eq!(full_version(UNUSED_RELEASES, &full, keys).await?, full);
+        assert_eq!(
+            full_version(UNUSED_RELEASES, &full, &running, keys).await?,
+            full
+        );
         // An unsigned `latest.txt` is refused.
         assert!(matches!(
-            full_version(&releases.base_url, &version(TEST_RELEASE), keys).await,
+            full_version(&releases.base_url, &version(TEST_RELEASE), &running, keys).await,
             Err(UpdateError::Signature(_))
         ));
         // A release whose `latest.txt` names another version is refused.
         assert_eq!(
-            full_version(&releases.base_url, &version("98.0.0"), keys)
+            full_version(&releases.base_url, &version("98.0.0"), &running, keys)
                 .await
                 .unwrap_err(),
             UpdateError::Network("release 98.0.0 names version 99.0.0".to_owned())
         );
         // A release that doesn't exist says so.
         assert_eq!(
-            full_version(&releases.base_url, &version("97.0.0"), keys)
+            full_version(&releases.base_url, &version("97.0.0"), &running, keys)
                 .await
                 .unwrap_err(),
             UpdateError::Network("release 97.0.0 does not exist".to_owned())
