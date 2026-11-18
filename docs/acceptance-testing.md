@@ -11,6 +11,15 @@ Cloud turns run on Rayline Platform and are billed to your account (some tens of
 3. `bash`, `perl` and `python3` (all ship with macOS and most Linux distributions). `python3` runs the MCP tool server of the `heavy` case and makes session ids.
 4. For the `local-router-local` profile, a machine that runs local ARC decisions (`docs/local-mode.md`).
 
+### Windows
+
+Run the script in Git Bash, which provides `bash` and `perl`, and `cygpath` to give the harnesses a Windows path to the MCP tool server.
+
+The harnesses start the MCP tool server as `python3` themselves, not through `bash`, so `python3` on `PATH` must start a real Python:
+
+- The `python3` that Windows ships is an App Execution Alias for the Microsoft Store: with arguments it prints "Python was not found" and exits non-zero. Turn it off in Settings > Apps > Advanced app settings > App execution aliases, or put a real `python3.exe` before it on `PATH`.
+- The python.org installer provides `python.exe` but no `python3.exe`. A virtual environment's `Scripts` directory has both: create one with `python -m venv <dir>` and put `<dir>\Scripts` first on `PATH`.
+
 ## Profiles
 
 The default profiles are committed in `scripts/acceptance/profiles/`:
