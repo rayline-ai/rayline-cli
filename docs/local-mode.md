@@ -138,10 +138,12 @@ that model's endpoint under its `model` name. ARC doesn't publish the models
 it knows yet, so every entry needs `context_window` and `max_output_tokens`,
 and the local process refuses to start without them.
 
-With a `tokenizer`, every request sent to the model is counted in the model's
-own tokens, whichever harness sends it, so a model with a small context window
-takes the turns that fit it. The repo must publish a chat template: name a
-model's instruct or chat variant, not its base model.
+With a `tokenizer`, the requests sent to the model are sized in the model's
+own tokens, whichever harness sends them, so a model with a small context
+window takes the turns that fit it. A request with content its chat template
+doesn't render as text, such as a document, is sized from its bytes instead.
+The repo must publish a chat template: name a model's instruct or chat
+variant, not its base model.
 
 The only other models ARC can pick are three Rayline Platform models:
 `anthropic/claude-opus-5.5`, `anthropic/claude-sonnet-5.5` and

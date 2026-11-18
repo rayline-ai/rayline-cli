@@ -86,8 +86,6 @@ fn local_registry_provider(protocol: Protocol) -> &'static str {
     }
 }
 
-/// The deployment serving `model`, a `models` key or a cloud pin's registry
-/// id, over `protocol`.
 /// Each model with a `tokenizer`, its repo and the deployments its prompt
 /// counter is attached to: one per protocol its endpoint lists.
 pub(crate) fn counted_deployments(settings: &Settings) -> Vec<(&str, &str, Vec<String>)> {
@@ -106,6 +104,8 @@ pub(crate) fn counted_deployments(settings: &Settings) -> Vec<(&str, &str, Vec<S
         .collect()
 }
 
+/// The deployment serving `model`, a `models` key or a cloud pin's registry
+/// id, over `protocol`.
 pub(crate) fn deployment_id(model: &str, protocol: Protocol) -> String {
     let suffix = match protocol {
         Protocol::AnthropicMessages => "messages",
@@ -493,25 +493,32 @@ mod tests {
     }
 
     #[test]
-    fn a_tokenizer_on_a_messages_only_endpoint_counts_its_messages_deployment() {
-        let settings = load(
-            "counted-messages",
-            &one_model(
-                r#"{"base_url": "http://127.0.0.1:8080", "protocols": ["anthropic_messages"]}"#,
-                r#"{"endpoint": "box", "model": "glm", "context_window": 131072,
-                    "max_output_tokens": 8192, "tokenizer": "zai-org/GLM-5.3-Flash"}"#,
-            ),
-        );
-        core_config(&settings, "https://api.rayline.ai").expect("start accepts it");
-        let counted = counted_deployments(&settings);
-        assert_eq!(
-            counted,
-            [(
-                "z-ai/glm-5.3-flash",
-                "zai-org/GLM-5.3-Flash",
-                vec!["z-ai/glm-5.3-flash-messages".to_owned()]
-            )]
-        );
+    fn a_tokenizer_on_a_single_protocol_endpoint_counts_that_deployment() {
+        for (protocol, suffix) in [
+            ("anthropic_messages", "messages"),
+            ("openai_responses", "responses"),
+        ] {
+            let settings = load(
+                &format!("counted-{suffix}"),
+                &one_model(
+                    &format!(
+                        r#"{{"base_url": "http://127.0.0.1:8080", "protocols": ["{protocol}"]}}"#
+                    ),
+                    r#"{"endpoint": "box", "model": "glm", "context_window": 131072,
+                        "max_output_tokens": 8192, "tokenizer": "zai-org/GLM-5.3-Flash"}"#,
+                ),
+            );
+            // `core_config` runs the local-start checks.
+            core_config(&settings, "https://api.rayline.ai").expect("start accepts it");
+            assert_eq!(
+                counted_deployments(&settings),
+                [(
+                    "z-ai/glm-5.3-flash",
+                    "zai-org/GLM-5.3-Flash",
+                    vec![format!("z-ai/glm-5.3-flash-{suffix}")]
+                )]
+            );
+        }
     }
 
     #[test]

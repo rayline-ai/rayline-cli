@@ -4552,6 +4552,20 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn start_check_accepts_a_tokenizer_on_any_protocol() {
+        let env = |_: &str| Some(OsString::from("key"));
+        let arc_knows_all = |_: &str| true;
+        let mut doc = example();
+        set(
+            &mut doc,
+            &format!("{EP} gpu-box protocols"),
+            json!(["anthropic_messages", "openai_responses"]),
+        );
+        let settings = load_doc_for(&doc, START).expect("load");
+        check_start(&settings, &env, &arc_knows_all).expect("a counter counts every protocol");
+    }
+
+    #[test]
     fn start_check_needs_limits_for_models_arc_does_not_know() {
         let env = |_: &str| Some(OsString::from("key"));
         let arc_knows_glm = |id: &str| id == GLM;

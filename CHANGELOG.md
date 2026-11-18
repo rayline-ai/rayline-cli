@@ -9,16 +9,17 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 
 - `rayline update` updates every install that Homebrew doesn't manage, and
   `rayline update --help` names Homebrew only.
+- A model's `tokenizer` now sizes the turns of Claude Code, omp and Codex in
+  the model's own tokens, as well as those of OpenAI Chat clients, so a local
+  model with a small context window takes the turns that fit it. A turn with
+  content its chat template doesn't render as text, such as a document, is
+  still sized from its bytes.
 
 ### Fixed
 
 - `rayline local start` no longer fails when a `local.inference.models` entry
   has a `tokenizer` and its endpoint lists several protocols, as in the
   documented example.
-- A model's `tokenizer` counts every request sent to the model, from Claude
-  Code, omp and Codex as well as OpenAI Chat clients. Their turns are sized in
-  the model's own tokens, so a local model with a small context window takes
-  the turns that fit it.
 - `rayline local start` refuses a tokenizer repo with no chat template (a base
   model's), with an error naming the model's `tokenizer` key.
 

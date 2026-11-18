@@ -428,7 +428,7 @@ The action ARC identifies is the model id after its provider prefix (`qwen/qwen3
 4. Main/subagent routes are not supported.
 5. ARC doesn't publish the models it knows yet, so it knows no model's limits. Every entry must state `context_window` and `max_output_tokens`, and the local process refuses to start without them (section 5.8 item 13).
 6. In local mode Rayline tells every harness a context window of 1,000,000 tokens, whichever model serves the turn.
-7. With a `tokenizer`, the local process counts each request it sends to the model, over any protocol, in the model's own tokens, with the repo's tokenizer and chat template. A request holding content its chat template doesn't render as text, such as a document or a server tool, is sized from its bytes instead. Start refuses a tokenizer repo that publishes no chat template, as a base model's repo often doesn't; its instruct or chat variant does (section 5.8 item 15).
+7. With a `tokenizer`, the local process sizes each request it sends to the model, over any protocol, in the model's own tokens, with the repo's tokenizer and chat template. A request holding content its chat template doesn't render as text, such as a document or a server tool, is sized from its bytes instead. Start refuses a tokenizer repo that publishes no chat template, as a base model's repo often doesn't; its instruct or chat variant does (section 5.8 item 15).
 
 ### 5.4 `local.routing`
 
