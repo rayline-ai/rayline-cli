@@ -71,14 +71,12 @@ impl ImageSizing {
         if processor.get("merge_size").is_none()
             && let Some(budget) = processor.get("max_soft_tokens")
         {
-            let Some(tokens) = budget
-                .as_u64()
-                .filter(|budget| *budget > 0)
-                .and_then(|budget| budget.checked_add(2))
-            else {
+            let Some(budget) = budget.as_u64().filter(|budget| *budget > 0) else {
                 bail!("the image processor's `max_soft_tokens` is not a positive integer");
             };
-            return Ok(Some(Self::PerImage { tokens }));
+            return Ok(Some(Self::PerImage {
+                tokens: budget.saturating_add(2),
+            }));
         }
         let Some(merge) = processor.get("merge_size").and_then(Value::as_u64) else {
             bail!(
@@ -314,7 +312,7 @@ mod tests {
 
     #[test]
     fn a_soft_token_budget_that_is_not_a_positive_integer_is_an_error() {
-        for budget in [json!(0), json!("280"), json!(280.5), json!(u64::MAX)] {
+        for budget in [json!(0), json!("280"), json!(280.5)] {
             let mut config = gemma4();
             config["image_processor"]["max_soft_tokens"] = budget;
             let error = ImageSizing::from_processor_config(&config).unwrap_err();

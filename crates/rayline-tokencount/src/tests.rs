@@ -115,6 +115,22 @@ fn a_gemma4_image_costs_its_budget_instead_of_its_placeholder() {
 }
 
 #[test]
+fn an_image_budget_too_large_to_add_saturates_instead_of_wrapping() {
+    let processor = json!({"patch_size": 16, "max_soft_tokens": u64::MAX - 2});
+    let body = json!({"messages": [{"role": "user", "content": [
+        {"type": "text", "text": "what"},
+        {"type": "image_url", "image_url": {"url": "https://x/y.png"}}
+    ]}]});
+    assert_eq!(
+        counter(Some(processor))
+            .count_chat(&body)
+            .unwrap()
+            .prompt_tokens,
+        usize::MAX
+    );
+}
+
+#[test]
 fn refuses_what_it_cannot_size() {
     let image = json!({"messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "https://x/y.png"}}]}]});
     assert!(
