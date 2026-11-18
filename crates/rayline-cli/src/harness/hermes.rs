@@ -70,6 +70,10 @@ use serde_json::{Value, json};
 use super::{ConfigFile, Plan, RenderContext, to_yaml, yaml_merge};
 
 pub(crate) const CONFIG_FILE: &str = "config.yaml";
+/// Where Hermes keeps its own copies of `config.yaml`, under `HERMES_HOME`:
+/// `config.yaml.<reason>.<timestamp>`, a `good` copy each time a changed file
+/// loads. Each is a copy of the config Rayline writes, router key included.
+pub(crate) const CONFIG_BACKUPS_DIR: [&str; 2] = ["backups", "config"];
 pub(crate) const MESSAGES_PROVIDER: &str = "rayline";
 pub(crate) const RESPONSES_PROVIDER: &str = "rayline-resp";
 /// Hermes' per-provider key naming the header its conversation id rides on.
@@ -192,6 +196,8 @@ const REPAIR_COMMAND: &str = "hermes pm repair";
 const EXTRA_MARKER: &str = ".rayline-hermes-anthropic";
 /// The Hermes args that install the extra the Messages provider needs.
 const INSTALL_EXTRA: &[&str] = &["pm", "install", "--extra", "anthropic"];
+/// The oldest Hermes with `hermes pm`, which [`INSTALL_EXTRA`] runs.
+pub(crate) const MIN_CLOUD_VERSION: (u64, u64, u64) = (0, 21, 6);
 /// The most lines of a failed repair's output repeated in the error.
 const FAILED_OUTPUT_LINES: usize = 12;
 
@@ -383,6 +389,7 @@ fn install_extra(
     if marker_current(&marker, home, launcher)? {
         return Ok(());
     }
+    require_cloud_version(&mut run)?;
     eprintln!(
         "  Installing Hermes' Anthropic support for {} (one time)...",
         crate::DISPLAY_NAME
@@ -403,6 +410,58 @@ fn install_extra(
             &format!("    {error}"),
         )),
     }
+}
+
+/// Refuse a Hermes older than [`MIN_CLOUD_VERSION`], before [`INSTALL_EXTRA`]
+/// runs: an older Hermes has no `hermes pm`. The version is read from the
+/// `Hermes Agent v<version>` line `hermes --version` prints. A probe that
+/// can't run, fails or prints no such line is an error. Every error names the
+/// minimum and the install commands.
+fn require_cloud_version(
+    run: &mut impl FnMut(&[&str]) -> io::Result<Finished>,
+) -> Result<(), String> {
+    let probe = run(&["--version"])
+        .map_err(|error| format!("`hermes --version` did not run: {error}; {}", needs()))?;
+    if !probe.success {
+        return Err(format!(
+            "`hermes --version` failed:\n{}\n{}",
+            last_lines(&probe.output),
+            needs()
+        ));
+    }
+    let version = probe
+        .output
+        .lines()
+        .find(|line| line.trim_start().starts_with("Hermes Agent v"))
+        .and_then(super::omp::parse_version)
+        .ok_or_else(|| {
+            format!(
+                "`hermes --version` printed no Hermes version:\n{}\n{}",
+                last_lines(&probe.output),
+                needs()
+            )
+        })?;
+    if version < MIN_CLOUD_VERSION {
+        let (major, minor, patch) = version;
+        return Err(format!(
+            "Hermes {major}.{minor}.{patch} has no `hermes pm`, which {} needs to set it up; {}",
+            crate::DISPLAY_NAME,
+            needs()
+        ));
+    }
+    Ok(())
+}
+
+/// The minimum Hermes and how to install it.
+fn needs() -> String {
+    let (major, minor, patch) = MIN_CLOUD_VERSION;
+    format!(
+        "{} needs Hermes {major}.{minor}.{patch} or later. Install it with:\n  \
+         curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash\n\
+         or, in Windows PowerShell:\n  \
+         iex (irm https://hermes-agent.nousresearch.com/install.ps1)",
+        crate::DISPLAY_NAME
+    )
 }
 
 /// What a marker records for `home`: `launcher`, then the Hermes environments
@@ -767,6 +826,7 @@ providers:
         use std::path::Path;
         use std::process::Command;
 
+        const V0_23_1: &str = "Hermes Agent v0.23.1 (2026.11.10)";
         const REFUSAL: &str = "hermes: no dependency environment is committed for this \
                                install; run `hermes pm repair`";
         const LAUNCHER: &str = "C:\\hermes\\bin\\hermes.exe\n100\n1.000000000\n";
@@ -812,6 +872,25 @@ providers:
                     finished(true, "Hermes Agent v0.23.1")
                 } else {
                     finished(false, REFUSAL)
+                }
+            }
+        }
+
+        /// Hermes as it behaves off Windows: `--version` answers on any home.
+        /// Installing the extra commits an environment. Records each run's
+        /// args; `version` is what `--version` prints.
+        fn unix_hermes<'a>(
+            home: &'a Path,
+            calls: &'a mut Vec<String>,
+            version: &'a str,
+        ) -> impl FnMut(&[&str]) -> std::io::Result<Finished> + 'a {
+            move |args| {
+                calls.push(args.join(" "));
+                if args == INSTALL_EXTRA {
+                    commit_environment(home);
+                    finished(true, "hermes: installed extra anthropic")
+                } else {
+                    finished(true, version)
                 }
             }
         }
@@ -1097,12 +1176,24 @@ providers:
         fn a_fresh_cloud_home_installs_the_extra_once() {
             let home = temp_dir("hermes-cloud-fresh");
             let mut calls = Vec::new();
-            prepare_cloud_home(&home, LAUNCHER, false, hermes(&home, &mut calls)).unwrap();
-            assert_eq!(calls, ["pm install --extra anthropic"]);
+            prepare_cloud_home(
+                &home,
+                LAUNCHER,
+                false,
+                unix_hermes(&home, &mut calls, V0_23_1),
+            )
+            .unwrap();
+            assert_eq!(calls, ["--version", "pm install --extra anthropic"]);
             assert!(home.join(EXTRA_MARKER).is_file());
 
             let mut again = Vec::new();
-            prepare_cloud_home(&home, LAUNCHER, false, hermes(&home, &mut again)).unwrap();
+            prepare_cloud_home(
+                &home,
+                LAUNCHER,
+                false,
+                unix_hermes(&home, &mut again, V0_23_1),
+            )
+            .unwrap();
             assert!(again.is_empty(), "{again:?}");
         }
 
@@ -1115,7 +1206,12 @@ providers:
             prepare_cloud_home(&home, LAUNCHER, true, hermes(&home, &mut calls)).unwrap();
             assert_eq!(
                 calls,
-                ["--version", "pm repair", "pm install --extra anthropic"]
+                [
+                    "--version",
+                    "pm repair",
+                    "--version",
+                    "pm install --extra anthropic"
+                ]
             );
 
             let mut again = Vec::new();
@@ -1138,10 +1234,14 @@ providers:
             let mut calls = Vec::new();
             let error = prepare_cloud_home(&home, LAUNCHER, false, |args| {
                 calls.push(args.join(" "));
-                finished(false, &output)
+                if args == ["--version"] {
+                    finished(true, V0_23_1)
+                } else {
+                    finished(false, &output)
+                }
             })
             .unwrap_err();
-            assert_eq!(calls, ["pm install --extra anthropic"]);
+            assert_eq!(calls, ["--version", "pm install --extra anthropic"]);
             assert!(
                 error.contains("`hermes pm install --extra anthropic` did not finish"),
                 "{error}"
@@ -1175,8 +1275,84 @@ providers:
             assert!(!home.join(EXTRA_MARKER).exists());
 
             let mut retried = Vec::new();
-            prepare_cloud_home(&home, LAUNCHER, false, hermes(&home, &mut retried)).unwrap();
-            assert_eq!(retried, ["pm install --extra anthropic"]);
+            prepare_cloud_home(
+                &home,
+                LAUNCHER,
+                false,
+                unix_hermes(&home, &mut retried, V0_23_1),
+            )
+            .unwrap();
+            assert_eq!(retried, ["--version", "pm install --extra anthropic"]);
+        }
+
+        /// A Hermes older than the minimum, or one whose version can't be
+        /// read, is refused before `hermes pm install` runs, naming the
+        /// minimum and the install commands; nothing is recorded.
+        #[test]
+        fn a_hermes_without_pm_is_refused_before_the_install() {
+            let home = temp_dir("hermes-cloud-old");
+            for (printed, says) in [
+                (
+                    "Hermes Agent v0.19.0 (2026.7.30)",
+                    "Hermes 0.19.0 has no `hermes pm`",
+                ),
+                (
+                    "Hermes Agent v0.21.5 (2026.9.24)",
+                    "Hermes 0.21.5 has no `hermes pm`",
+                ),
+                ("hermes: something else", "printed no Hermes version"),
+            ] {
+                let mut calls = Vec::new();
+                let error = prepare_cloud_home(
+                    &home,
+                    LAUNCHER,
+                    false,
+                    unix_hermes(&home, &mut calls, printed),
+                )
+                .unwrap_err();
+                assert_eq!(calls, ["--version"], "{printed}");
+                assert!(error.contains(says), "{error}");
+                assert!(error.contains("needs Hermes 0.21.6 or later"), "{error}");
+                assert!(
+                    error.contains(
+                        "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash"
+                    ),
+                    "{error}"
+                );
+                assert!(
+                    error.contains("iex (irm https://hermes-agent.nousresearch.com/install.ps1)"),
+                    "{error}"
+                );
+                assert!(!home.join(EXTRA_MARKER).exists());
+            }
+            let mut calls = Vec::new();
+            prepare_cloud_home(
+                &home,
+                LAUNCHER,
+                false,
+                unix_hermes(&home, &mut calls, "Hermes Agent v0.21.6 (2026.10.8)"),
+            )
+            .unwrap();
+            assert_eq!(calls, ["--version", "pm install --extra anthropic"]);
+
+            let error = prepare_cloud_home(
+                &temp_dir("hermes-cloud-no-probe"),
+                LAUNCHER,
+                false,
+                |args| {
+                    if args == ["--version"] {
+                        Err(std::io::Error::other("cannot start"))
+                    } else {
+                        finished(true, "")
+                    }
+                },
+            )
+            .unwrap_err();
+            assert!(
+                error.contains("`hermes --version` did not run: cannot start"),
+                "{error}"
+            );
+            assert!(error.contains("needs Hermes 0.21.6 or later"), "{error}");
         }
 
         /// Local mode's preparation ([`prepare_home`], Windows only) is

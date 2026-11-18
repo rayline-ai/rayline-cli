@@ -109,8 +109,8 @@ impl std::fmt::Display for AuthError {
             ),
             Self::RevokeRefused { env_name, error } => write!(
                 formatter,
-                "Logged out of {env_name} on this machine, but the router refused to revoke \
-                 the session: {error}"
+                "Logged out of {env_name} on this machine. The router refused to revoke the \
+                 session ({error}), so the router key may still be valid on the router."
             ),
             Self::SignedOut(env) => write!(
                 formatter,
@@ -357,6 +357,7 @@ async fn logout_from_home(hosted: &HostedEnvironment, home: &Path) -> Result<Str
     // before the stored account goes, so a failure here can be run again.
     crate::harness::remove_router_key(&key_files, &account.router_key.api_key)
         .map_err(AuthError::WriteFailed)?;
+    crate::harness::remove_hermes_config_backups(home).map_err(AuthError::WriteFailed)?;
     // Read the file again: another command may have written it during the
     // revoke. The slot goes only while it still holds the revoked router key;
     // a sign-in since then is kept.
@@ -1066,7 +1067,8 @@ async fn refresh_rayline_session(
 
 /// Why a session revoke failed.
 enum RevokeError {
-    /// The router refused the session token (HTTP 401): it is already invalid.
+    /// The router refused the session token (HTTP 401), with the status and
+    /// body: it no longer knows the session, so it revoked nothing.
     Refused(String),
     /// The router could not be reached or failed to answer: nothing changed.
     Retryable(String),
@@ -1093,11 +1095,19 @@ async fn revoke_rayline_session(base_url: &str, token: &str) -> Result<(), Revok
         return Ok(());
     }
     let body = response.text().await.unwrap_or_default();
-    let message = http_error_message("session revoke failed", status.as_u16(), &body);
     if status == reqwest::StatusCode::UNAUTHORIZED {
-        Err(RevokeError::Refused(message))
+        let body = body.trim();
+        Err(RevokeError::Refused(if body.is_empty() {
+            format!("HTTP {}", status.as_u16())
+        } else {
+            format!("HTTP {}: {body}", status.as_u16())
+        }))
     } else {
-        Err(RevokeError::Retryable(message))
+        Err(RevokeError::Retryable(http_error_message(
+            "session revoke failed",
+            status.as_u16(),
+            &body,
+        )))
     }
 }
 
@@ -2046,7 +2056,11 @@ mod tests {
 
     #[tokio::test]
     async fn a_refused_revoke_logs_out_locally_and_is_an_error() {
-        let api = FakeApi::start(&[("/v1/auth/cli/revoke", 401, json!({}))]);
+        let api = FakeApi::start(&[(
+            "/v1/auth/cli/revoke",
+            401,
+            json!({"error": "Invalid session token."}),
+        )]);
         let home = temp_home("logout-revoke-refused");
         save_account(&home, None, account(LATER));
         let codex = write_harness_file(&home, "codex", "config.toml");
@@ -2055,8 +2069,9 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             error.to_string(),
-            "Logged out of prod on this machine, but the router refused to revoke the \
-             session: session revoke failed: HTTP 401: {}"
+            "Logged out of prod on this machine. The router refused to revoke the session \
+             (HTTP 401: {\"error\":\"Invalid session token.\"}), so the router key may still \
+             be valid on the router."
         );
         assert_eq!(stored(&home, None), None);
         assert!(!fs::read_to_string(&codex).unwrap().contains(API_KEY));
@@ -2085,6 +2100,13 @@ mod tests {
             format!("experimental_bearer_token = \"{API_KEY}\"\nsetting = kept\n"),
         )
         .unwrap();
+        // Hermes' own copies of its config, which hold the key, are deleted.
+        let backups = write_text(
+            &home,
+            "hermes",
+            "backups/config/config.yaml.good.20261118-120000",
+            &format!("api_key: {API_KEY}\n"),
+        );
         // Another environment's key, and a harness session file, stay as they are.
         let other = write_text(&home, "pi", "other.json", "{\"apiKey\": \"rlk-other\"}");
         let session = write_text(&home, "codex", "history.jsonl", "{\"turn\": 1}\n");
@@ -2103,15 +2125,19 @@ mod tests {
             assert!(!text.contains(API_KEY), "{}", path.display());
             assert!(text.contains("setting = kept"), "{}", path.display());
         }
+        assert!(!backups.parent().unwrap().exists(), "{}", backups.display());
         assert!(fs::read_to_string(&other).unwrap().contains("rlk-other"));
         assert_eq!(fs::read_to_string(&session).unwrap(), "{\"turn\": 1}\n");
         let _ = fs::remove_dir_all(&home);
     }
 
     fn write_text(home: &Path, dir: &str, name: &str, text: &str) -> PathBuf {
-        let dir = home.join(crate::DOT_CONFIG_DIR).join("harness").join(dir);
-        fs::create_dir_all(&dir).unwrap();
-        let path = dir.join(name);
+        let path = home
+            .join(crate::DOT_CONFIG_DIR)
+            .join("harness")
+            .join(dir)
+            .join(name);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, text).unwrap();
         path
     }

@@ -7,6 +7,17 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 
 ### Changed
 
+- `rayline auth logout` also deletes the copies of its config that Hermes
+  keeps in Rayline's Hermes home (`~/.rayline/harness/hermes/backups/config/`),
+  which held the router key.
+- When the router refuses to revoke the session at logout (HTTP 401), the
+  message now says that the router key may still be valid on the router. Logout
+  still signs you out on this machine and exits 1.
+- `rayline run hermes` in cloud mode refuses a Hermes older than 0.21.6, the
+  first release with `hermes pm`, which Rayline uses to set Hermes up. The
+  error names the install commands. Before, the launch failed at
+  `hermes pm install` with Hermes' own error. The Hermes on PyPI (0.19.0) is
+  older than this.
 - **`rayline auth logout` also removes the router key from the harness
   configs Rayline wrote** under `~/.rayline/harness/` and from the Codex
   `rayline` profile; each file keeps its other settings. Logout now revokes
