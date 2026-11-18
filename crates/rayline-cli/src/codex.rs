@@ -16,6 +16,8 @@ pub struct RunRequest {
     /// The hosted environment the loaded config selects, whose router Codex
     /// talks to.
     pub hosted: crate::status::HostedEnvironment,
+    /// `cloud`: the models the launch gives the harness.
+    pub cloud: crate::config::Cloud,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -23,6 +25,8 @@ pub struct ConfigureRequest {
     /// The hosted environment the loaded config selects, whose router Codex
     /// talks to.
     pub hosted: crate::status::HostedEnvironment,
+    /// `cloud`: the models the launch gives the harness.
+    pub cloud: crate::config::Cloud,
 }
 
 /// The `rayline` provider Codex is configured with.
@@ -36,17 +40,18 @@ pub(crate) struct Provider {
 }
 
 /// Resolve the provider for a Codex launch: the environment's router, the
-/// stored `rlk-` router key (see [`crate::status::router_key`]) and the
-/// key's main model.
+/// stored `rlk-` router key (see [`crate::status::router_key`]) and
+/// `cloud.model.id`.
 pub(crate) async fn resolve_provider(
     hosted: &crate::status::HostedEnvironment,
+    cloud: &crate::config::Cloud,
 ) -> Result<Provider, String> {
     let home = crate::home().map_err(|error| error.to_string())?;
     let router_url = &hosted.base_url;
     let key = crate::status::router_key(hosted, &home)
         .await
         .map_err(|error| error.to_string())?;
-    let model = crate::harness::fetch_hosted_models(router_url, &key)
+    let model = crate::harness::fetch_hosted_models(router_url, &key, cloud)
         .await?
         .main;
     Ok(Provider {
@@ -64,7 +69,7 @@ fn codex_home(home: &Path) -> PathBuf {
 }
 
 pub async fn run(request: RunRequest) -> ExitCode {
-    let provider = match resolve_provider(&request.hosted).await {
+    let provider = match resolve_provider(&request.hosted, &request.cloud).await {
         Ok(provider) => provider,
         Err(error) => {
             eprintln!("Error: {error}");
@@ -132,7 +137,7 @@ pub(crate) fn provider_config_toml(provider: &Provider) -> String {
 /// Write the `rayline` profile to `$CODEX_HOME/rayline.config.toml` (Codex's
 /// default home is `~/.codex`), owner-only since it holds the router key.
 pub async fn configure(request: &ConfigureRequest) -> io::Result<String> {
-    let provider = resolve_provider(&request.hosted)
+    let provider = resolve_provider(&request.hosted, &request.cloud)
         .await
         .map_err(io::Error::other)?;
     let codex_home = match crate::harness::exported_dir("CODEX_HOME")? {

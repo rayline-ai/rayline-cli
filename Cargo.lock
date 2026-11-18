@@ -82,6 +82,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 
 [[package]]
+name = "appendlist"
+version = "1.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e149dc73cd30538307e7ffa2acd3d2221148eaeed4871f246657b1c3eaa1cbd2"
+
+[[package]]
 name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -128,6 +134,32 @@ checksum = "3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71"
 dependencies = [
  "generic-array",
 ]
+
+[[package]]
+name = "boon"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "baa187da765010b70370368c49f08244b1ae5cae1d5d33072f76c8cb7112fe3e"
+dependencies = [
+ "ahash",
+ "appendlist",
+ "base64 0.22.1",
+ "fluent-uri",
+ "idna",
+ "once_cell",
+ "percent-encoding",
+ "regex",
+ "regex-syntax",
+ "serde",
+ "serde_json",
+ "url",
+]
+
+[[package]]
+name = "borrow-or-share"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc0b364ead1874514c8c2855ab558056ebfeb775653e7ae45ff72f28f8f3166c"
 
 [[package]]
 name = "bstr"
@@ -526,6 +558,16 @@ name = "find-msvc-tools"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
+
+[[package]]
+name = "fluent-uri"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1918b65d96df47d3591bed19c5cca17e3fa5d0707318e4b5ef2eae01764df7e5"
+dependencies = [
+ "borrow-or-share",
+ "ref-cast",
+]
 
 [[package]]
 name = "fnv"
@@ -1422,7 +1464,7 @@ dependencies = [
 
 [[package]]
 name = "rayline-arc-decide"
-version = "0.5.4"
+version = "0.5.6"
 dependencies = [
  "rayline-arc-input",
  "serde",
@@ -1432,7 +1474,7 @@ dependencies = [
 
 [[package]]
 name = "rayline-arc-input"
-version = "0.5.4"
+version = "0.5.6"
 dependencies = [
  "fancy-regex",
  "serde_json",
@@ -1441,7 +1483,7 @@ dependencies = [
 
 [[package]]
 name = "rayline-arc-routes"
-version = "0.5.4"
+version = "0.5.6"
 dependencies = [
  "bytes",
  "futures",
@@ -1461,9 +1503,10 @@ dependencies = [
 
 [[package]]
 name = "rayline-cli"
-version = "0.5.4"
+version = "0.5.6"
 dependencies = [
  "base64 0.22.1",
+ "boon",
  "clap",
  "crossterm",
  "libc",
@@ -1491,7 +1534,7 @@ dependencies = [
 
 [[package]]
 name = "rayline-daemon"
-version = "0.5.4"
+version = "0.5.6"
 dependencies = [
  "anyhow",
  "bytes",
@@ -1518,7 +1561,7 @@ dependencies = [
 
 [[package]]
 name = "rayline-hf"
-version = "0.5.4"
+version = "0.5.6"
 dependencies = [
  "anyhow",
  "reqwest",
@@ -1530,7 +1573,7 @@ dependencies = [
 
 [[package]]
 name = "rayline-local-router"
-version = "0.5.4"
+version = "0.5.6"
 dependencies = [
  "bytes",
  "http-body-util",
@@ -1543,7 +1586,7 @@ dependencies = [
 
 [[package]]
 name = "rayline-metrics"
-version = "0.5.4"
+version = "0.5.6"
 dependencies = [
  "serde",
  "serde_json",
@@ -1551,7 +1594,7 @@ dependencies = [
 
 [[package]]
 name = "rayline-tokencount"
-version = "0.5.4"
+version = "0.5.6"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1602,6 +1645,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed2bf2547551a7053d6fdfafda3f938979645c44812fbfcda098faae3f1a362d"
 dependencies = [
  "bitflags",
+]
+
+[[package]]
+name = "ref-cast"
+version = "1.0.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f354300ae66f76f1c85c5f84693f0ce81d747e2c3f21a45fef496d89c960bf7d"
+dependencies = [
+ "ref-cast-impl",
+]
+
+[[package]]
+name = "ref-cast-impl"
+version = "1.0.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b7186006dcb21920990093f30e3dea63b7d6e977bf1256be20c3563a5db070da"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

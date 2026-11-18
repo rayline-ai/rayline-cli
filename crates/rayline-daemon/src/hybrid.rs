@@ -77,7 +77,7 @@ pub struct Args {
     #[arg(long)]
     env_name: Option<String>,
     /// Model that answers Claude Code's auto-mode classifier, through the
-    /// profile's cloud Messages router: `routing.classifier_model`. Without
+    /// profile's cloud Messages router: `local.routing.classifier_model`. Without
     /// it, classifier requests are refused.
     #[arg(long)]
     classifier_model: Option<String>,
@@ -617,7 +617,7 @@ async fn forward(state: &Gateway, request: Request<Incoming>) -> Result<Response
         let Some(route) = &state.classifier else {
             return Ok(error_response(
                 StatusCode::BAD_REQUEST,
-                "the local process was started without `routing.classifier_model`, so it \
+                "the local process was started without `local.routing.classifier_model`, so it \
                  can't answer Claude Code's auto-mode classifier; set it and restart the \
                  local process",
             ));
@@ -1328,14 +1328,14 @@ fn explain_decisions_failure(
             match upstreams {
                 Upstreams::Cloud => "Rayline Platform",
                 Upstreams::Mixed =>
-                    "the model's endpoint (Rayline Platform, or an inference server in `endpoints`)",
+                    "the model's endpoint (Rayline Platform, or an inference server in `local.inference.endpoints`)",
             }
         ),
         (Decider::Local, DecisionsFailure::Refused) => format!(
-            "{message}: local ARC (`routing.router` `local`) refused this turn on this machine, and sending it again will not change that. If it names a model or price, check `routing.decisions_model` and `models` in settings.json and run `rayline local stop`: the next run starts the local process from the changed file."
+            "{message}: local ARC (`local.routing.router` `local`) refused this turn on this machine, and sending it again will not change that. If it names a model or price, check `local.routing.decisions_model` and `local.inference.models` in settings.json and run `rayline local stop`: the next run starts the local process from the changed file."
         ),
         (Decider::Local, DecisionsFailure::Unavailable) => format!(
-            "{message}: local ARC (`routing.router` `local`) could not decide this turn right now; its encoder may be restarting. This is retryable: send the turn again after the retry-after interval."
+            "{message}: local ARC (`local.routing.router` `local`) could not decide this turn right now; its encoder may be restarting. This is retryable: send the turn again after the retry-after interval."
         ),
         (Decider::Local, DecisionsFailure::Auth) => format!(
             "{message}: local ARC refused the local process's own token. Run `rayline local stop`: the next run starts the local process with a new one."
@@ -1350,7 +1350,7 @@ fn explain_decisions_failure(
             "{message}: the Rayline routing service is busy. Send the turn again after the retry-after interval."
         ),
         (_, DecisionsFailure::Refused) => format!(
-            "{message}: the Rayline routing service refused this turn, and sending it again will not change that. If it names a model or price, check `models` in settings.json and run `rayline local stop`: the next run starts the local process from the changed file."
+            "{message}: the Rayline routing service refused this turn, and sending it again will not change that. If it names a model or price, check `local.inference.models` in settings.json and run `rayline local stop`: the next run starts the local process from the changed file."
         ),
     };
     *value.pointer_mut("/error/message")? = serde_json::Value::String(explained);
@@ -1968,7 +1968,10 @@ mod tests {
         let value: serde_json::Value = serde_json::from_slice(&explained).unwrap();
         let message = value["error"]["message"].as_str().unwrap();
         assert!(message.contains("local ARC"), "{message}");
-        assert!(message.contains("`routing.decisions_model`"), "{message}");
+        assert!(
+            message.contains("`local.routing.decisions_model`"),
+            "{message}"
+        );
         assert!(!message.contains("routing service"), "{message}");
     }
 
@@ -2002,7 +2005,10 @@ mod tests {
         );
         for (upstreams, named) in [
             (Upstreams::Cloud, "could not reach Rayline Platform."),
-            (Upstreams::Mixed, "an inference server in `endpoints`"),
+            (
+                Upstreams::Mixed,
+                "an inference server in `local.inference.endpoints`",
+            ),
         ] {
             let explained = explain_decisions_failure(
                 &body,

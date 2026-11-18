@@ -72,7 +72,7 @@ you to run `rayline auth login`, which replaces it.
 ## Run a harness
 
 ```
-rayline run <HARNESS> [--local | --config <file>] [HARNESS ARGS]...
+rayline run <HARNESS> [--mode <cloud|local>] [--config <file>] [HARNESS ARGS]...
 ```
 
 | Harness | Runs |
@@ -91,15 +91,17 @@ rayline run claude -- -p "Explain this repository"
 rayline run codex -- exec "summarize this repo"
 ```
 
-- With neither `--local` nor `--config`, the run is in **cloud mode**. The
-  harness talks to Rayline Platform directly, and no local process runs. Config
-  comes from `~/.config/rayline/settings.json`, and that file is optional.
-- `--local` runs in **local mode**, through the local Rayline process. See
+- The config comes from `~/.config/rayline/settings.json` (see
+  [Settings](#settings)). `--config <file>` uses `<file>` instead, without
+  merging the two.
+- The run's mode is `--mode`, else the `RAYLINE_MODE` env var, else the
+  config's `mode`. `--mode` and `--config` combine.
+- In **cloud mode** the harness talks to Rayline Platform directly, and no
+  local process runs.
+- In **local mode** the harness talks to the local Rayline process. See
   [Local mode](local-mode.md).
-- `--config <file>` uses `<file>` instead of `settings.json`, without merging
-  the two. The run is in local mode if `<file>` has a `routing` section, and
-  in cloud mode if it doesn't.
-- `--local` and `--config` together are a usage error.
+- A harness's own `--mode` option, such as pi's, goes after `--`:
+  `rayline run pi -- --mode json`.
 - Local mode refuses `rayline run claude --isolated`,
   `rayline run codex app` and `rayline run codex configure`. The error says
   the option isn't available in local mode.
@@ -132,13 +134,18 @@ endpoint, key and model list there.
 A harness's own model flag, such as `--model` or `-m`, goes to the harness
 like any other argument. Rayline doesn't read it.
 
-- In cloud mode the flag names a model, and Rayline Platform serves it or
-  refuses it. Rayline doesn't check it.
+- In cloud mode Rayline sets the harness up with the models in `cloud` (see
+  [Settings](#settings)). The flag names a model, and Rayline Platform serves
+  it or refuses it. Rayline doesn't check it.
 - In local mode the declared model is `rayline-auto`. A model the flag names
   is a request, and ARC decides which model runs. OpenClaw in local mode works
   only with the declared model.
 - A model pinned in the harness's own config, such as a subagent model in
   Claude Code's `settings.json`, overrides the models Rayline sets.
+- pi and oh-my-pi save a model you pick in their own settings, in the folder
+  Rayline generates. Each launch sets Rayline's models there again (pi
+  `defaultProvider` and `defaultModel`; oh-my-pi roles `default`, `smol`,
+  `slow` and `plan`) and keeps the rest of the file as the harness wrote it.
 
 ### Claude Code
 
@@ -159,13 +166,50 @@ rayline run claude --isolated
 
 ### opencode, pi, oh-my-pi, Hermes Agent and OpenClaw
 
-These take only the options every harness has, `--local` and `--config`. Every
+These take only the options every harness has, `--mode` and `--config`. Every
 other argument goes to the harness:
 
 ```bash
 rayline run omp
 rayline run pi -- "Fix the failing test in parser.py"
 ```
+
+## Settings
+
+`~/.config/rayline/settings.json` holds your settings. When it doesn't exist,
+the first command that reads it writes this default file and says so:
+
+```json
+{
+  "mode": "cloud",
+
+  "cloud": {
+    "model": { "id": "arc-sage-1.0" },
+    "smol_model": { "id": "arc-swift-1.0" }
+  }
+}
+```
+
+- `mode` is `cloud` or `local`: the mode `rayline run` uses.
+- `cloud.model` is the harness's main model and `cloud.smol_model` its small
+  model, each an ARC model id. `smol_model` is optional and defaults to
+  `model`.
+- `local` sets up local mode. See [Local mode](local-mode.md). One file can
+  hold both `cloud` and `local`.
+- `RAYLINE_MODE`, `RAYLINE_CLOUD_MODEL_ID` and `RAYLINE_CLOUD_SMOL_MODEL_ID`
+  override `mode`, `cloud.model.id` and `cloud.smol_model.id`.
+
+| Harness | `model` | `smol_model` |
+|---|---|---|
+| Claude Code | `ANTHROPIC_MODEL` | `CLAUDE_CODE_SUBAGENT_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL` |
+| opencode | `model` | `small_model` |
+| oh-my-pi | roles `default`, `slow`, `plan` | role `smol` |
+| Codex, pi, Hermes Agent, OpenClaw | their model | not used |
+
+Rayline checks the whole file once, when it loads, and stops with an error
+that names the key it refuses. A settings file from an earlier release,
+which has no `mode`, is converted the first time a command reads it: Rayline
+keeps the original as `settings.json.bak` and says so.
 
 ## Local mode
 
@@ -191,15 +235,17 @@ rayline update --check
 | `--force` | Installs even when the target version isn't newer. |
 | `--dry-run` | Downloads and verifies the update, then reports what it would install, without installing it. |
 
-If Rayline was installed with Homebrew or comes with Rayline.app,
-`rayline update` installs nothing and tells you to update through Homebrew or
-the app instead.
+If Rayline was installed with Homebrew, `rayline update` installs nothing and
+tells you to update through Homebrew instead.
 
 ## Files
 
-`~/.config/rayline/` holds only two files:
+`~/.config/rayline/` holds only these files:
 
-- `settings.json`, which you write. It is optional.
+- `settings.json`, which you write, and which Rayline writes when it is
+  missing or from an earlier release.
+- `settings.json.bak`, the file from an earlier release that a conversion
+  replaced.
 - `credentials.json`, which `rayline auth login` and `rayline auth logout`
   write.
 

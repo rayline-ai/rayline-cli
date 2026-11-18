@@ -52,6 +52,8 @@ pub(crate) const RAYLINE_ENV_NAME_ENV: &str = "RAYLINE_ENV_NAME";
 pub struct RunRequest {
     /// The hosted environment the loaded config selects.
     pub hosted: crate::status::HostedEnvironment,
+    /// `cloud`: the models the launch gives the harness.
+    pub cloud: crate::config::Cloud,
     pub args: Vec<OsString>,
     /// Run against an isolated Claude config dir (`~/.rayline/harness/claude-code`) so this
     /// session can start its own background-agents supervisor alongside a
@@ -133,12 +135,6 @@ pub async fn run_command(request: &RunRequest) -> Result<Command, RunError> {
     run_command_from_home(request, &home, claude_bin).await
 }
 
-/// Whether Claude Code's args only print its version or help and start no
-/// session: exactly one of `--version`, `-v`, `--help` and `-h`.
-pub(crate) fn starts_no_session(args: &[OsString]) -> bool {
-    matches!(args, [arg] if ["--version", "-v", "--help", "-h"].iter().any(|flag| arg == flag))
-}
-
 /// The print-mode flag (`-p` / `--print`) in the forwarded Claude args, if any.
 /// Print mode suppresses Claude Code's own startup output and is
 /// non-interactive. Returns the exact flag the user passed, so messaging can
@@ -167,9 +163,9 @@ async fn run_command_from_home(
     let router_url = hosted.base_url.clone();
     let key = crate::status::router_key(hosted, home).await?;
 
-    // A hosted launch's ARC models are the ids the router lists for the key,
-    // which follow the account's data mode.
-    let hosted_models = crate::harness::fetch_hosted_models(&router_url, &key)
+    // A cloud-mode launch runs the ids `cloud` names, at the limits the
+    // router lists for the key.
+    let hosted_models = crate::harness::fetch_hosted_models(&router_url, &key, &request.cloud)
         .await
         .map_err(RunError::Router)?;
     let model = hosted_models.main.clone();
@@ -736,6 +732,7 @@ connection: close
                 base_url: router_url.clone(),
                 login_url: "http://127.0.0.1:9/cli-auth".to_owned(),
             },
+            cloud: crate::harness::tests::cloud(None),
             args: Vec::new(),
             isolated: false,
         };
@@ -1256,9 +1253,11 @@ mod arc_default_tests {
     /// `(subagent model, force, haiku model)` for a key's data mode (`None`:
     /// standard).
     fn roles(mode: Option<&str>) -> (Option<String>, Option<String>, Option<String>) {
-        let models =
-            crate::harness::LaunchModels::from_listing(&crate::harness::tests::listing(mode))
-                .unwrap();
+        let models = crate::harness::LaunchModels::from_listing(
+            &crate::harness::tests::listing(mode),
+            &crate::harness::tests::cloud(mode),
+        )
+        .unwrap();
         let switches = role_model_env_switches(&models);
         let value = |key: &str| {
             switches
@@ -1293,33 +1292,6 @@ mod arc_default_tests {
         let switches = role_model_env_switches(&crate::harness::tests::hosted_models());
         assert_eq!(switches.len(), 3);
         assert!(switches.iter().all(|(_, value)| value.is_some()));
-    }
-}
-
-#[cfg(test)]
-mod starts_no_session_tests {
-    use super::starts_no_session;
-    use std::ffi::OsString;
-
-    fn args(values: &[&str]) -> Vec<OsString> {
-        values.iter().map(OsString::from).collect()
-    }
-
-    #[test]
-    fn only_a_lone_version_or_help_flag_starts_no_session() {
-        for lone in ["--version", "-v", "--help", "-h"] {
-            assert!(starts_no_session(&args(&[lone])), "{lone}");
-        }
-        for launch in [
-            &[][..],
-            &["agents"],
-            &["-p", "--help"],
-            &["--version", "x"],
-            &["-V"],
-            &["help"],
-        ] {
-            assert!(!starts_no_session(&args(launch)), "{launch:?}");
-        }
     }
 }
 

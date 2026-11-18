@@ -72,7 +72,8 @@ pub enum AuthError {
         env_name: String,
         error: String,
     },
-    SignedOut(String),
+    /// No session for the environment `--env` named (`None`: prod).
+    SignedOut(Option<String>),
     WriteFailed(io::Error),
 }
 
@@ -99,9 +100,10 @@ impl std::fmt::Display for AuthError {
                 formatter,
                 "Logged out of {env_name} on this machine, but revoking the session failed: {error}"
             ),
-            Self::SignedOut(env_name) => write!(
+            Self::SignedOut(env) => write!(
                 formatter,
-                "Not logged in to {env_name}. Run: {}",
+                "{}. Run: {}",
+                signed_out(env.as_deref()),
                 auth_command()
             ),
             Self::WriteFailed(error) => write!(formatter, "failed to update credentials: {error}"),
@@ -172,10 +174,7 @@ fn render_status_from_home(
 ) -> Result<String, AuthError> {
     let credentials = credentials::load(home)?;
     let Some(account) = credentials.account(hosted.slot()) else {
-        return Ok(format!(
-            "{}\n",
-            AuthError::SignedOut(hosted.name().to_owned())
-        ));
+        return Ok(format!("{}\n", AuthError::SignedOut(hosted.env.clone())));
     };
     let session = &account.session;
 
@@ -217,7 +216,7 @@ pub(crate) async fn auth_token(request: &AuthTokenRequest) -> Result<String, Aut
     let hosted = &request.hosted;
     access_token(hosted, &home)
         .await?
-        .ok_or_else(|| AuthError::SignedOut(hosted.name().to_owned()))
+        .ok_or_else(|| AuthError::SignedOut(hosted.env.clone()))
 }
 
 pub(crate) async fn access_token(
@@ -248,7 +247,7 @@ async fn access_token_at(
     // first: only the session of this slot changes.
     let mut credentials = credentials::load(home)?;
     let Some(account) = credentials.account_mut(hosted.slot()) else {
-        return Err(AuthError::SignedOut(hosted.name().to_owned()));
+        return Err(AuthError::SignedOut(hosted.env.clone()));
     };
     if account.session.refresh_token != used_refresh_token {
         return Err(AuthError::RefreshFailed(format!(
@@ -282,12 +281,12 @@ async fn router_key_with(
         return Ok(api_key);
     }
     if !interactive {
-        return Err(AuthError::SignedOut(hosted.name().to_owned()));
+        return Err(AuthError::SignedOut(hosted.env.clone()));
     }
     eprintln!("Signing in to {}...", crate::DISPLAY_NAME);
     let message = login(hosted, home, LoginFlow::Browser).await?;
     write_auth_message(&message).map_err(AuthError::WriteFailed)?;
-    stored_router_key(hosted, home)?.ok_or_else(|| AuthError::SignedOut(hosted.name().to_owned()))
+    stored_router_key(hosted, home)?.ok_or_else(|| AuthError::SignedOut(hosted.env.clone()))
 }
 
 /// The router key stored for `hosted`, without signing in.
@@ -309,7 +308,7 @@ pub async fn logout(request: &AuthLogoutRequest) -> Result<String, AuthError> {
 async fn logout_from_home(hosted: &HostedEnvironment, home: &Path) -> Result<String, AuthError> {
     let mut credentials = credentials::load(home)?;
     let Some(account) = credentials.remove_account(hosted.slot()) else {
-        return Ok(format!("Not logged in to {}\n", hosted.name()));
+        return Ok(format!("{}\n", signed_out(hosted.env.as_deref())));
     };
     credentials::save(home, &credentials).map_err(AuthError::WriteFailed)?;
 
@@ -1188,6 +1187,15 @@ fn json_value_for_message(value: &Value) -> String {
     }
 }
 
+/// "Not signed in to Rayline", naming the environment only when `--env`
+/// named one.
+fn signed_out(env: Option<&str>) -> String {
+    match env {
+        None => "Not signed in to Rayline".to_owned(),
+        Some(env) => format!("Not signed in to Rayline ({env})"),
+    }
+}
+
 fn auth_command() -> String {
     format!("{} auth login", crate::CLI_BIN)
 }
@@ -1462,11 +1470,11 @@ mod tests {
         config::load_in(
             home,
             &config::LoadOptions {
-                mode: config::Mode::Cloud,
+                command: config::Command::Other,
                 env,
                 harness_protocol: None,
                 router: None,
-                routing_defaults: false,
+                routing_defaults: None,
             },
         )
         .map(|settings| hosted_environment(&settings))
@@ -1478,7 +1486,7 @@ mod tests {
         // A settings entry named prod is only for `--env prod`.
         write_settings_json(
             &home,
-            &json!({"environments": {"prod": {
+            &json!({"mode": "cloud", "environments": {"prod": {
                 "base_url": "https://other.example.test",
                 "login_url": "https://other.example.test/cli-auth"
             }}}),
@@ -1505,7 +1513,7 @@ mod tests {
         let home = temp_home("resolve-dev");
         write_settings_json(
             &home,
-            &json!({"environments": {"dev": {
+            &json!({"mode": "cloud", "environments": {"dev": {
                 "base_url": "http://127.0.0.1:8080/",
                 "login_url": "https://dev.example.test/cli-auth"
             }}}),
@@ -1534,7 +1542,7 @@ mod tests {
         assert_eq!(key_error(Some("dev")), "environments.dev");
         write_settings_json(
             &home,
-            &json!({"environments": {"dev": {
+            &json!({"mode": "cloud", "environments": {"dev": {
                 "base_url": "https://api-dev.example.test",
                 "login_url": "https://dev.example.test/cli-auth",
                 "router_url": "https://api-dev.example.test"
@@ -1557,15 +1565,10 @@ mod tests {
         let home = temp_home("status");
         let prod = hosted(None, UNREACHABLE);
         let dev = hosted(Some("dev"), UNREACHABLE);
-        let signed_out = |env: &str| {
-            format!(
-                "Not logged in to {env}. Run: {} auth login\n",
-                crate::CLI_BIN
-            )
-        };
+        let signed_out = |name: &str| format!("{name}. Run: {} auth login\n", crate::CLI_BIN);
         assert_eq!(
             render_status_from_home(&prod, &home, NOW).unwrap(),
-            signed_out("prod")
+            signed_out("Not signed in to Rayline")
         );
 
         save_account(&home, None, account(LATER));
@@ -1586,7 +1589,7 @@ mod tests {
         );
         assert_eq!(
             render_status_from_home(&dev, &home, NOW).unwrap(),
-            signed_out("dev")
+            signed_out("Not signed in to Rayline (dev)")
         );
 
         save_account(&home, Some("dev"), account(NOW - 1));
@@ -1941,7 +1944,7 @@ mod tests {
         let message = logout_from_home(&hosted(Some("dev"), UNREACHABLE), &home)
             .await
             .unwrap();
-        assert_eq!(message, "Not logged in to dev\n");
+        assert_eq!(message, "Not signed in to Rayline (dev)\n");
         assert_eq!(credentials_text(&home), None);
 
         write_credentials_text(&home, "not json");
@@ -1958,13 +1961,13 @@ mod tests {
         let home = temp_home("router-key");
         let prod = hosted(None, UNREACHABLE);
         let error = router_key_with(&prod, &home, false).await.unwrap_err();
-        assert!(
-            matches!(&error, AuthError::SignedOut(env) if env == "prod"),
-            "{error:?}"
-        );
+        assert!(matches!(&error, AuthError::SignedOut(None)), "{error:?}");
         assert_eq!(
             error.to_string(),
-            format!("Not logged in to prod. Run: {} auth login", crate::CLI_BIN)
+            format!(
+                "Not signed in to Rayline. Run: {} auth login",
+                crate::CLI_BIN
+            )
         );
         assert_eq!(credentials_text(&home), None);
 

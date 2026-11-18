@@ -7,20 +7,151 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 
 ### Changed
 
-- A new conversation's first `local` decision no longer encodes the tool
-  definitions and system prompt it shares with an earlier conversation: about
-  0.1 s instead of about 3 s for Claude Code on Apple M-series, after the
-  first conversation since the local process started.
+- `rayline update` updates every install that Homebrew doesn't manage, and
+  `rayline update --help` names Homebrew only.
 
 ### Fixed
 
-- `rayline local start` no longer fails when a `models` entry has a
-  `tokenizer` and its endpoint lists other protocols besides `openai_chat`, as
-  in the documented example. The tokenizer counts the model's OpenAI Chat
-  requests.
+- `rayline local start` no longer fails when a `local.inference.models` entry
+  has a `tokenizer` and its endpoint lists other protocols besides
+  `openai_chat`, as in the documented example. The tokenizer counts the
+  model's OpenAI Chat requests.
 - `rayline local start` refuses a `tokenizer` whose endpoint doesn't list
   `openai_chat`, and a tokenizer repo with no chat template (a base model's),
-  with an error naming `models.<id>.tokenizer`.
+  with an error naming the model's `tokenizer` key.
+
+## 0.5.6 (2026-11-17)
+
+### Changed
+
+- **`settings.json` has a new shape (breaking).** It holds a required `mode`
+  (`cloud` or `local`), a `cloud` section with the two models a cloud-mode run
+  uses, and a `local` section with `inference` (`endpoints`, `models`) and
+  `routing`. The cloud models (ARC Sage and ARC Swift by default) come from
+  `cloud.model` and `cloud.smol_model` instead of from Rayline. When the file
+  doesn't exist, Rayline writes the default file and says so. Rayline checks
+  the whole file, including the section a run doesn't use: a section the file
+  has needs its required keys, and an env override doesn't give a missing
+  one. See [Getting started](docs/getting-started.md#settings) and
+  [Local mode](docs/local-mode.md)
+  ([#348](https://github.com/rayline-ai/rayline-cli/pull/348)).
+- A `~/.config/rayline/settings.json` from an earlier release (one with no
+  `mode`) is converted the first time a command reads it, and the original
+  is kept as `settings.json.bak`. A `--config` file with no `mode` is an
+  error and isn't converted.
+- **`rayline run <harness> --local` is replaced by `--mode local` (breaking),**
+  or `"mode": "local"` in the file. `--mode` and `--config` combine, and a
+  `--config` file runs in its own `mode`. `rayline run --help` and the
+  messages that say how to start a local process name `--mode local`.
+- **`router` `hosted` is now `cloud` (breaking)** in `local.routing.router`,
+  `rayline local start --router`, `rayline top` and `rayline local status
+  --json`. `local.routing.router` is required. `rayline local start --router
+  cloud` with no `local.routing` uses the defaults `--router hosted` used, and
+  the `rayline local start` errors end with `rayline local start --router
+  cloud`. Stop the local process (`rayline local stop`) before updating from
+  an earlier release: this version can't read the record of an earlier
+  release's process started with router `hosted`.
+- Local mode with no `local` section is an error that says `local` is
+  required and links the local mode docs. It no longer prints a
+  `settings.json` to paste.
+- Every `rayline run pi` and `rayline run omp` sets the models from the
+  config: pi's `defaultProvider` and `defaultModel`, and omp's `modelRoles`
+  `default`, `smol`, `slow` and `plan`, so a changed `cloud.model` reaches a
+  pi or omp that has run before. Every other setting in pi's `settings.json`
+  and omp's `config.yml` stays as the harness wrote it. A model picked in pi
+  or omp is replaced at the next launch.
+- `rayline top` says `cloud` instead of `remote`: `target` `cloud` and
+  `totals.cloud_requests` in `--json`, and `cloud=` in the live view's
+  totals.
+- Rayline doesn't check `cloud.model.id` or `cloud.smol_model.id`; the API
+  validates them when the model is called. An id the key's model listing
+  doesn't have goes into the opencode, pi, omp, OpenClaw and Hermes configs
+  with no limits, and the harness uses its own defaults.
+- `local.routing.decisions_model` is an object, `{ "id": "arc-swift-1.0" }`.
+  With `router` `cloud` it can carry a `v_value`.
+- The env overrides follow the new key paths: `RAYLINE_MODE`,
+  `RAYLINE_CLOUD_MODEL_ID`, `RAYLINE_CLOUD_SMOL_MODEL_ID` and
+  `RAYLINE_LOCAL_ROUTING_*`. `RAYLINE_ROUTING_*` is no longer read.
+
+### Rollback
+
+To go back to 0.5.5: run `rayline local stop`, then `rayline update --version 0.5.5`. 0.5.5 refuses the new `settings.json` keys, so put `~/.config/rayline/settings.json.bak` back as `settings.json` if you have one, or rename `settings.json`. Plain `rayline update` would install 0.5.6 again.
+
+## 0.5.5 (2026-11-17)
+
+### Added
+
+- `rayline local start --router hosted` with no `routing` section uses the
+  same defaults as `--router local` (`arc-swift-1.0`,
+  `arc-policy.prefer-local.v1`), so local mode with hosted decisions needs no
+  `settings.json`
+  ([#347](https://github.com/rayline-ai/rayline-cli/pull/347)).
+- `rayline update --version 0.5.5` takes a version without its build label
+  and reads the full version from that release's signed version file. A
+  version that doesn't exist fails with `release <version> does not exist`,
+  and one whose release names another version fails with
+  `release <version> names version <full>`.
+- `rayline run --help` lists `--local`, `--config`, `--isolated`, the Codex
+  subcommands and where harness arguments go. `rayline update --help` gets a
+  summary, a `--help` row and a note on Homebrew and Rayline.app installs.
+
+### Changed
+
+- **Faster first `local` decision in a new conversation.** A new conversation
+  continues ARC's encode from what it shares with an earlier one: the tool
+  definitions, the system prompt and everything else before its first
+  message. For Claude Code on Apple M-series, a new conversation's first
+  decision takes about 1.3 s instead of about 2 s
+  ([#342](https://github.com/rayline-ai/rayline-cli/pull/342),
+  [#346](https://github.com/rayline-ai/rayline-cli/pull/346)).
+- `rayline run <harness>` with only `--help`, `-h`, `--version` or `-v` runs
+  the harness with that flag and nothing else: no sign-in, no config, no
+  local process and no Claude Code daemon check. This now applies to every
+  harness, also with `--local`.
+- Signed out, Rayline says `Not signed in to Rayline. Run: rayline auth login`,
+  naming the environment only when `--env` names one.
+- `rayline top --json`, or `rayline top` when its output isn't a terminal,
+  with no local process says how to start one. State left behind by a local
+  process that stopped or crashed counts as no local process, there and in
+  the live view ([#349](https://github.com/rayline-ai/rayline-cli/pull/349)).
+- Local mode with no `settings.json` prints a `settings.json` to paste and
+  links the local mode docs.
+- Every `rayline local start` error for a machine that can't run `local`
+  decisions ends with the same fix: `rayline local start --router hosted`.
+- `rayline local start --help` and the Codex help say where decisions are
+  made in Rayline Platform terms.
+
+### Fixed
+
+- In local mode with hosted decisions, a Codex or Hermes turn on a Claude
+  model that thinks before it calls a tool now completes
+  ([#345](https://github.com/rayline-ai/rayline-cli/pull/345)).
+
+### Docs
+
+- The README and getting-started guide use the current install commands:
+  `curl -fsSL https://get.rayline.ai/install.sh | bash` and
+  `irm https://get.rayline.ai/install.ps1 | iex`
+  ([#343](https://github.com/rayline-ai/rayline-cli/pull/343)).
+- The local mode guide describes `rayline top`'s live view and `--json`, and
+  how `RAYLINE_ROUTING_*` overrides apply to the `--router` defaults.
+- The 0.5.4 notes gain a Removed entry for Rayline's `--model` option of
+  `rayline run codex` (#325).
+
+### Known limits
+
+- The first `local` decision of each new conversation still encodes what
+  follows the shared part again. For Claude Code on Apple M-series that is
+  about 1.3 s, and about 2 s for the first conversation since the local
+  process started. Later turns take about 0.1 s.
+- On Windows, every `local` start hashes the ARC files again; macOS and Linux
+  skip files unchanged since they were last checked.
+- A release's signed checksums aren't yet bound to its version
+  ([#333](https://github.com/rayline-ai/rayline-cli/issues/333)).
+
+### Rollback
+
+To go back to 0.5.4: `curl -fsSL https://get.rayline.ai/install.sh | bash -s -- --version 0.5.4`. The first `local` start then downloads 0.5.4's ARC encoder. Plain `rayline update` would install 0.5.5 again.
 
 ## 0.5.4 (2026-11-17)
 

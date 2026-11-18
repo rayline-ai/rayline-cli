@@ -1,8 +1,12 @@
 {
-  "routing": {
-    "router": "local",
-    "decisions_model": "arc-swift-1.0",
-    "classifier_model": "anthropic/claude-haiku-5.5",
-    "policy": { "preset": "arc-policy.prefer-local.v1" }
+  "mode": "local",
+
+  "local": {
+    "routing": {
+      "router": "local",
+      "decisions_model": { "id": "arc-swift-1.0" },
+      "classifier_model": "anthropic/claude-haiku-5.5",
+      "policy": { "preset": "arc-policy.prefer-local.v1" }
+    }
   }
 }

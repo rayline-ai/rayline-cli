@@ -1,6 +1,6 @@
 //! The execution-core config the local process runs on, built from
-//! [`Settings`] alone: `endpoints` (spec 5.2), `models` (5.3) and `routing`
-//! (5.4).
+//! [`Settings`] alone: `local.inference.endpoints` (spec 5.2),
+//! `local.inference.models` (5.3) and `local.routing` (5.4).
 //!
 //! Each `models` entry is served by its endpoint under its `model` name, with
 //! one deployment per protocol the endpoint lists. A model ARC picks that is
@@ -10,13 +10,14 @@
 //! core binds a model's deployments as one action per control, one deployment
 //! per protocol.
 //!
-//! Decisions go to the environment's router for `routing.decisions_model`,
-//! with `routing.policy` sent unchanged and a `price` for each entry that
+//! Decisions go to the environment's router for
+//! `local.routing.decisions_model`, with its `v_value` when it has one,
+//! `local.routing.policy` sent unchanged and a `price` for each entry that
 //! states one; ARC prices every other model.
 
 use serde_json::{Map, Value, json};
 
-use crate::config::{ConfigError, Protocol, Settings, child};
+use crate::config::{ConfigError, ENDPOINTS, Protocol, Settings, child};
 
 const API_MODE_V2: &str = "execution_context_v2";
 /// The variable the core reads the Rayline router key from, for Decisions
@@ -125,7 +126,7 @@ pub(crate) fn core_config(settings: &Settings, router_url: &str) -> Result<Value
         if endpoint.api_key_env.as_deref() == Some(ROUTER_KEY_ENV) {
             return Err(ConfigError::Key {
                 file: settings.file.clone(),
-                key: format!("{}.api_key_env", child("endpoints", id)),
+                key: format!("{}.api_key_env", child(ENDPOINTS, id)),
                 problem: format!(
                     "names `{ROUTER_KEY_ENV}`, which holds the Rayline router key; name the \
                      variable holding this endpoint's own key"
@@ -207,10 +208,19 @@ pub(crate) fn core_config(settings: &Settings, router_url: &str) -> Result<Value
     if !prices.is_empty() {
         decisions_routing["prices"] = Value::Object(prices);
     }
-    // `top` is ARC's answer for the model asked, `routing.decisions_model`.
+    // `top` is ARC's answer for the model asked,
+    // `local.routing.decisions_model.id`. With a `v_value` the answer is
+    // `custom`, at that value.
+    let result = match routing.decisions_model.v_value {
+        Some(v_value) => {
+            decisions_routing["v_value"] = json!(v_value);
+            "custom"
+        }
+        None => "top",
+    };
     let decisions = json!({"api_mode": API_MODE_V2, "url": format!("{router}/v1/routes"),
-                           "auth_env": ROUTER_KEY_ENV, "model": routing.decisions_model,
-                           "result": "top", "routing": decisions_routing});
+                           "auth_env": ROUTER_KEY_ENV, "model": routing.decisions_model.id,
+                           "result": result, "routing": decisions_routing});
     Ok(json!({
         "contract_version": 1,
         "allow_experimental_controls": true,
@@ -232,11 +242,13 @@ mod tests {
         let file = dir.join("settings.json");
         std::fs::write(&file, text).unwrap();
         let settings = crate::config::load(&crate::config::LoadOptions {
-            mode: crate::config::Mode::LocalFile(&file),
+            command: crate::config::Command::LocalStart {
+                config: Some(&file),
+            },
             env: None,
             harness_protocol: None,
             router: None,
-            routing_defaults: false,
+            routing_defaults: None,
         })
         .unwrap();
         let _ = std::fs::remove_dir_all(&dir);
@@ -244,15 +256,26 @@ mod tests {
     }
 
     /// The routing every test shares.
-    const ROUTING: &str = r#""routing": {"decisions_model": "arc-swift-1.0",
+    const ROUTING: &str = r#""routing": {"router": "cloud",
+        "decisions_model": {"id": "arc-swift-1.0"},
         "classifier_model": "anthropic/claude-haiku-5.5",
         "policy": {"preset": "arc-policy.prefer-local.v1"}}"#;
+
+    /// A local-mode settings.json with the members `inference` in
+    /// `local.inference`, [`ROUTING`], and the top-level members `top`
+    /// (each followed by a comma).
+    fn local_file(inference: &str, top: &str) -> String {
+        format!(r#"{{"mode": "local", {top}"local": {{"inference": {{{inference}}}, {ROUTING}}}}}"#)
+    }
 
     /// A settings.json with one endpoint, `endpoint`, serving one model,
     /// `model`.
     fn one_model(endpoint: &str, model: &str) -> String {
-        format!(
-            r#"{{"endpoints": {{"box": {endpoint}}}, "models": {{"z-ai/glm-5.3-flash": {model}}}, {ROUTING}}}"#
+        local_file(
+            &format!(
+                r#""endpoints": {{"box": {endpoint}}}, "models": {{"z-ai/glm-5.3-flash": {model}}}"#
+            ),
+            "",
         )
     }
 
@@ -358,24 +381,29 @@ mod tests {
         let settings = load(
             "fixture",
             r#"{
-            "endpoints": {
-                "gpu-box": {"base_url": "https://gpu-box.example.com:8443/",
-                            "protocols": ["anthropic_messages", "openai_chat"],
-                            "api_key_env": "PATH"},
-                "ollama": {"base_url": "http://127.0.0.1:11434", "protocols": ["openai_chat"]}
-            },
-            "models": {
-                "z-ai/glm-5.3-flash": {"endpoint": "gpu-box", "model": "GLM-5.3-Flash-EXL3",
-                    "context_window": 1000000, "max_output_tokens": 32000,
-                    "tokenizer": "zai-org/GLM-5.3-Flash",
-                    "price": {"input": 0, "output": 0.5, "cache_read": 0, "cache_write": 0}},
-                "qwen/qwen3.8-27b": {"endpoint": "ollama", "model": "qwen3.8:27b",
-                    "context_window": 98304, "max_output_tokens": 24576}
-            },
-            "routing": {"decisions_model": "arc-sage-1.0",
-                "classifier_model": "anthropic/claude-haiku-5.5",
-                "policy": {"preset": "arc-policy.prefer-local.v1",
-                    "overrides": {"selection": {"min_p_pass": 0.5}}}}
+            "mode": "local",
+            "local": {
+                "inference": {
+                    "endpoints": {
+                        "gpu-box": {"base_url": "https://gpu-box.example.com:8443/",
+                                    "protocols": ["anthropic_messages", "openai_chat"],
+                                    "api_key_env": "PATH"},
+                        "ollama": {"base_url": "http://127.0.0.1:11434", "protocols": ["openai_chat"]}
+                    },
+                    "models": {
+                        "z-ai/glm-5.3-flash": {"endpoint": "gpu-box", "model": "GLM-5.3-Flash-EXL3",
+                            "context_window": 1000000, "max_output_tokens": 32000,
+                            "tokenizer": "zai-org/GLM-5.3-Flash",
+                            "price": {"input": 0, "output": 0.5, "cache_read": 0, "cache_write": 0}},
+                        "qwen/qwen3.8-27b": {"endpoint": "ollama", "model": "qwen3.8:27b",
+                            "context_window": 98304, "max_output_tokens": 24576}
+                    }
+                },
+                "routing": {"router": "cloud", "decisions_model": {"id": "arc-sage-1.0"},
+                    "classifier_model": "anthropic/claude-haiku-5.5",
+                    "policy": {"preset": "arc-policy.prefer-local.v1",
+                        "overrides": {"selection": {"min_p_pass": 0.5}}}}
+            }
         }"#,
         );
         let router = "https://api.rayline.ai";
@@ -489,6 +517,25 @@ mod tests {
     }
 
     #[test]
+    fn a_decisions_v_value_asks_for_the_custom_result_at_that_value() {
+        let text = one_model(
+            r#"{"base_url": "http://127.0.0.1:8080", "protocols": ["openai_chat"]}"#,
+            r#"{"endpoint": "box", "model": "glm", "context_window": 131072, "max_output_tokens": 8192}"#,
+        )
+        .replace(
+            r#"{"id": "arc-swift-1.0"}"#,
+            r#"{"id": "arc-dynamic-example", "v_value": 0.25}"#,
+        );
+        let config = core_config(&load("v-value", &text), "https://api.rayline.ai").unwrap();
+        assert_eq!(config["decisions"]["model"], "arc-dynamic-example");
+        assert_eq!(config["decisions"]["result"], "custom");
+        assert_eq!(
+            config["decisions"]["routing"],
+            json!({"policy": {"preset": "arc-policy.prefer-local.v1"}, "v_value": 0.25})
+        );
+    }
+
+    #[test]
     fn a_local_deployment_takes_its_registry_provider_from_its_protocol() {
         let settings = load(
             "providers",
@@ -546,10 +593,11 @@ mod tests {
     fn a_models_entry_replaces_the_cloud_pin_for_its_id() {
         let settings = load(
             "replaces-pin",
-            &format!(
-                r#"{{"endpoints": {{"box": {{"base_url": "http://127.0.0.1:8080", "protocols": ["anthropic_messages"]}}}},
-                    "models": {{"anthropic/claude-haiku-5.5": {{"endpoint": "box", "model": "haiku-local",
-                        "context_window": 200000, "max_output_tokens": 64000}}}}, {ROUTING}}}"#
+            &local_file(
+                r#""endpoints": {"box": {"base_url": "http://127.0.0.1:8080", "protocols": ["anthropic_messages"]}},
+                    "models": {"anthropic/claude-haiku-5.5": {"endpoint": "box", "model": "haiku-local",
+                        "context_window": 200000, "max_output_tokens": 64000}}"#,
+                "",
             ),
         );
         let config = core_config(&settings, "https://api.rayline.ai").unwrap();
@@ -605,7 +653,8 @@ mod tests {
             .to_string();
         assert!(
             error.ends_with(
-                "`endpoints.box.api_key_env` names `RAYLINE_TEST_UNSET_ENDPOINT_KEY`, which is not set"
+                "`local.inference.endpoints.box.api_key_env` names \
+                 `RAYLINE_TEST_UNSET_ENDPOINT_KEY`, which is not set"
             ),
             "{error}"
         );
@@ -626,7 +675,7 @@ mod tests {
             .to_string();
         assert!(
             error.ends_with(
-                "`endpoints.box.api_key_env` names `RAYLINE_ROUTER_API_KEY`, which holds the \
+                "`local.inference.endpoints.box.api_key_env` names `RAYLINE_ROUTER_API_KEY`, which holds the \
                  Rayline router key; name the variable holding this endpoint's own key"
             ),
             "{error}"
@@ -657,7 +706,8 @@ mod tests {
                 .to_string();
             assert!(
                 error.ends_with(&format!(
-                    "`models.\"z-ai/glm-5.3-flash\".{missing}` is required: ARC doesn't know this model"
+                    "`local.inference.models.\"z-ai/glm-5.3-flash\".{missing}` is required: \
+                     ARC doesn't know this model"
                 )),
                 "{error}"
             );
@@ -668,11 +718,11 @@ mod tests {
     fn with_environments(name: &str, environments: &str) -> Settings {
         load(
             name,
-            &format!(
-                r#"{{"environments": {environments},
-                    "endpoints": {{"box": {{"base_url": "http://127.0.0.1:8080", "protocols": ["openai_chat"]}}}},
-                    "models": {{"z-ai/glm-5.3-flash": {{"endpoint": "box", "model": "glm",
-                        "context_window": 131072, "max_output_tokens": 8192}}}}, {ROUTING}}}"#
+            &local_file(
+                r#""endpoints": {"box": {"base_url": "http://127.0.0.1:8080", "protocols": ["openai_chat"]}},
+                    "models": {"z-ai/glm-5.3-flash": {"endpoint": "box", "model": "glm",
+                        "context_window": 131072, "max_output_tokens": 8192}}"#,
+                &format!(r#""environments": {environments}, "#),
             ),
         )
     }
@@ -724,10 +774,11 @@ mod tests {
         // registry ids without their provider.
         let settings = load(
             "action-names",
-            &format!(
-                r#"{{"endpoints": {{"box": {{"base_url": "http://127.0.0.1:8080", "protocols": ["openai_chat"]}}}},
-                    "models": {{"qwen/qwen3.8-27b": {{"endpoint": "box", "model": "qwen3.8:27b",
-                        "context_window": 98304, "max_output_tokens": 24576}}}}, {ROUTING}}}"#
+            &local_file(
+                r#""endpoints": {"box": {"base_url": "http://127.0.0.1:8080", "protocols": ["openai_chat"]}},
+                    "models": {"qwen/qwen3.8-27b": {"endpoint": "box", "model": "qwen3.8:27b",
+                        "context_window": 98304, "max_output_tokens": 24576}}"#,
+                "",
             ),
         );
         let config = core_config(&settings, "https://api.rayline.ai").unwrap();

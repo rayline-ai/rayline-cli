@@ -174,7 +174,8 @@ fn refuse_cpu_engine(engine: &str) -> Result<()> {
         bail!(
             "the ARC encoder found no GPU it can use and would run on the CPU ({engine}); \
              local decisions need Apple Silicon, or an NVIDIA GPU with a current driver \
-             (Linux 525.60.13 or later, Windows 576 or later); set `routing.router` to `hosted`"
+             (Linux 525.60.13 or later, Windows 576 or later); to use the cloud router instead, \
+             run `rayline local start --router cloud`"
         );
     }
     Ok(())
@@ -595,7 +596,7 @@ pub fn skip_unroutable(
     if skipped.len() == models.len() {
         let ids: Vec<&str> = skipped.iter().map(|model| model.id.as_str()).collect();
         anyhow::bail!(
-            "the ARC release can't route to any model in `models` ({}): it doesn't know or \
+            "the ARC release can't route to any model in `local.inference.models` ({}): it doesn't know or \
              price them",
             ids.join(", ")
         );
@@ -703,8 +704,8 @@ pub fn with_local_decisions(
                 .is_some_and(|prices| !prices.is_empty());
             anyhow::ensure!(
                 release.has_prices() || caller_priced,
-                "the ARC release prices no model and `models` gives no price it can use; \
-                 use an ARC release with prices, or set `routing.router` to `hosted`"
+                "the ARC release prices no model and `local.inference.models` gives no price it can use; \
+                 use an ARC release with prices, or set `local.routing.router` to `cloud`"
             );
             skipped
         }
@@ -938,7 +939,12 @@ mod tests {
         let refused = refuse_cpu_engine("llamacpp@b11669-arc+cpu+kv-f16+fa")
             .expect_err("a cpu engine is refused")
             .to_string();
-        assert!(refused.contains("routing.router"), "{refused}");
+        assert!(
+            refused.ends_with(
+                "; to use the cloud router instead, run `rayline local start --router cloud`"
+            ),
+            "{refused}"
+        );
     }
 
     #[test]
