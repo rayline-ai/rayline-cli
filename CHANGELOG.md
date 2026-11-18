@@ -3,7 +3,7 @@
 User-facing changes in each Rayline release. Install commands and signed
 assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock/releases).
 
-## Unreleased
+## 0.5.6 (2026-11-17)
 
 ### Changed
 
@@ -23,7 +23,8 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   the whole file, including the section a run doesn't use: a section the file
   has needs its required keys, and an env override doesn't give a missing
   one. See [Getting started](docs/getting-started.md#settings) and
-  [Local mode](docs/local-mode.md).
+  [Local mode](docs/local-mode.md)
+  ([#348](https://github.com/rayline-ai/rayline-cli/pull/348)).
 - A `~/.config/rayline/settings.json` from an earlier release (one with no
   `mode`) is converted the first time a command reads it, and the original
   is kept as `settings.json.bak`. A `--config` file with no `mode` is an
@@ -61,6 +62,10 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 - The env overrides follow the new key paths: `RAYLINE_MODE`,
   `RAYLINE_CLOUD_MODEL_ID`, `RAYLINE_CLOUD_SMOL_MODEL_ID` and
   `RAYLINE_LOCAL_ROUTING_*`. `RAYLINE_ROUTING_*` is no longer read.
+
+### Rollback
+
+To go back to 0.5.5: run `rayline local stop`, then `rayline update --version 0.5.5`. 0.5.5 refuses the new `settings.json` keys, so put `~/.config/rayline/settings.json.bak` back as `settings.json` if you have one, or rename `settings.json`. Plain `rayline update` would install 0.5.6 again.
 
 ## 0.5.5 (2026-11-17)
 
