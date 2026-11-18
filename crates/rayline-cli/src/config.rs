@@ -445,8 +445,9 @@ pub(crate) fn load_in(home: &Path, options: &LoadOptions<'_>) -> Result<Settings
 }
 
 /// Refuses what the local process must refuse before it serves anything:
-/// an `api_key_env` naming an env var that isn't set, and a model ARC doesn't
-/// know (`arc_knows` returns false for its id) without `context_window` or
+/// an `api_key_env` naming an env var that isn't set, a `tokenizer` on a model
+/// whose endpoint doesn't list `openai_chat`, and a model ARC doesn't know
+/// (`arc_knows` returns false for its id) without `context_window` or
 /// `max_output_tokens`.
 pub fn check_local_start(
     settings: &Settings,
@@ -852,6 +853,21 @@ fn check_local_start_with(
         }
     }
     for (id, model) in &settings.models {
+        // The counter is attached only to the model's Chat deployment, so an
+        // endpoint without `openai_chat` would leave it unused.
+        if model.tokenizer.is_some()
+            && !settings.endpoints[&model.endpoint]
+                .protocols
+                .contains(&Protocol::OpenaiChat)
+        {
+            return Err(doc.err(
+                format!("{}.tokenizer", child(MODELS, id)),
+                format!(
+                    "counts OpenAI Chat requests only, and endpoint `{}` does not list `openai_chat`",
+                    model.endpoint
+                ),
+            ));
+        }
         if arc_knows(id) {
             continue;
         }
@@ -4549,6 +4565,31 @@ pub(crate) mod tests {
             let env = |name: &str| (name == "GPU_BOX_API_KEY").then(|| OsString::from("key"));
             check_start(&settings, &env, &arc_knows_all).expect("key is set");
         }
+    }
+
+    #[test]
+    fn start_check_refuses_a_tokenizer_without_openai_chat() {
+        let env = |_: &str| Some(OsString::from("key"));
+        let arc_knows_all = |_: &str| true;
+        let mut doc = example();
+        set(
+            &mut doc,
+            &format!("{EP} gpu-box protocols"),
+            json!(["anthropic_messages", "openai_responses"]),
+        );
+        // Only the local process counts tokens, so loading accepts it.
+        let settings = load_doc_for(&doc, START).expect("load");
+        assert_eq!(
+            key_error(check_start(&settings, &env, &arc_knows_all)),
+            (
+                "local.inference.models.\"z-ai/glm-5.3-flash\".tokenizer".to_owned(),
+                "counts OpenAI Chat requests only, and endpoint `gpu-box` does not list `openai_chat`"
+                    .to_owned()
+            )
+        );
+        remove(&mut doc, &format!("{MD} {GLM} tokenizer"));
+        let settings = load_doc_for(&doc, START).expect("load");
+        check_start(&settings, &env, &arc_knows_all).expect("no tokenizer");
     }
 
     #[test]
