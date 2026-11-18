@@ -44,6 +44,13 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 
 ### Fixed
 
+- `rayline run claude -p` no longer shows Claude Code's
+  `[claude-code:unrecognized_model]` line on stderr for the models Rayline
+  sets, on Linux and macOS. The line still appears for any other model id,
+  such as a mistyped `--model`. The rest of Claude Code's output, its exit
+  code and signals are unchanged. In local mode, `rayline run claude -p` now
+  runs Claude Code in Rayline's place, as cloud mode does, so stopping the
+  run with SIGTERM stops Claude Code too.
 - `rayline local start` no longer fails when a `local.inference.models` entry
   has a `tokenizer` and its endpoint lists several protocols, as in the
   documented example.

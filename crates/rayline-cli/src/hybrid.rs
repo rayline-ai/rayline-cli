@@ -612,6 +612,14 @@ async fn run_harness(
     if harness == "hermes" && cfg!(windows) {
         crate::harness::hermes::prepare_launch(&command).map_err(io::Error::other)?;
     }
+    // In print mode Claude Code runs in Rayline's place, as a cloud launch
+    // does: signals reach it directly and its exit is Rayline's.
+    #[cfg(unix)]
+    if harness == "claude" && crate::claude::print_mode_flag(args).is_some() {
+        // `--model rayline-auto` names the model here.
+        crate::claude_print::relay_stderr(&mut command, &[crate::VIRTUAL_ROUTER_MODEL]);
+        return Ok(crate::exec_or_status(&mut command, "claude"));
+    }
     let status = command.status()?;
     Ok(crate::child_exit_code(status))
 }
