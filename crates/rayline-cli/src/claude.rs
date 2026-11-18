@@ -92,27 +92,20 @@ fn role_model_env_switches(
 /// The main model's context window for `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, when
 /// the router sizes the session (`routed`: it answered an auto-compact
 /// window, so Claude Code doesn't know the id and would assume 200K, capping
-/// that window too). `None` for a model Claude Code sizes itself, and a
-/// value in the user's environment is not read.
-fn max_context_tokens(
-    hosted: &crate::harness::LaunchModels,
-    routed: bool,
-) -> Result<Option<String>, RunError> {
+/// that window too) and the key's model listing gives the main model's
+/// window. `None` for a model Claude Code sizes itself, and for a
+/// `cloud.model.id` the listing doesn't have, which Claude Code sizes with
+/// its own default. A value in the user's environment is not read.
+fn max_context_tokens(hosted: &crate::harness::LaunchModels, routed: bool) -> Option<String> {
     if !routed {
-        return Ok(None);
+        return None;
     }
     hosted
         .offered
         .iter()
         .find(|model| model.id == hosted.main)
         .and_then(|model| model.details.as_ref())
-        .map(|details| Some(details.context_window.to_string()))
-        .ok_or_else(|| {
-            RunError::Router(format!(
-                "the router's model list doesn't describe its main model {}",
-                hosted.main
-            ))
-        })
+        .map(|details| details.context_window.to_string())
 }
 
 #[derive(Debug)]
@@ -211,7 +204,7 @@ async fn run_command_from_home(
     launch_switches.extend(role_model_env_switches(&hosted_models));
     launch_switches.push((
         MAX_CONTEXT_TOKENS_ENV,
-        max_context_tokens(&hosted_models, auto_compact_window.is_some())?,
+        max_context_tokens(&hosted_models, auto_compact_window.is_some()),
     ));
     let daemon_request = RequestSpec {
         env_name: &env_name,
@@ -1284,7 +1277,8 @@ mod arc_default_tests {
     use super::*;
 
     /// An ARC model the router sizes gets its listed window as Claude Code's
-    /// context window; a model Claude Code sizes itself gets none.
+    /// context window; a model Claude Code sizes itself, or a `cloud.model.id`
+    /// the listing doesn't have, gets none.
     #[test]
     fn claude_code_gets_the_main_model_s_window_when_the_router_sizes_it() {
         let models = crate::harness::tests::hosted_models();
@@ -1294,14 +1288,14 @@ mod arc_default_tests {
             .find(|model| model.id == models.main)
             .unwrap();
         assert_eq!(
-            max_context_tokens(&models, true).unwrap(),
+            max_context_tokens(&models, true),
             Some(main.details.as_ref().unwrap().context_window.to_string())
         );
-        assert_eq!(max_context_tokens(&models, false).unwrap(), None);
+        assert_eq!(max_context_tokens(&models, false), None);
 
         let mut unlisted = models.clone();
         unlisted.offered.retain(|model| model.id != models.main);
-        assert!(max_context_tokens(&unlisted, true).is_err());
+        assert_eq!(max_context_tokens(&unlisted, true), None);
     }
 
     /// `(subagent model, force, haiku model)` for a key's data mode (`None`:

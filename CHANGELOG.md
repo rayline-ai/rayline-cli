@@ -11,7 +11,8 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   Claude Code doesn't know ARC model ids and assumed 200K for them, which
   also capped the auto-compact window, so long sessions compacted at a
   fraction of the window. Rayline now sets `CLAUDE_CODE_MAX_CONTEXT_TOKENS`
-  to the main model's window from the router's model list. A Claude Code
+  to the main model's window from the router's model list; a `cloud.model.id`
+  the list doesn't have keeps Claude Code's own default. A Claude Code
   daemon an older Rayline started doesn't hold this setting, so the first
   launch after updating shows the running-daemon prompt.
 - `rayline update` updates every install that Homebrew doesn't manage, and
