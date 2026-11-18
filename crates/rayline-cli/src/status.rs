@@ -322,6 +322,9 @@ async fn logout_from_home(hosted: &HostedEnvironment, home: &Path) -> Result<Str
     let Some(account) = credentials.account(hosted.slot()).cloned() else {
         return Ok(format!("{}\n", signed_out(hosted.env.as_deref())));
     };
+    // The files to clean, listed before anything is revoked: a harness folder
+    // or `CODEX_HOME` that can't be used fails here, with nothing changed.
+    let key_files = crate::harness::router_key_files(home).map_err(AuthError::WriteFailed)?;
     // Revoke first: the router deletes the router keys minted under the
     // session. A revoke the router could not judge (unreachable, 5xx) keeps the
     // session, so the user can run logout again; one it refused (the session
@@ -335,7 +338,7 @@ async fn logout_from_home(hosted: &HostedEnvironment, home: &Path) -> Result<Str
     }
     // Rayline wrote the key into the harness configs; cut it out of them
     // before the stored account goes, so a failure here can be run again.
-    crate::harness::remove_router_key(home, &account.router_key.api_key)
+    crate::harness::remove_router_key(&key_files, &account.router_key.api_key)
         .map_err(AuthError::WriteFailed)?;
     // Read the file again: another command may have written it during the
     // revoke. The slot goes only while it still holds the revoked router key;

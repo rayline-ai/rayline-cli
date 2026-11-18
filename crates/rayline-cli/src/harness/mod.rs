@@ -677,17 +677,12 @@ fn cloud_probe(binary: &Path) -> Command {
     command
 }
 
-/// Remove `key` from every file Rayline wrote it into: the top-level files of
-/// each harness folder under `~/.rayline/harness/` (cloud-mode configs, the
+/// The files Rayline may have written a router key into: the top-level files
+/// of each harness folder under `~/.rayline/harness/` (cloud-mode configs, the
 /// Codex and Codex app homes) and the Codex `rayline` profile
-/// (`$CODEX_HOME/rayline.config.toml`, else `~/.codex/`). Each match is cut out
-/// in place, so the file keeps every other setting and the harness's
-/// sessions stay; the next launch writes a fresh key. A file holding another
-/// environment's key is left alone. Returns the files changed.
-pub(crate) fn remove_router_key(home: &Path, key: &str) -> io::Result<Vec<PathBuf>> {
-    if key.is_empty() {
-        return Ok(Vec::new());
-    }
+/// (`$CODEX_HOME/rayline.config.toml`, else `~/.codex/`). Logout lists them
+/// before it revokes, so a folder or `CODEX_HOME` it can't use fails first.
+pub(crate) fn router_key_files(home: &Path) -> io::Result<Vec<PathBuf>> {
     let mut candidates = Vec::new();
     let harness_root = home.join(crate::DOT_CONFIG_DIR).join("harness");
     match fs::read_dir(&harness_root) {
@@ -713,10 +708,22 @@ pub(crate) fn remove_router_key(home: &Path, key: &str) -> io::Result<Vec<PathBu
         None => home.join(".codex"),
     };
     candidates.push(codex_home.join("rayline.config.toml"));
+    Ok(candidates)
+}
 
+/// Remove `key` from each of `files` ([`router_key_files`]) that holds it.
+/// Each match is cut out in place, so the file keeps every other setting and
+/// the harness's sessions stay; the next launch writes a fresh key. A file
+/// holding another environment's key is left alone, and a file that changes
+/// while it is being rewritten is an error naming it. Returns the files
+/// changed.
+pub(crate) fn remove_router_key(files: &[PathBuf], key: &str) -> io::Result<Vec<PathBuf>> {
+    if key.is_empty() {
+        return Ok(Vec::new());
+    }
     let mut changed = Vec::new();
-    for path in candidates {
-        let bytes = match fs::read(&path) {
+    for path in files {
+        let bytes = match fs::read(path) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
             Err(error) => {
@@ -726,7 +733,7 @@ pub(crate) fn remove_router_key(home: &Path, key: &str) -> io::Result<Vec<PathBu
                 ));
             }
         };
-        let Ok(text) = String::from_utf8(bytes) else {
+        let Ok(text) = String::from_utf8(bytes.clone()) else {
             continue;
         };
         if !text.contains(key) {
@@ -740,8 +747,15 @@ pub(crate) fn remove_router_key(home: &Path, key: &str) -> io::Result<Vec<PathBu
             std::process::id()
         ));
         write_private(&tmp, &text.replace(key, "")).map_err(in_path)?;
-        fs::rename(&tmp, &path).map_err(in_path)?;
-        changed.push(path);
+        if fs::read(path).ok().as_ref() != Some(&bytes) {
+            let _ = fs::remove_file(&tmp);
+            return Err(io::Error::other(format!(
+                "{} changed while Rayline was updating it; run the command again",
+                path.display()
+            )));
+        }
+        fs::rename(&tmp, path).map_err(in_path)?;
+        changed.push(path.clone());
     }
     Ok(changed)
 }
