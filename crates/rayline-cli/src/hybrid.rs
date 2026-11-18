@@ -698,7 +698,7 @@ async fn launch(
     };
     clear_state(paths)?;
     let mut token_counters = Vec::new();
-    for (id, repo, deployment) in crate::hybrid_profile::counted_deployments(settings) {
+    for (id, repo, deployments) in crate::hybrid_profile::counted_deployments(settings) {
         let hub = rayline_hf::hf_cache_dir(home).map_err(io::Error::other)?;
         let snapshot = tokenizer_snapshot(&hub, repo).await.map_err(|error| {
             io::Error::other(format!(
@@ -714,7 +714,9 @@ async fn launch(
         } else {
             say(format!("Prompt counter for {id}: {repo}"));
         }
-        token_counters.push((deployment, snapshot.dir));
+        for deployment in deployments {
+            token_counters.push((deployment, snapshot.dir.clone()));
+        }
     }
     write_private_json(&paths.core_config(), &config, true)?;
     match &local_arc {
