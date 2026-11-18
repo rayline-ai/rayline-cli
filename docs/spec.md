@@ -411,7 +411,7 @@ The action ARC identifies is the model id after its provider prefix (`qwen/qwen3
 | `model` | string | yes | The name that server knows the model by. |
 | `context_window` | integer > 0 | yes, when the local process starts (item 5) | Context window in tokens. |
 | `max_output_tokens` | integer > 0 | yes, when the local process starts (item 5) | Output ceiling in tokens. |
-| `tokenizer` | string | no | Hugging Face tokenizer repo for token counting. |
+| `tokenizer` | string | no | Hugging Face tokenizer repo for token counting (item 7). |
 | `price` | object `input`, `output`, `cache_read`, `cache_write` (numbers >= 0) | no | Overrides ARC's price for this model only. |
 
 1. When ARC picks a model in `models`, the local process sends the request to its endpoint under its `model` name.
@@ -428,6 +428,7 @@ The action ARC identifies is the model id after its provider prefix (`qwen/qwen3
 4. Main/subagent routes are not supported.
 5. ARC doesn't publish the models it knows yet, so it knows no model's limits. Every entry must state `context_window` and `max_output_tokens`, and the local process refuses to start without them (section 5.8 item 13).
 6. In local mode Rayline tells every harness a context window of 1,000,000 tokens, whichever model serves the turn.
+7. With a `tokenizer`, the local process counts each request it sends to the model over `openai_chat` in the model's own tokens, with the repo's tokenizer and chat template. It doesn't count the model's other requests. Start refuses a `tokenizer` when the model's endpoint doesn't list `openai_chat`, or when the repo publishes no chat template, as a base model's repo often doesn't; its instruct or chat variant does (section 5.8 items 15 and 16).
 
 ### 5.4 `local.routing`
 
@@ -538,6 +539,8 @@ When the local process starts, before it serves anything, it also refuses:
 12. An `api_key_env` naming an env var that isn't set.
 13. A model entry that is missing `context_window` or `max_output_tokens`. ARC knows no model today, so this applies to every entry (section 5.3 item 5).
 14. An `api_key_env` naming `RAYLINE_ROUTER_API_KEY`, which holds the Rayline router key.
+15. A model entry with a `tokenizer` whose endpoint doesn't list `openai_chat`.
+16. A `tokenizer` repo that publishes no chat template: no `chat_template.jinja`, and in `tokenizer_config.json` no `chat_template` string or named `default` template. The error names the model's `tokenizer` key.
 
 ### 5.9 Migration from the earlier shape
 

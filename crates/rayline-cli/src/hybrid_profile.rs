@@ -88,6 +88,19 @@ fn local_registry_provider(protocol: Protocol) -> &'static str {
 
 /// The deployment serving `model`, a `models` key or a cloud pin's registry
 /// id, over `protocol`.
+/// Each model with a `tokenizer`, its repo and the deployment its prompt
+/// counter is attached to: its Chat deployment, the only one the core counts.
+pub(crate) fn counted_deployments(settings: &Settings) -> Vec<(&str, &str, String)> {
+    settings
+        .models
+        .iter()
+        .filter_map(|(id, model)| {
+            let repo = model.tokenizer.as_deref()?;
+            Some((id.as_str(), repo, deployment_id(id, Protocol::OpenaiChat)))
+        })
+        .collect()
+}
+
 pub(crate) fn deployment_id(model: &str, protocol: Protocol) -> String {
     let suffix = match protocol {
         Protocol::AnthropicMessages => "messages",
@@ -107,7 +120,7 @@ fn registry_action_model(id: &str) -> &str {
 
 /// The core config for `settings`, with Decisions on `router_url`. Refuses
 /// what the local process must refuse before it serves anything (spec 5.8
-/// items 10 to 12).
+/// items 10 to 13).
 pub(crate) fn core_config(settings: &Settings, router_url: &str) -> Result<Value, ConfigError> {
     for (id, endpoint) in &settings.endpoints {
         if endpoint.api_key_env.as_deref() == Some(ROUTER_KEY_ENV) {
@@ -472,6 +485,35 @@ mod tests {
                 "derived_actions": actions
             })
         );
+    }
+
+    #[test]
+    fn a_tokenizer_counts_only_the_chat_deployment_of_its_model() {
+        let settings = load(
+            "counted",
+            &one_model(
+                r#"{"base_url": "http://127.0.0.1:8080",
+                    "protocols": ["anthropic_messages", "openai_chat", "openai_responses"]}"#,
+                r#"{"endpoint": "box", "model": "glm", "context_window": 131072,
+                    "max_output_tokens": 8192, "tokenizer": "zai-org/GLM-5.3-Flash"}"#,
+            ),
+        );
+        let counted = counted_deployments(&settings);
+        assert_eq!(counted.len(), 1);
+        let (id, repo, deployment) = &counted[0];
+        assert_eq!(
+            (*repo, deployment.as_str()),
+            ("zai-org/GLM-5.3-Flash", format!("{id}-chat").as_str())
+        );
+        let config = core_config(&settings, "https://api.rayline.ai").unwrap();
+        let named: Vec<_> = config["deployments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|candidate| candidate["id"] == deployment.as_str())
+            .map(|candidate| candidate["protocol"].as_str().unwrap())
+            .collect();
+        assert_eq!(named, ["openai.chat.v1"]);
     }
 
     #[test]

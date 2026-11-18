@@ -130,13 +130,18 @@ keyed by the model id ARC returns.
 | `model` | string | yes | The name the server knows the model by. |
 | `context_window` | integer > 0 | yes, when the local process starts | The context window in tokens. |
 | `max_output_tokens` | integer > 0 | yes, when the local process starts | The output ceiling in tokens. |
-| `tokenizer` | string | no | A Hugging Face tokenizer repo, used to count tokens. |
+| `tokenizer` | string | no | A Hugging Face tokenizer repo, used to count the tokens of OpenAI Chat requests. |
 | `price` | object with `input`, `output`, `cache_read`, `cache_write` (numbers >= 0) | no | Replaces ARC's price for this model only. |
 
 When ARC picks a model listed here, the local process sends the request to
 that model's endpoint under its `model` name. ARC doesn't publish the models
 it knows yet, so every entry needs `context_window` and `max_output_tokens`,
 and the local process refuses to start without them.
+
+With a `tokenizer`, requests sent to the model over `openai_chat` are counted
+in the model's own tokens; its other requests are not. The model's endpoint
+must list `openai_chat`, and the repo must publish a chat template: name a
+model's instruct or chat variant, not its base model.
 
 The only other models ARC can pick are three Rayline Platform models:
 `anthropic/claude-opus-5.5`, `anthropic/claude-sonnet-5.5` and

@@ -10,6 +10,16 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 - `rayline update` updates every install that Homebrew doesn't manage, and
   `rayline update --help` names Homebrew only.
 
+### Fixed
+
+- `rayline local start` no longer fails when a `local.inference.models` entry
+  has a `tokenizer` and its endpoint lists other protocols besides
+  `openai_chat`, as in the documented example. The tokenizer counts the
+  model's OpenAI Chat requests.
+- `rayline local start` refuses a `tokenizer` whose endpoint doesn't list
+  `openai_chat`, and a tokenizer repo with no chat template (a base model's),
+  with an error naming the model's `tokenizer` key.
+
 ## 0.5.6 (2026-11-17)
 
 ### Changed
