@@ -70,6 +70,10 @@ use serde_json::{Value, json};
 use super::{ConfigFile, Plan, RenderContext, to_yaml, yaml_merge};
 
 pub(crate) const CONFIG_FILE: &str = "config.yaml";
+/// Where Hermes keeps its own copies of `config.yaml`, under `HERMES_HOME`:
+/// `config.yaml.<reason>.<timestamp>`, a `good` copy each time a changed file
+/// loads. Each is a copy of the config Rayline writes, router key included.
+pub(crate) const CONFIG_BACKUPS_DIR: [&str; 2] = ["backups", "config"];
 pub(crate) const MESSAGES_PROVIDER: &str = "rayline";
 pub(crate) const RESPONSES_PROVIDER: &str = "rayline-resp";
 /// Hermes' per-provider key naming the header its conversation id rides on.
