@@ -142,17 +142,6 @@ async fn run_on(
         .map_or(crate::UPDATE_BASE_URL, Url::as_str)
         .trim_end_matches('/');
     let install_path = install_path(request.install_path.as_deref())?;
-    if is_app_bundle_managed(&install_path) {
-        return Ok(UpdateResult {
-            message: format!(
-                "{} is managed by Rayline.app. Update the app to update the CLI:\n  \
-                 re-download from https://get.rayline.ai\n",
-                crate::CLI_BIN
-            ),
-            exit_code: 0,
-            stderr: false,
-        });
-    }
     if is_homebrew_managed(&install_path)? {
         return Ok(UpdateResult {
             message: format!(
@@ -943,17 +932,6 @@ pub(crate) fn is_homebrew_managed(install_path: &Path) -> Result<bool, UpdateErr
         Some(brew) => path_is_under_prefix(install_path, &brew_prefix(&brew)?),
         None => false,
     })
-}
-
-/// True when the running `rayline` lives inside a `.app` bundle (directly, or via a
-/// `/usr/local/bin` symlink created by the in-app "Install command line tools"
-/// action). The app owns updates in that case; self-replacing would break the
-/// notarization seal. Canonicalize first so symlink paths resolve to the real
-/// bundle path before matching.
-pub(crate) fn is_app_bundle_managed(install_path: &Path) -> bool {
-    let resolved =
-        std::fs::canonicalize(install_path).unwrap_or_else(|_| install_path.to_path_buf());
-    resolved.to_string_lossy().contains(".app/Contents/")
 }
 
 fn path_is_under_prefix(install_path: &Path, prefix: &Path) -> bool {

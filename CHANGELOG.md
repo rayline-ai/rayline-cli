@@ -14,6 +14,8 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   to the main model's window from the router's model list. A Claude Code
   daemon an older Rayline started doesn't hold this setting, so the first
   launch after updating shows the running-daemon prompt.
+- `rayline update` updates every install that Homebrew doesn't manage, and
+  `rayline update --help` names Homebrew only.
 
 ## 0.5.6 (2026-11-17)
 
