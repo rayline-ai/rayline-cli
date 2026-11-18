@@ -40,6 +40,8 @@ pub struct RouterTotals {
     pub cloud_requests: u64,
     pub input_tokens: u64,
     pub output_tokens: u64,
+    /// Provider prompt-cache reads, part of `input_tokens`.
+    pub cache_read_tokens: u64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -74,6 +76,22 @@ pub struct RequestSnapshot {
     pub decision_ms: Option<u64>,
     /// The event the decision was made for, such as `task_start`.
     pub decision_event: Option<String>,
+    /// The harness that sent the request, named by its gateway path
+    /// (`/h/<harness>`); `None` for a request on no harness path.
+    pub harness: Option<String>,
+    /// The thinking level the decision picked.
+    pub thinking_level: Option<String>,
+    /// Why the decision's selection rule picked the target:
+    /// `prefer_local_threshold`, `utility_fallback` or `schedule`.
+    pub decision_reason: Option<String>,
+    /// With `prefer_local_threshold`: the picked local model's pass
+    /// probability and the rule's threshold.
+    pub p_pass: Option<f64>,
+    pub min_p_pass: Option<f64>,
+    /// A local decision's prompt tokens the ARC encoder read, and how many
+    /// of them it reused from an earlier turn.
+    pub arc_encoded_tokens: Option<u64>,
+    pub arc_restored_tokens: Option<u64>,
     pub started_at_unix_ms: u64,
     pub first_token_at_unix_ms: Option<u64>,
     pub completed_at_unix_ms: Option<u64>,
@@ -87,6 +105,8 @@ pub struct RequestSnapshot {
     pub output_tps: Option<f64>,
     pub prompt_tokens: Option<u64>,
     pub prompt_cache_tokens: Option<u64>,
+    /// Provider prompt-cache writes; `None` when the provider reports none.
+    pub cache_write_tokens: Option<u64>,
     pub prompt_processed_tokens: Option<u64>,
     pub cache_hit_ratio: Option<f64>,
 }
@@ -98,6 +118,8 @@ pub enum MetricsUpdate {
         request_id: String,
         source: String,
         requested_model: Option<String>,
+        #[serde(default)]
+        harness: Option<String>,
     },
     /// `target` is `local` or `cloud`; `None` when the receipt names no
     /// single deployment.
@@ -112,6 +134,24 @@ pub enum MetricsUpdate {
         router: Option<String>,
         decision_ms: Option<u64>,
         decision_event: Option<String>,
+    },
+    /// What the decision that routed a request picked and why, and, for a
+    /// local decision, the ARC encoder's token counts. Strings are capped at
+    /// 1 KiB.
+    DecisionDetails {
+        request_id: String,
+        #[serde(default)]
+        thinking_level: Option<String>,
+        #[serde(default)]
+        decision_reason: Option<String>,
+        #[serde(default)]
+        p_pass: Option<f64>,
+        #[serde(default)]
+        min_p_pass: Option<f64>,
+        #[serde(default)]
+        arc_encoded_tokens: Option<u64>,
+        #[serde(default)]
+        arc_restored_tokens: Option<u64>,
     },
     /// The models a request was routed to and served by, the only update that
     /// carries them. Metadata strings are capped at 1 KiB.
@@ -143,6 +183,8 @@ pub enum MetricsUpdate {
         request_id: String,
         prompt_tokens: Option<u64>,
         cache_tokens: Option<u64>,
+        #[serde(default)]
+        cache_write_tokens: Option<u64>,
         processed_tokens: Option<u64>,
         prompt_ms: Option<f64>,
         prompt_tps: Option<f64>,
@@ -221,6 +263,7 @@ impl RouterMetrics {
                 request_id,
                 source,
                 requested_model,
+                harness,
             } => {
                 let mut active = self.active.lock().expect("metrics active lock poisoned");
                 let record = active
@@ -229,6 +272,23 @@ impl RouterMetrics {
                 record.source = source.clone();
                 record.state = "started".to_owned();
                 merge_option(&mut record.requested_model, requested_model.clone());
+                merge_bounded(&mut record.harness, harness);
+            }
+            MetricsUpdate::DecisionDetails { request_id, .. } => {
+                // Same lock order as completion: active -> recent.
+                let mut active = self.active.lock().expect("metrics active lock poisoned");
+                if let Some(record) = active.get_mut(request_id) {
+                    record.merge_decision_details(&update);
+                } else {
+                    let mut recent = self.recent.lock().expect("metrics recent lock poisoned");
+                    if let Some(record) = recent
+                        .iter_mut()
+                        .rev()
+                        .find(|r| r.request_id == *request_id)
+                    {
+                        record.merge_decision_details(&update);
+                    }
+                }
             }
             MetricsUpdate::RouteDecided {
                 request_id,
@@ -302,31 +362,13 @@ impl RouterMetrics {
                     self.merge_recent_token_usage(request_id, *input_tokens, *output_tokens);
                 }
             }
-            MetricsUpdate::PromptCache {
-                request_id,
-                prompt_tokens,
-                cache_tokens,
-                processed_tokens,
-                prompt_ms,
-                prompt_tps,
-            } => {
+            MetricsUpdate::PromptCache { request_id, .. } => {
                 let mut active = self.active.lock().expect("metrics active lock poisoned");
                 if let Some(record) = active.get_mut(request_id) {
-                    merge_option(&mut record.prompt_tokens, *prompt_tokens);
-                    merge_option(&mut record.prompt_cache_tokens, *cache_tokens);
-                    merge_option(&mut record.prompt_processed_tokens, *processed_tokens);
-                    merge_option(&mut record.prompt_ms, *prompt_ms);
-                    merge_option(&mut record.prompt_tps, *prompt_tps);
+                    record.merge_prompt_cache(&update);
                 } else {
                     drop(active);
-                    self.merge_recent_prompt_cache(
-                        request_id,
-                        *prompt_tokens,
-                        *cache_tokens,
-                        *processed_tokens,
-                        *prompt_ms,
-                        *prompt_tps,
-                    );
+                    self.merge_recent_prompt_cache(request_id, &update);
                 }
             }
             MetricsUpdate::RequestCompleted {
@@ -407,28 +449,24 @@ impl RouterMetrics {
         }
     }
 
-    fn merge_recent_prompt_cache(
-        &self,
-        request_id: &str,
-        prompt_tokens: Option<u64>,
-        cache_tokens: Option<u64>,
-        processed_tokens: Option<u64>,
-        prompt_ms: Option<f64>,
-        prompt_tps: Option<f64>,
-    ) {
-        let mut recent = self.recent.lock().expect("metrics recent lock poisoned");
-        let Some(record) = recent
-            .iter_mut()
-            .rev()
-            .find(|record| record.request_id == request_id)
-        else {
-            return;
+    fn merge_recent_prompt_cache(&self, request_id: &str, update: &MetricsUpdate) {
+        let (old_read, new_read) = {
+            let mut recent = self.recent.lock().expect("metrics recent lock poisoned");
+            let Some(record) = recent
+                .iter_mut()
+                .rev()
+                .find(|record| record.request_id == request_id)
+            else {
+                return;
+            };
+            let old_read = record.prompt_cache_tokens.unwrap_or(0);
+            record.merge_prompt_cache(update);
+            (old_read, record.prompt_cache_tokens.unwrap_or(0))
         };
-        merge_option(&mut record.prompt_tokens, prompt_tokens);
-        merge_option(&mut record.prompt_cache_tokens, cache_tokens);
-        merge_option(&mut record.prompt_processed_tokens, processed_tokens);
-        merge_option(&mut record.prompt_ms, prompt_ms);
-        merge_option(&mut record.prompt_tps, prompt_tps);
+        if old_read != new_read {
+            let mut totals = self.totals.lock().expect("metrics totals lock poisoned");
+            totals.cache_read_tokens = adjust_total(totals.cache_read_tokens, old_read, new_read);
+        }
     }
 
     fn push_recent(&self, record: RequestRecord) {
@@ -446,6 +484,9 @@ impl RouterMetrics {
             totals.output_tokens = totals
                 .output_tokens
                 .saturating_add(record.output_tokens.unwrap_or(0));
+            totals.cache_read_tokens = totals
+                .cache_read_tokens
+                .saturating_add(record.prompt_cache_tokens.unwrap_or(0));
         }
         let mut recent = self.recent.lock().expect("metrics recent lock poisoned");
         recent.push_back(record);
@@ -482,6 +523,13 @@ struct RequestRecord {
     router: Option<String>,
     decision_ms: Option<u64>,
     decision_event: Option<String>,
+    harness: Option<String>,
+    thinking_level: Option<String>,
+    decision_reason: Option<String>,
+    p_pass: Option<f64>,
+    min_p_pass: Option<f64>,
+    arc_encoded_tokens: Option<u64>,
+    arc_restored_tokens: Option<u64>,
     started_at_unix_ms: u64,
     response_started_at_unix_ms: Option<u64>,
     first_token_at_unix_ms: Option<u64>,
@@ -490,6 +538,7 @@ struct RequestRecord {
     output_tokens: Option<u64>,
     prompt_tokens: Option<u64>,
     prompt_cache_tokens: Option<u64>,
+    cache_write_tokens: Option<u64>,
     prompt_processed_tokens: Option<u64>,
     prompt_ms: Option<f64>,
     prompt_tps: Option<f64>,
@@ -541,6 +590,48 @@ impl RequestRecord {
         merge_bounded(&mut self.wire_model, wire_model);
     }
 
+    fn merge_prompt_cache(&mut self, update: &MetricsUpdate) {
+        let MetricsUpdate::PromptCache {
+            prompt_tokens,
+            cache_tokens,
+            cache_write_tokens,
+            processed_tokens,
+            prompt_ms,
+            prompt_tps,
+            ..
+        } = update
+        else {
+            return;
+        };
+        merge_option(&mut self.prompt_tokens, *prompt_tokens);
+        merge_option(&mut self.prompt_cache_tokens, *cache_tokens);
+        merge_option(&mut self.cache_write_tokens, *cache_write_tokens);
+        merge_option(&mut self.prompt_processed_tokens, *processed_tokens);
+        merge_option(&mut self.prompt_ms, *prompt_ms);
+        merge_option(&mut self.prompt_tps, *prompt_tps);
+    }
+
+    fn merge_decision_details(&mut self, update: &MetricsUpdate) {
+        let MetricsUpdate::DecisionDetails {
+            thinking_level,
+            decision_reason,
+            p_pass,
+            min_p_pass,
+            arc_encoded_tokens,
+            arc_restored_tokens,
+            ..
+        } = update
+        else {
+            return;
+        };
+        merge_bounded(&mut self.thinking_level, thinking_level);
+        merge_bounded(&mut self.decision_reason, decision_reason);
+        merge_option(&mut self.p_pass, *p_pass);
+        merge_option(&mut self.min_p_pass, *min_p_pass);
+        merge_option(&mut self.arc_encoded_tokens, *arc_encoded_tokens);
+        merge_option(&mut self.arc_restored_tokens, *arc_restored_tokens);
+    }
+
     fn new(request_id: String, now: u64) -> Self {
         Self {
             request_id,
@@ -562,6 +653,13 @@ impl RequestRecord {
             router: None,
             decision_ms: None,
             decision_event: None,
+            harness: None,
+            thinking_level: None,
+            decision_reason: None,
+            p_pass: None,
+            min_p_pass: None,
+            arc_encoded_tokens: None,
+            arc_restored_tokens: None,
             started_at_unix_ms: now,
             response_started_at_unix_ms: None,
             first_token_at_unix_ms: None,
@@ -570,6 +668,7 @@ impl RequestRecord {
             output_tokens: None,
             prompt_tokens: None,
             prompt_cache_tokens: None,
+            cache_write_tokens: None,
             prompt_processed_tokens: None,
             prompt_ms: None,
             prompt_tps: None,
@@ -626,6 +725,13 @@ impl RequestRecord {
             router: self.router.clone(),
             decision_ms: self.decision_ms,
             decision_event: self.decision_event.clone(),
+            harness: self.harness.clone(),
+            thinking_level: self.thinking_level.clone(),
+            decision_reason: self.decision_reason.clone(),
+            p_pass: self.p_pass,
+            min_p_pass: self.min_p_pass,
+            arc_encoded_tokens: self.arc_encoded_tokens,
+            arc_restored_tokens: self.arc_restored_tokens,
             started_at_unix_ms: self.started_at_unix_ms,
             first_token_at_unix_ms: self.first_token_at_unix_ms,
             completed_at_unix_ms: self.completed_at_unix_ms,
@@ -639,6 +745,7 @@ impl RequestRecord {
             output_tps,
             prompt_tokens: self.prompt_tokens,
             prompt_cache_tokens: self.prompt_cache_tokens,
+            cache_write_tokens: self.cache_write_tokens,
             prompt_processed_tokens: self.prompt_processed_tokens,
             cache_hit_ratio,
         }
@@ -714,6 +821,7 @@ mod tests {
             let metrics = RouterMetrics::new("test-router");
             metrics.record(MetricsUpdate::RequestStarted {
                 request_id: "req".into(),
+                harness: None,
                 source: "hybrid".into(),
                 requested_model: Some("rayline-auto".into()),
             });
@@ -747,6 +855,7 @@ mod tests {
         let metrics = RouterMetrics::new("test-router");
         metrics.record(MetricsUpdate::RequestStarted {
             request_id: "identity".into(),
+            harness: None,
             source: "hybrid".into(),
             requested_model: None,
         });
@@ -799,6 +908,7 @@ mod tests {
         let metrics = RouterMetrics::new("test-router");
         metrics.record(MetricsUpdate::RequestStarted {
             request_id: "req-1".to_owned(),
+            harness: None,
             source: "hybrid".to_owned(),
             requested_model: Some("rayline-auto".to_owned()),
         });
@@ -849,6 +959,7 @@ mod tests {
         let metrics = RouterMetrics::new("test-router");
         metrics.record(MetricsUpdate::RequestStarted {
             request_id: "req-1".to_owned(),
+            harness: None,
             source: "hybrid".to_owned(),
             requested_model: Some("rayline-auto".to_owned()),
         });
@@ -866,6 +977,7 @@ mod tests {
         });
         metrics.record(MetricsUpdate::PromptCache {
             request_id: "req-1".to_owned(),
+            cache_write_tokens: None,
             prompt_tokens: Some(12),
             cache_tokens: Some(5),
             processed_tokens: Some(12),
@@ -895,6 +1007,81 @@ mod tests {
         assert_eq!(corrected.totals.output_tokens, 18);
     }
 
+    /// A row carries its harness and the decision's details, which may
+    /// arrive after it completed; cache reads add up in the totals, a late
+    /// correction included.
+    #[test]
+    fn rows_carry_harness_decision_details_and_cache_totals() {
+        let metrics = RouterMetrics::new("test-router");
+        metrics.record(MetricsUpdate::RequestStarted {
+            request_id: "req-1".to_owned(),
+            source: "hybrid".to_owned(),
+            requested_model: None,
+            harness: Some("claude".to_owned()),
+        });
+        metrics.record(MetricsUpdate::DecisionDetails {
+            request_id: "req-1".to_owned(),
+            thinking_level: Some("low".to_owned()),
+            decision_reason: Some("prefer_local_threshold".to_owned()),
+            p_pass: Some(0.82),
+            min_p_pass: Some(0.75),
+            arc_encoded_tokens: None,
+            arc_restored_tokens: None,
+        });
+        metrics.record(MetricsUpdate::PromptCache {
+            request_id: "req-1".to_owned(),
+            cache_write_tokens: Some(6),
+            prompt_tokens: Some(40),
+            cache_tokens: Some(30),
+            processed_tokens: Some(40),
+            prompt_ms: None,
+            prompt_tps: None,
+        });
+        metrics.record(MetricsUpdate::RequestCompleted {
+            request_id: "req-1".to_owned(),
+            status_code: Some(200),
+            input_tokens: Some(40),
+            output_tokens: Some(9),
+        });
+        metrics.record(MetricsUpdate::DecisionDetails {
+            request_id: "req-1".to_owned(),
+            thinking_level: None,
+            decision_reason: None,
+            p_pass: None,
+            min_p_pass: None,
+            arc_encoded_tokens: Some(20_940),
+            arc_restored_tokens: Some(8_286),
+        });
+        let row = &metrics.snapshot().recent[0];
+        assert_eq!(row.harness.as_deref(), Some("claude"));
+        assert_eq!(row.thinking_level.as_deref(), Some("low"));
+        assert_eq!(
+            row.decision_reason.as_deref(),
+            Some("prefer_local_threshold")
+        );
+        assert_eq!((row.p_pass, row.min_p_pass), (Some(0.82), Some(0.75)));
+        assert_eq!(
+            (row.arc_encoded_tokens, row.arc_restored_tokens),
+            (Some(20_940), Some(8_286))
+        );
+        assert_eq!(
+            (row.prompt_cache_tokens, row.cache_write_tokens),
+            (Some(30), Some(6))
+        );
+        assert_eq!(metrics.snapshot().totals.cache_read_tokens, 30);
+
+        metrics.record(MetricsUpdate::PromptCache {
+            request_id: "req-1".to_owned(),
+            cache_write_tokens: None,
+            prompt_tokens: None,
+            cache_tokens: Some(32),
+            processed_tokens: None,
+            prompt_ms: None,
+            prompt_tps: None,
+        });
+        assert_eq!(metrics.snapshot().totals.cache_read_tokens, 32);
+    }
+
     #[test]
     fn unknown_usage_updates_do_not_create_active_rows() {
         let metrics = RouterMetrics::new("test-router");
@@ -905,6 +1092,7 @@ mod tests {
         });
         metrics.record(MetricsUpdate::PromptCache {
             request_id: "missing".to_owned(),
+            cache_write_tokens: None,
             prompt_tokens: Some(12),
             cache_tokens: Some(5),
             processed_tokens: Some(12),
