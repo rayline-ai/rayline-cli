@@ -1562,7 +1562,7 @@ fn harness_command(
                 // gateway's. State the window the gateway advertises, as
                 // `model_context_window` already does for codex.
                 .env(
-                    "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
+                    crate::claude::MAX_CONTEXT_TOKENS_ENV,
                     capabilities.context_window.to_string(),
                 )
                 .args(["--model", "rayline-auto"]);
