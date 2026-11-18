@@ -357,6 +357,7 @@ async fn logout_from_home(hosted: &HostedEnvironment, home: &Path) -> Result<Str
     // before the stored account goes, so a failure here can be run again.
     crate::harness::remove_router_key(&key_files, &account.router_key.api_key)
         .map_err(AuthError::WriteFailed)?;
+    crate::harness::remove_hermes_config_backups(home).map_err(AuthError::WriteFailed)?;
     // Read the file again: another command may have written it during the
     // revoke. The slot goes only while it still holds the revoked router key;
     // a sign-in since then is kept.
@@ -2085,6 +2086,13 @@ mod tests {
             format!("experimental_bearer_token = \"{API_KEY}\"\nsetting = kept\n"),
         )
         .unwrap();
+        // Hermes' own copies of its config, which hold the key, are deleted.
+        let backups = write_text(
+            &home,
+            "hermes",
+            "backups/config/config.yaml.good.20261118-120000",
+            &format!("api_key: {API_KEY}\n"),
+        );
         // Another environment's key, and a harness session file, stay as they are.
         let other = write_text(&home, "pi", "other.json", "{\"apiKey\": \"rlk-other\"}");
         let session = write_text(&home, "codex", "history.jsonl", "{\"turn\": 1}\n");
@@ -2103,15 +2111,19 @@ mod tests {
             assert!(!text.contains(API_KEY), "{}", path.display());
             assert!(text.contains("setting = kept"), "{}", path.display());
         }
+        assert!(!backups.parent().unwrap().exists(), "{}", backups.display());
         assert!(fs::read_to_string(&other).unwrap().contains("rlk-other"));
         assert_eq!(fs::read_to_string(&session).unwrap(), "{\"turn\": 1}\n");
         let _ = fs::remove_dir_all(&home);
     }
 
     fn write_text(home: &Path, dir: &str, name: &str, text: &str) -> PathBuf {
-        let dir = home.join(crate::DOT_CONFIG_DIR).join("harness").join(dir);
-        fs::create_dir_all(&dir).unwrap();
-        let path = dir.join(name);
+        let path = home
+            .join(crate::DOT_CONFIG_DIR)
+            .join("harness")
+            .join(dir)
+            .join(name);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, text).unwrap();
         path
     }

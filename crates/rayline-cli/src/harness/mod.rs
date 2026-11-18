@@ -743,6 +743,26 @@ pub(crate) fn router_key_files(home: &Path) -> io::Result<Vec<PathBuf>> {
     Ok(candidates)
 }
 
+/// Delete Hermes' copies of its config in Rayline's Hermes home
+/// ([`hermes::CONFIG_BACKUPS_DIR`]): they hold the router key Rayline wrote,
+/// and Hermes makes a new one from the next config it loads. A missing folder
+/// is nothing to do; any other failure is an error naming the folder.
+pub(crate) fn remove_hermes_config_backups(home: &Path) -> io::Result<()> {
+    let dir = hermes::CONFIG_BACKUPS_DIR
+        .iter()
+        .fold(config_dir(home, Harness::Hermes), |path, part| {
+            path.join(part)
+        });
+    match fs::remove_dir_all(&dir) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(io::Error::new(
+            error.kind(),
+            format!("{}: {error}", dir.display()),
+        )),
+    }
+}
+
 /// Remove `key` from each of `files` ([`router_key_files`]) that holds it.
 /// Each match is cut out in place, so the file keeps every other setting and
 /// the harness's sessions stay; the next launch writes a fresh key. A file
