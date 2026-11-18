@@ -1593,6 +1593,9 @@ fn harness_command(
             let harness = crate::harness::Harness::from_command(name).ok_or_else(|| {
                 io::Error::other(format!("unsupported local-mode harness {name:?}"))
             })?;
+            harness
+                .require_version(withheld_command(&program, withheld))
+                .map_err(io::Error::other)?;
             let major_version = harness
                 .major_version(withheld_command(&program, withheld))
                 .map_err(io::Error::other)?;
@@ -2352,6 +2355,18 @@ mod tests {
                      echo 'opencode v2.0.25'\n",
                 )
                 .unwrap();
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt as _;
+                    fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
+                }
+            }
+            // An OpenClaw new enough for the config Rayline writes.
+            if cfg!(windows) {
+                fs::write(dir.join("openclaw.cmd"), "@echo OpenClaw 2026.11.3\r\n").unwrap();
+            } else {
+                let binary = dir.join("openclaw");
+                fs::write(&binary, "#!/bin/sh\necho 'OpenClaw 2026.11.3'\n").unwrap();
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt as _;

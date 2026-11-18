@@ -23,6 +23,9 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   configured environment: "Not signed in to Rayline" (from `rayline auth status` and
   every launch) and the login timeout and expiry messages, which also say to
   run it again.
+- `rayline run openclaw` refuses an OpenClaw older than 2026.9.6 with a
+  message naming the version to install, instead of handing it a config it
+  rejects as invalid.
 - `rayline update` updates every install that Homebrew doesn't manage, and
   `rayline update --help` names Homebrew only.
 
