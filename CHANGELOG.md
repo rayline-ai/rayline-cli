@@ -13,6 +13,12 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   the session first: if the router can't be reached, you stay logged in and
   can run it again. If the router says the session is already invalid,
   logout still signs you out locally and reports it.
+- **`rayline run codex` and `rayline run codex app` on Windows can run shell
+  commands.** The Codex config Rayline writes now has a `[windows] sandbox`
+  setting: yours from `~/.codex/config.toml` when you set one, else
+  `unelevated`, which needs no admin setup. Before, Codex had no sandbox
+  setting there and rejected every command as "blocked by policy". A value
+  already in the Rayline Codex home is kept.
 - `rayline update` updates every install that Homebrew doesn't manage, and
   `rayline update --help` names Homebrew only.
 
