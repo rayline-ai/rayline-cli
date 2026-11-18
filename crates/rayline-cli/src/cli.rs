@@ -186,6 +186,12 @@ Homebrew installs update through brew.
 /// `rayline local start` passes it; it is in no help text.
 pub(crate) const LOCAL_PROCESS: &str = "__local-process";
 
+/// The first argument that runs the relay for Claude Code's stderr in a
+/// `rayline run claude -p` launch (section 3.2 item 14), followed by the model
+/// ids whose notices it drops. It is in no help text.
+#[cfg(unix)]
+pub(crate) const CLAUDE_STDERR: &str = "__claude-stderr";
+
 /// What the command line asks for.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Parsed {
@@ -196,6 +202,9 @@ pub(crate) enum Parsed {
     /// The internal entry point the local process runs from (section 4.3),
     /// with the options `rayline local start` passes it.
     LocalProcess(Vec<OsString>),
+    /// The relay for Claude Code's stderr, with its model ids.
+    #[cfg(unix)]
+    ClaudeStderr(Vec<OsString>),
     Command {
         /// `--env <name>`. `None` is prod.
         env: Option<String>,
@@ -551,6 +560,11 @@ pub(crate) fn parse(argv: &[OsString]) -> Result<Parsed, UsageError> {
         Some(arg) if arg == LOCAL_PROCESS => {
             args.next();
             return Ok(Parsed::LocalProcess(args.rest()));
+        }
+        #[cfg(unix)]
+        Some(arg) if arg == CLAUDE_STDERR => {
+            args.next();
+            return Ok(Parsed::ClaudeStderr(args.rest()));
         }
         Some(_) => {}
     }
