@@ -174,6 +174,11 @@ rayline run omp
 rayline run pi -- "Fix the failing test in parser.py"
 ```
 
+OpenClaw's interactive `tui` can't read the router key Rayline configures:
+OpenClaw's TUI doesn't resolve file SecretRefs, so every turn fails with an
+auth error. Use OpenClaw's `agent` command instead:
+`rayline run openclaw -- agent -m "Fix the failing test in parser.py"`.
+
 ## Settings
 
 `~/.config/rayline/settings.json` holds your settings. When it doesn't exist,

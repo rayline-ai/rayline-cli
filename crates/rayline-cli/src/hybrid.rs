@@ -609,7 +609,7 @@ async fn run_harness(
     }
     // Here, not in harness_command: preparing may run Hermes, and the
     // probe and repair must carry the launch's final environment.
-    if harness == "hermes" && cfg!(windows) {
+    if harness == "hermes" {
         crate::harness::hermes::prepare_launch(&command).map_err(io::Error::other)?;
     }
     // In print mode Claude Code runs in Rayline's place, as a cloud launch
