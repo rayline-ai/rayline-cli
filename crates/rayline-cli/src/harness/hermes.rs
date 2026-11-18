@@ -215,7 +215,7 @@ pub(crate) fn prepare_launch(command: &Command) -> Result<(), String> {
     let Some(home) = launch_home(command) else {
         return Ok(());
     };
-    let launcher = launcher_identity(Path::new(command.get_program()))?;
+    let launcher = launcher_identity(&launcher_path(command))?;
     prepare_home(home, &launcher, cfg!(windows), |args| {
         finish(sibling(command, args))
     })
@@ -228,10 +228,32 @@ pub(crate) fn prepare_launch(command: &Command) -> Result<(), String> {
 pub(crate) fn prepare_cloud_launch(command: &Command) -> Result<(), String> {
     let home =
         launch_home(command).ok_or_else(|| "the Hermes launch sets no HERMES_HOME".to_owned())?;
-    let launcher = launcher_identity(Path::new(command.get_program()))?;
+    let launcher = launcher_identity(&launcher_path(command))?;
     prepare_cloud_home(home, &launcher, cfg!(windows), |args| {
         finish(sibling(command, args))
     })
+}
+
+/// The launcher `command` runs: its program, or for a bare name (a Unix
+/// launch), the first runnable file of that name on the launch's `PATH`.
+fn launcher_path(command: &Command) -> std::path::PathBuf {
+    let path = command
+        .get_envs()
+        .find(|(name, _)| *name == "PATH")
+        .map(|(_, value)| value.map(std::ffi::OsStr::to_os_string))
+        .unwrap_or_else(|| std::env::var_os("PATH"));
+    resolve_launcher(Path::new(command.get_program()), path)
+}
+
+fn resolve_launcher(program: &Path, path: Option<std::ffi::OsString>) -> std::path::PathBuf {
+    if program.components().count() != 1 {
+        return program.to_owned();
+    }
+    let names = super::executable_names(&program.to_string_lossy(), cfg!(windows));
+    path.and_then(|path| {
+        std::env::split_paths(&path).find_map(|dir| super::find_in_dir(&dir, &names))
+    })
+    .unwrap_or_else(|| program.to_owned())
 }
 
 /// The `HERMES_HOME` the launch `command` sets.
@@ -832,7 +854,7 @@ providers:
         use super::super::super::tests::temp_dir;
         use super::super::{
             EXTRA_MARKER, Finished, INSTALL_EXTRA, READY_MARKER, finish, launcher_identity,
-            prepare_cloud_home, prepare_home, sibling,
+            launcher_path, prepare_cloud_home, prepare_home, sibling,
         };
         use std::path::Path;
         use std::process::Command;
@@ -841,6 +863,29 @@ providers:
         const REFUSAL: &str = "hermes: no dependency environment is committed for this \
                                install; run `hermes pm repair`";
         const LAUNCHER: &str = "C:\\hermes\\bin\\hermes.exe\n100\n1.000000000\n";
+
+        /// A launch of bare `hermes` (as on Unix) is identified by the file the
+        /// launch's `PATH` finds, not by a file of that name in the current
+        /// directory; a path is kept as it is.
+        #[cfg(unix)]
+        #[test]
+        fn a_bare_launcher_is_found_on_the_launch_path() {
+            use std::os::unix::fs::PermissionsExt as _;
+            let dir = temp_dir("hermes-launcher-path");
+            let bin = dir.join("bin");
+            std::fs::create_dir_all(&bin).unwrap();
+            let hermes = bin.join("hermes");
+            std::fs::write(&hermes, "#!/bin/sh\n").unwrap();
+            std::fs::set_permissions(&hermes, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+            let mut command = Command::new("hermes");
+            command.env("PATH", &bin);
+            assert_eq!(launcher_path(&command), hermes);
+            assert!(launcher_identity(&launcher_path(&command)).is_ok());
+
+            let named = Command::new(&hermes);
+            assert_eq!(launcher_path(&named), hermes);
+        }
 
         /// Lays out `installs/<key>/facts.json` the way `hermes pm repair`
         /// leaves it, with the recorded venv present.
