@@ -116,7 +116,7 @@ impl std::fmt::Display for AuthError {
                 formatter,
                 "{}. Run: {}",
                 signed_out(env.as_deref()),
-                auth_command()
+                auth_command(env.as_deref())
             ),
             Self::WriteFailed(error) => write!(formatter, "failed to update credentials: {error}"),
         }
@@ -159,6 +159,23 @@ impl HostedEnvironment {
     /// `environments.<name>` otherwise.
     pub(crate) fn slot(&self) -> credentials::Slot<'_> {
         self.env.as_deref()
+    }
+
+    /// The `rayline` command line that runs `args` against this environment.
+    pub(crate) fn command(&self, args: &str) -> String {
+        format!("{} {}{args}", crate::CLI_BIN, env_flag(self.env.as_deref()))
+    }
+}
+
+/// The `--env` a command for `env` takes, with its trailing space: none for
+/// the built-in prod, since `--env prod` selects a configured
+/// `environments.prod` instead. A name starting with `-` takes the
+/// `--env=<name>` form, since a separate value can't start with `-`.
+pub(crate) fn env_flag(env: Option<&str>) -> String {
+    match env {
+        None => String::new(),
+        Some(env) if env.starts_with('-') => format!("--env={env} "),
+        Some(env) => format!("--env {env} "),
     }
 }
 
@@ -481,7 +498,8 @@ async fn run_web_callback_code_flow(
 
     // The browser navigates the loopback to `/?code=...&state=...`; we receive a
     // one-time, PKCE-bound code (never a credential), then redeem it over TLS.
-    let code = tokio::task::spawn_blocking(move || wait_for_callback(listener, &state))
+    let retry = hosted.command("auth login");
+    let code = tokio::task::spawn_blocking(move || wait_for_callback(listener, &state, &retry))
         .await
         .map_err(|error| AuthError::LoginFailed(format!("Login callback failed: {error}")))??;
 
@@ -597,8 +615,8 @@ async fn poll_rayline_device_session(
     loop {
         if started.elapsed() >= timeout {
             return Err(AuthError::LoginFailed(format!(
-                "Login timed out before approval. Run `{} auth login --no-browser` to try again.",
-                crate::CLI_BIN
+                "Login timed out before approval. Run `{}` to try again.",
+                hosted.command("auth login --no-browser")
             )));
         }
 
@@ -638,8 +656,8 @@ async fn poll_rayline_device_session(
             }
             "expired" => {
                 return Err(AuthError::LoginFailed(format!(
-                    "Login code expired before approval. Run `{} auth login --no-browser` to try again.",
-                    crate::CLI_BIN
+                    "Login code expired before approval. Run `{}` to try again.",
+                    hosted.command("auth login --no-browser")
                 )));
             }
             other => {
@@ -764,7 +782,12 @@ fn parse_paste_callback_url(pasted: &str, expected_state: &str) -> Result<String
     Ok(code)
 }
 
-fn wait_for_callback(listener: TcpListener, expected_state: &str) -> Result<String, AuthError> {
+/// `retry` is the command the timeout message tells the user to run.
+fn wait_for_callback(
+    listener: TcpListener,
+    expected_state: &str,
+    retry: &str,
+) -> Result<String, AuthError> {
     listener.set_nonblocking(true).map_err(|error| {
         AuthError::LoginFailed(format!("Failed to configure login callback: {error}"))
     })?;
@@ -788,7 +811,7 @@ fn wait_for_callback(listener: TcpListener, expected_state: &str) -> Result<Stri
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                 if Instant::now() >= deadline {
                     return Err(AuthError::LoginFailed(format!(
-                        "Login timed out ({WEB_CALLBACK_TIMEOUT_SECONDS}s). Try again."
+                        "Login timed out ({WEB_CALLBACK_TIMEOUT_SECONDS}s). Run `{retry}` to try again."
                     )));
                 }
                 std::thread::sleep(Duration::from_millis(50));
@@ -1248,8 +1271,9 @@ fn signed_out(env: Option<&str>) -> String {
     }
 }
 
-fn auth_command() -> String {
-    format!("{} auth login", crate::CLI_BIN)
+/// The `auth login` command for the environment `--env` named (`None`: prod).
+fn auth_command(env: Option<&str>) -> String {
+    format!("{} {}auth login", crate::CLI_BIN, env_flag(env))
 }
 
 fn unix_now() -> i64 {
@@ -1617,10 +1641,11 @@ mod tests {
         let home = temp_home("status");
         let prod = hosted(None, UNREACHABLE);
         let dev = hosted(Some("dev"), UNREACHABLE);
-        let signed_out = |name: &str| format!("{name}. Run: {} auth login\n", crate::CLI_BIN);
+        let signed_out =
+            |name: &str, flag: &str| format!("{name}. Run: {} {flag}auth login\n", crate::CLI_BIN);
         assert_eq!(
             render_status_from_home(&prod, &home, NOW).unwrap(),
-            signed_out("Not signed in to Rayline")
+            signed_out("Not signed in to Rayline", "")
         );
 
         save_account(&home, None, account(LATER));
@@ -1641,7 +1666,7 @@ mod tests {
         );
         assert_eq!(
             render_status_from_home(&dev, &home, NOW).unwrap(),
-            signed_out("Not signed in to Rayline (dev)")
+            signed_out("Not signed in to Rayline (dev)", "--env dev ")
         );
 
         save_account(&home, Some("dev"), account(NOW - 1));
@@ -1902,6 +1927,33 @@ mod tests {
             assert_eq!(login_failure(error), expected);
             assert_eq!(api.paths(), ["POST /v1/auth/cli/device/poll"]);
         }
+    }
+
+    #[tokio::test]
+    async fn an_expired_device_login_names_the_command_for_its_environment() {
+        let api = FakeApi::start(&[(
+            "/v1/auth/cli/device/poll",
+            200,
+            json!({ "status": "expired" }),
+        )]);
+        let device = RaylineDeviceSession {
+            session_id: "device-session".to_string(),
+            user_code: "ABCD-EFGH".to_string(),
+            verification_uri: "https://platform.example.test/device".to_string(),
+            expires_in_seconds: 60,
+        };
+        let Err(error) =
+            poll_rayline_device_session(&hosted(Some("dev"), &api.base_url), &device).await
+        else {
+            panic!("an expired device login signed in");
+        };
+        assert_eq!(
+            login_failure(error),
+            format!(
+                "Login code expired before approval. Run `{} --env dev auth login --no-browser` to try again.",
+                crate::CLI_BIN
+            )
+        );
     }
 
     #[tokio::test]

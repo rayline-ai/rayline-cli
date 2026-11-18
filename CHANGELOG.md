@@ -19,6 +19,10 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   `unelevated`, which needs no admin setup. Before, Codex had no sandbox
   setting there and rejected every command as "blocked by policy". A value
   already in the Rayline Codex home is kept.
+- Sign-in hints name the exact command, including `--env <name>` for a
+  configured environment: "Not signed in to Rayline" (from `rayline auth status` and
+  every launch) and the login timeout and expiry messages, which also say to
+  run it again.
 - `rayline update` updates every install that Homebrew doesn't manage, and
   `rayline update --help` names Homebrew only.
 
