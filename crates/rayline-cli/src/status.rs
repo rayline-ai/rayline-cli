@@ -109,8 +109,8 @@ impl std::fmt::Display for AuthError {
             ),
             Self::RevokeRefused { env_name, error } => write!(
                 formatter,
-                "Logged out of {env_name} on this machine, but the router refused to revoke \
-                 the session: {error}"
+                "Logged out of {env_name} on this machine. The router refused to revoke the \
+                 session ({error}), so the router key may still be valid on the router."
             ),
             Self::SignedOut(env) => write!(
                 formatter,
@@ -1067,7 +1067,8 @@ async fn refresh_rayline_session(
 
 /// Why a session revoke failed.
 enum RevokeError {
-    /// The router refused the session token (HTTP 401): it is already invalid.
+    /// The router refused the session token (HTTP 401), with the status and
+    /// body: it no longer knows the session, so it revoked nothing.
     Refused(String),
     /// The router could not be reached or failed to answer: nothing changed.
     Retryable(String),
@@ -1094,11 +1095,19 @@ async fn revoke_rayline_session(base_url: &str, token: &str) -> Result<(), Revok
         return Ok(());
     }
     let body = response.text().await.unwrap_or_default();
-    let message = http_error_message("session revoke failed", status.as_u16(), &body);
     if status == reqwest::StatusCode::UNAUTHORIZED {
-        Err(RevokeError::Refused(message))
+        let body = body.trim();
+        Err(RevokeError::Refused(if body.is_empty() {
+            format!("HTTP {}", status.as_u16())
+        } else {
+            format!("HTTP {}: {body}", status.as_u16())
+        }))
     } else {
-        Err(RevokeError::Retryable(message))
+        Err(RevokeError::Retryable(http_error_message(
+            "session revoke failed",
+            status.as_u16(),
+            &body,
+        )))
     }
 }
 
@@ -2047,7 +2056,11 @@ mod tests {
 
     #[tokio::test]
     async fn a_refused_revoke_logs_out_locally_and_is_an_error() {
-        let api = FakeApi::start(&[("/v1/auth/cli/revoke", 401, json!({}))]);
+        let api = FakeApi::start(&[(
+            "/v1/auth/cli/revoke",
+            401,
+            json!({"error": "Invalid session token."}),
+        )]);
         let home = temp_home("logout-revoke-refused");
         save_account(&home, None, account(LATER));
         let codex = write_harness_file(&home, "codex", "config.toml");
@@ -2056,8 +2069,9 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             error.to_string(),
-            "Logged out of prod on this machine, but the router refused to revoke the \
-             session: session revoke failed: HTTP 401: {}"
+            "Logged out of prod on this machine. The router refused to revoke the session \
+             (HTTP 401: {\"error\":\"Invalid session token.\"}), so the router key may still \
+             be valid on the router."
         );
         assert_eq!(stored(&home, None), None);
         assert!(!fs::read_to_string(&codex).unwrap().contains(API_KEY));

@@ -567,7 +567,7 @@ When the local process starts, before it serves anything, it also refuses:
 
 ## 6. `credentials.json`
 
-One file: `~/.config/rayline/credentials.json`. `rayline auth login` writes `session` and `router_key` together (it mints the router key at sign-in), `rayline auth logout` revokes the session, then removes them, cuts the router key out of the harness configs Rayline wrote (`~/.rayline/harness/*/` and the Codex `rayline` profile) and deletes Hermes' copies of its config in Rayline's Hermes home (`~/.rayline/harness/hermes/backups/config/`), and a token refresh rewrites `session` only, because refresh tokens rotate. Nothing else writes it. It is the only source for Rayline's session and router key: no env var or flag overrides it.
+One file: `~/.config/rayline/credentials.json`. `rayline auth login` writes `session` and `router_key` together (it mints the router key at sign-in), `rayline auth logout` revokes the session, then removes them, cuts the router key out of the harness configs Rayline wrote (`~/.rayline/harness/*/` and the Codex `rayline` profile) and deletes Hermes' copies of its config in Rayline's Hermes home (`~/.rayline/harness/hermes/backups/config/`), and a token refresh rewrites `session` only, because refresh tokens rotate. When the router refuses the revoke (HTTP 401), logout still does all of this, then exits 1 with ``Logged out of <environment> on this machine. The router refused to revoke the session (HTTP 401<: body>), so the router key may still be valid on the router.`` Nothing else writes it. It is the only source for Rayline's session and router key: no env var or flag overrides it.
 
 ```json
 {
