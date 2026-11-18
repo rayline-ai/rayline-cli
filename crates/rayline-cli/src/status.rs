@@ -157,9 +157,14 @@ impl HostedEnvironment {
 
 /// The `--env` a command for `env` takes, with its trailing space: none for
 /// the built-in prod, since `--env prod` selects a configured
-/// `environments.prod` instead.
+/// `environments.prod` instead. A name starting with `-` takes the
+/// `--env=<name>` form, since a separate value can't start with `-`.
 pub(crate) fn env_flag(env: Option<&str>) -> String {
-    env.map(|env| format!("--env {env} ")).unwrap_or_default()
+    match env {
+        None => String::new(),
+        Some(env) if env.starts_with('-') => format!("--env={env} "),
+        Some(env) => format!("--env {env} "),
+    }
 }
 
 pub fn is_valid_root_env(value: &str) -> bool {

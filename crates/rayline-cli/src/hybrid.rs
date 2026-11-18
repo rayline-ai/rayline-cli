@@ -2326,6 +2326,7 @@ mod tests {
     fn commands_for_an_environment_name_its_env() {
         assert_eq!(crate::status::env_flag(None), "");
         assert_eq!(crate::status::env_flag(Some("dev")), "--env dev ");
+        assert_eq!(crate::status::env_flag(Some("-dev")), "--env=-dev ");
     }
 
     /// Serializes the tests that set a process-wide env var.
