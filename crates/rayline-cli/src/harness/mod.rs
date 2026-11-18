@@ -705,6 +705,93 @@ pub(crate) fn installed_version(mut command: Command) -> Result<(u64, u64, u64),
         .ok_or_else(|| format!("{shown} printed no version: {:?}", printed.trim()))
 }
 
+/// The files Rayline may have written a router key into: the top-level files
+/// of each harness folder under `~/.rayline/harness/` (cloud-mode configs, the
+/// Codex and Codex app homes) and the Codex `rayline` profile
+/// (`$CODEX_HOME/rayline.config.toml`, else `~/.codex/`). Logout lists them
+/// before it revokes, so a folder or `CODEX_HOME` it can't use fails first.
+pub(crate) fn router_key_files(home: &Path) -> io::Result<Vec<PathBuf>> {
+    let mut candidates = Vec::new();
+    let harness_root = home.join(crate::DOT_CONFIG_DIR).join("harness");
+    let in_path = |path: &Path| {
+        let path = path.display().to_string();
+        move |error: io::Error| io::Error::new(error.kind(), format!("{path}: {error}"))
+    };
+    match fs::read_dir(&harness_root) {
+        Ok(dirs) => {
+            for dir in dirs {
+                let dir = dir.map_err(in_path(&harness_root))?.path();
+                if !fs::metadata(&dir).map_err(in_path(&dir))?.is_dir() {
+                    continue;
+                }
+                for file in fs::read_dir(&dir).map_err(in_path(&dir))? {
+                    let file = file.map_err(in_path(&dir))?;
+                    if file.file_type().map_err(in_path(&file.path()))?.is_file() {
+                        candidates.push(file.path());
+                    }
+                }
+            }
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(in_path(&harness_root)(error)),
+    }
+    let codex_home = match exported_dir("CODEX_HOME")? {
+        Some(codex_home) => codex_home,
+        None => home.join(".codex"),
+    };
+    candidates.push(codex_home.join("rayline.config.toml"));
+    Ok(candidates)
+}
+
+/// Remove `key` from each of `files` ([`router_key_files`]) that holds it.
+/// Each match is cut out in place, so the file keeps every other setting and
+/// the harness's sessions stay; the next launch writes a fresh key. A file
+/// holding another environment's key is left alone, and a file that changes
+/// while it is being rewritten is an error naming it. Returns the files
+/// changed.
+pub(crate) fn remove_router_key(files: &[PathBuf], key: &str) -> io::Result<Vec<PathBuf>> {
+    if key.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut changed = Vec::new();
+    for path in files {
+        let bytes = match fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(io::Error::new(
+                    error.kind(),
+                    format!("{}: {error}", path.display()),
+                ));
+            }
+        };
+        let Ok(text) = String::from_utf8(bytes.clone()) else {
+            continue;
+        };
+        if !text.contains(key) {
+            continue;
+        }
+        let in_path =
+            |error: io::Error| io::Error::new(error.kind(), format!("{}: {error}", path.display()));
+        let tmp = path.with_file_name(format!(
+            ".{}.tmp-{}",
+            path.file_name().unwrap_or_default().to_string_lossy(),
+            std::process::id()
+        ));
+        write_private(&tmp, &text.replace(key, "")).map_err(in_path)?;
+        if fs::read(path).ok().as_ref() != Some(&bytes) {
+            let _ = fs::remove_file(&tmp);
+            return Err(io::Error::other(format!(
+                "{} changed while Rayline was updating it; run the command again",
+                path.display()
+            )));
+        }
+        fs::rename(&tmp, path).map_err(in_path)?;
+        changed.push(path.clone());
+    }
+    Ok(changed)
+}
+
 pub(crate) fn build_command(binary: &Path, plan: &Plan, args: &[OsString]) -> Command {
     let mut command = Command::new(binary);
     command.args(args);
@@ -929,6 +1016,24 @@ fn exec_or_status(command: &mut Command, harness: Harness) -> ExitCode {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    /// A harness folder logout can't search is an error naming it, before
+    /// anything is revoked, not a folder skipped with its key left behind.
+    #[cfg(unix)]
+    #[test]
+    fn a_harness_folder_that_cant_be_searched_is_an_error() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let home = std::env::temp_dir().join(format!("rayline-key-files-{}", std::process::id()));
+        let root = home.join(crate::DOT_CONFIG_DIR).join("harness");
+        fs::create_dir_all(root.join("pi")).unwrap();
+        fs::write(root.join("pi").join("models.json"), "{}").unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o400)).unwrap();
+        let result = router_key_files(&home);
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::remove_dir_all(&home).unwrap();
+        let error = result.unwrap_err();
+        assert!(error.to_string().contains("harness"), "{error}");
+    }
     use serde_json::json;
 
     pub(crate) const TEST_URL: &str = "https://router.example.test";

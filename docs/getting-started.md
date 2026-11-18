@@ -45,7 +45,7 @@ rayline auth login
 | Command | Does |
 |---|---|
 | `rayline auth login` | Signs in to Rayline in the browser. |
-| `rayline auth logout` | Revokes the stored session and removes the stored router key. |
+| `rayline auth logout` | Revokes the stored session and removes the stored router key, also from the harness configs Rayline wrote. |
 | `rayline auth status` | Shows the signed-in account and environment. |
 | `rayline auth token` | Prints a valid account bearer token. |
 
