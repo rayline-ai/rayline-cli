@@ -170,8 +170,16 @@ pub(crate) fn write_codex_home(home: &Path, config: &str) -> io::Result<()> {
             }
         }
     };
-    let merged = apply_rayline_settings(&existing, config)
+    let mut merged = apply_rayline_settings(&existing, config)
         .map_err(|error| toml_parse_error(&config_path, &existing, &error))?;
+    // The user's config is read only when it is needed, so an unreadable one
+    // doesn't stop a home that already has its sandbox.
+    if cfg!(windows) && !has_windows_sandbox(&merged) {
+        let seed_path = user_codex_home()?.join("config.toml");
+        let seed = read_if_present(&seed_path)?;
+        merged = with_windows_sandbox(&merged, seed.as_deref())
+            .map_err(|error| toml_parse_error(&seed_path, seed.as_deref().unwrap_or(""), &error))?;
+    }
     crate::harness::write_files(
         home,
         &[crate::harness::ConfigFile {
@@ -294,6 +302,52 @@ fn canonical(table: &Table) -> String {
         }
     }
     table.to_string()
+}
+
+/// The Windows sandbox Codex runs shell commands in when the user has not
+/// picked one: `unelevated` (a restricted token) needs no admin setup.
+/// `elevated` keeps its setup marker in `CODEX_HOME`, so in a Rayline home it
+/// would run that setup (and its UAC prompt) again.
+const DEFAULT_WINDOWS_SANDBOX: &str = "unelevated";
+
+/// Whether `config` sets `[windows] sandbox`.
+fn has_windows_sandbox(config: &str) -> bool {
+    config.parse::<DocumentMut>().is_ok_and(|doc| {
+        doc.get("windows")
+            .and_then(|windows| windows.get("sandbox"))
+            .is_some()
+    })
+}
+
+/// `config` with `[windows] sandbox` set when it has none: the user's own
+/// setting from `seed` (their main `config.toml`), else
+/// [`DEFAULT_WINDOWS_SANDBOX`]. On Windows, Codex with no sandbox setting
+/// rejects every shell command as "blocked by policy", and its setup prompt
+/// writes the choice only to the home it ran in. A value already in `config`
+/// is kept.
+fn with_windows_sandbox(config: &str, seed: Option<&str>) -> Result<String, TomlError> {
+    if has_windows_sandbox(config) {
+        return Ok(config.to_owned());
+    }
+    let mut doc: DocumentMut = config.parse()?;
+    let seeded = match seed {
+        Some(seed) => seed
+            .parse::<DocumentMut>()?
+            .get("windows")
+            .and_then(|windows| windows.get("sandbox"))
+            .and_then(Item::as_str)
+            .map(ToOwned::to_owned),
+        None => None,
+    };
+    let windows = doc.entry("windows").or_insert_with(toml_edit::table);
+    let Some(windows) = windows.as_table_like_mut() else {
+        return Ok(config.to_owned());
+    };
+    windows.insert(
+        "sandbox",
+        toml_edit::value(seeded.as_deref().unwrap_or(DEFAULT_WINDOWS_SANDBOX)),
+    );
+    Ok(doc.to_string())
 }
 
 /// The tables of the user's main `config.toml`, used to seed the isolated
@@ -570,6 +624,34 @@ fn wait_for_exit() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_rayline_codex_home_gets_a_windows_sandbox() {
+        let sandbox = |config: &str, seed: Option<&str>| {
+            let merged = with_windows_sandbox(config, seed).unwrap();
+            let doc: DocumentMut = merged.parse().unwrap();
+            doc["windows"]["sandbox"].as_str().unwrap().to_owned()
+        };
+        let config = "model = \"m\"\n";
+        // No setting anywhere: the sandbox that needs no admin setup.
+        assert_eq!(sandbox(config, None), "unelevated");
+        assert_eq!(sandbox(config, Some("[projects]\n")), "unelevated");
+        // The user's own choice is carried over, on every run.
+        assert_eq!(
+            sandbox(config, Some("[windows]\nsandbox = \"elevated\"\n")),
+            "elevated"
+        );
+        // A value the Rayline home already holds is kept.
+        let kept = "model = \"m\"\n\n[windows]\nsandbox = \"elevated\"\n";
+        assert_eq!(
+            with_windows_sandbox(kept, Some("[windows]\nsandbox = \"unelevated\"\n")).unwrap(),
+            kept
+        );
+        // Other [windows] settings stay beside it.
+        let merged = with_windows_sandbox("[windows]\nallow_mxc = true\n", None).unwrap();
+        assert!(merged.contains("allow_mxc = true"), "{merged}");
+        assert!(merged.contains("sandbox = \"unelevated\""), "{merged}");
+    }
 
     #[cfg(unix)]
     #[test]

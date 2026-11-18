@@ -66,9 +66,15 @@ pub enum AuthError {
     LoginFailed(String),
     MintFailed(String),
     RefreshFailed(String),
-    /// Logout removed the local session, but revoking it remotely failed:
-    /// the environment name and the revoke error.
+    /// Revoking the session failed before anything changed: the user is
+    /// still logged in. The environment name and the revoke error.
     RevokeFailed {
+        env_name: String,
+        error: String,
+    },
+    /// The router refused the session as already invalid; logout removed it
+    /// locally. The environment name and the revoke error.
+    RevokeRefused {
         env_name: String,
         error: String,
     },
@@ -98,7 +104,13 @@ impl std::fmt::Display for AuthError {
             | Self::RefreshFailed(message) => formatter.write_str(message),
             Self::RevokeFailed { env_name, error } => write!(
                 formatter,
-                "Logged out of {env_name} on this machine, but revoking the session failed: {error}"
+                "Still logged in to {env_name}: revoking the session failed: {error}. \
+                 Run the command again to log out."
+            ),
+            Self::RevokeRefused { env_name, error } => write!(
+                formatter,
+                "Logged out of {env_name} on this machine, but the router refused to revoke \
+                 the session: {error}"
             ),
             Self::SignedOut(env) => write!(
                 formatter,
@@ -324,18 +336,45 @@ pub async fn logout(request: &AuthLogoutRequest) -> Result<String, AuthError> {
 
 async fn logout_from_home(hosted: &HostedEnvironment, home: &Path) -> Result<String, AuthError> {
     let mut credentials = credentials::load(home)?;
-    let Some(account) = credentials.remove_account(hosted.slot()) else {
+    let Some(account) = credentials.account(hosted.slot()).cloned() else {
         return Ok(format!("{}\n", signed_out(hosted.env.as_deref())));
     };
-    credentials::save(home, &credentials).map_err(AuthError::WriteFailed)?;
-
-    revoke_rayline_session(&hosted.base_url, &account.session.refresh_token)
-        .await
-        .map_err(|error| AuthError::RevokeFailed {
+    // The files to clean, listed before anything is revoked: a harness folder
+    // or `CODEX_HOME` that can't be used fails here, with nothing changed.
+    let key_files = crate::harness::router_key_files(home).map_err(AuthError::WriteFailed)?;
+    // Revoke first: the router deletes the router keys minted under the
+    // session. A revoke the router could not judge (unreachable, 5xx) keeps the
+    // session, so the user can run logout again; one it refused (the session
+    // is already invalid) logs out locally and reports it.
+    let revoked = revoke_rayline_session(&hosted.base_url, &account.session.refresh_token).await;
+    if let Err(RevokeError::Retryable(error)) = revoked {
+        return Err(AuthError::RevokeFailed {
             env_name: hosted.name().to_owned(),
             error,
-        })?;
-    Ok(format!("Logged out ({})\n", hosted.name()))
+        });
+    }
+    // Rayline wrote the key into the harness configs; cut it out of them
+    // before the stored account goes, so a failure here can be run again.
+    crate::harness::remove_router_key(&key_files, &account.router_key.api_key)
+        .map_err(AuthError::WriteFailed)?;
+    // Read the file again: another command may have written it during the
+    // revoke. The slot goes only while it still holds the revoked router key;
+    // a sign-in since then is kept.
+    credentials = credentials::load(home)?;
+    if credentials
+        .account(hosted.slot())
+        .is_some_and(|current| current.router_key.api_key == account.router_key.api_key)
+    {
+        credentials.remove_account(hosted.slot());
+        credentials::save(home, &credentials).map_err(AuthError::WriteFailed)?;
+    }
+    match revoked {
+        Err(RevokeError::Refused(error)) => Err(AuthError::RevokeRefused {
+            env_name: hosted.name().to_owned(),
+            error,
+        }),
+        _ => Ok(format!("Logged out ({})\n", hosted.name())),
+    }
 }
 
 pub async fn auth_login(request: &AuthLoginRequest) -> Result<String, AuthError> {
@@ -1025,27 +1064,40 @@ async fn refresh_rayline_session(
     parse_session_tokens(&data, "Token refresh").map_err(AuthError::RefreshFailed)
 }
 
-async fn revoke_rayline_session(base_url: &str, token: &str) -> Result<(), String> {
+/// Why a session revoke failed.
+enum RevokeError {
+    /// The router refused the session token (HTTP 401): it is already invalid.
+    Refused(String),
+    /// The router could not be reached or failed to answer: nothing changed.
+    Retryable(String),
+}
+
+async fn revoke_rayline_session(base_url: &str, token: &str) -> Result<(), RevokeError> {
     let url = format!("{base_url}/v1/auth/cli/revoke");
     let response = auth_http_client()
-        .map_err(|error| format!("failed to build HTTP client: {error}"))?
+        .map_err(|error| RevokeError::Retryable(format!("failed to build HTTP client: {error}")))?
         .post(url)
         .bearer_auth(token)
         .json(&serde_json::json!({ "reason": "cli_logout" }))
         .send()
         .await
-        .map_err(|error| format!("failed to reach router: {}", reqwest_error_message(error)))?;
+        .map_err(|error| {
+            RevokeError::Retryable(format!(
+                "failed to reach router: {}",
+                reqwest_error_message(error)
+            ))
+        })?;
 
     let status = response.status();
     if status.is_success() {
-        Ok(())
+        return Ok(());
+    }
+    let body = response.text().await.unwrap_or_default();
+    let message = http_error_message("session revoke failed", status.as_u16(), &body);
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        Err(RevokeError::Refused(message))
     } else {
-        let body = response.text().await.unwrap_or_default();
-        Err(http_error_message(
-            "session revoke failed",
-            status.as_u16(),
-            &body,
-        ))
+        Err(RevokeError::Retryable(message))
     }
 }
 
@@ -1974,20 +2026,103 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_failed_revoke_logs_out_locally_and_is_an_error() {
+    async fn a_failed_revoke_keeps_the_session_and_is_an_error() {
         let api = FakeApi::start(&[("/v1/auth/cli/revoke", 500, json!({}))]);
         let home = temp_home("logout-revoke-fails");
         save_account(&home, None, account(LATER));
+        let codex = write_harness_file(&home, "codex", "config.toml");
         let error = logout_from_home(&hosted(None, &api.base_url), &home)
             .await
             .unwrap_err();
         assert_eq!(
             error.to_string(),
-            "Logged out of prod on this machine, but revoking the session failed: \
-             session revoke failed: HTTP 500: {}"
+            "Still logged in to prod: revoking the session failed: \
+             session revoke failed: HTTP 500: {}. Run the command again to log out."
+        );
+        assert!(stored(&home, None).is_some());
+        assert!(fs::read_to_string(&codex).unwrap().contains(API_KEY));
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[tokio::test]
+    async fn a_refused_revoke_logs_out_locally_and_is_an_error() {
+        let api = FakeApi::start(&[("/v1/auth/cli/revoke", 401, json!({}))]);
+        let home = temp_home("logout-revoke-refused");
+        save_account(&home, None, account(LATER));
+        let codex = write_harness_file(&home, "codex", "config.toml");
+        let error = logout_from_home(&hosted(None, &api.base_url), &home)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Logged out of prod on this machine, but the router refused to revoke the \
+             session: session revoke failed: HTTP 401: {}"
         );
         assert_eq!(stored(&home, None), None);
+        assert!(!fs::read_to_string(&codex).unwrap().contains(API_KEY));
         let _ = fs::remove_dir_all(&home);
+    }
+
+    #[tokio::test]
+    async fn logout_cuts_the_key_out_of_every_harness_config() {
+        let api = FakeApi::start(&[("/v1/auth/cli/revoke", 200, json!({}))]);
+        let home = temp_home("logout-harness-configs");
+        save_account(&home, None, account(LATER));
+        let written = [
+            ("codex", "config.toml"),
+            ("codex-app", "config.toml"),
+            ("omp", "models.yml"),
+            ("openclaw", "router-key"),
+            ("opencode", "opencode.json"),
+            ("pi", "models.json"),
+            ("hermes", "config.yaml"),
+        ]
+        .map(|(dir, name)| write_harness_file(&home, dir, name));
+        let profile = home.join(".codex").join("rayline.config.toml");
+        fs::create_dir_all(profile.parent().unwrap()).unwrap();
+        fs::write(
+            &profile,
+            format!("experimental_bearer_token = \"{API_KEY}\"\nsetting = kept\n"),
+        )
+        .unwrap();
+        // Another environment's key, and a harness session file, stay as they are.
+        let other = write_text(&home, "pi", "other.json", "{\"apiKey\": \"rlk-other\"}");
+        let session = write_text(&home, "codex", "history.jsonl", "{\"turn\": 1}\n");
+
+        let saved = std::env::var_os("CODEX_HOME");
+        // SAFETY: the workspace tests run with --test-threads=1; restored below.
+        unsafe { std::env::remove_var("CODEX_HOME") };
+        let result = logout_from_home(&hosted(None, &api.base_url), &home).await;
+        if let Some(value) = saved {
+            // SAFETY: as above.
+            unsafe { std::env::set_var("CODEX_HOME", value) };
+        }
+        assert_eq!(result.unwrap(), "Logged out (prod)\n");
+        for path in written.iter().chain([&profile]) {
+            let text = fs::read_to_string(path).unwrap();
+            assert!(!text.contains(API_KEY), "{}", path.display());
+            assert!(text.contains("setting = kept"), "{}", path.display());
+        }
+        assert!(fs::read_to_string(&other).unwrap().contains("rlk-other"));
+        assert_eq!(fs::read_to_string(&session).unwrap(), "{\"turn\": 1}\n");
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    fn write_text(home: &Path, dir: &str, name: &str, text: &str) -> PathBuf {
+        let dir = home.join(crate::DOT_CONFIG_DIR).join("harness").join(dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+        fs::write(&path, text).unwrap();
+        path
+    }
+
+    fn write_harness_file(home: &Path, dir: &str, name: &str) -> PathBuf {
+        write_text(
+            home,
+            dir,
+            name,
+            &format!("key = \"{API_KEY}\"\nsetting = kept\n"),
+        )
     }
 
     #[tokio::test]
