@@ -44,19 +44,30 @@ pub(crate) const MIN_VERSION: (u64, u64, u64) = (2026, 9, 6);
 
 /// Refuse an OpenClaw older than [`MIN_VERSION`], before its config is
 /// written. `command` is OpenClaw with the launch's environment.
+/// A probe that can't run, exits non-zero or prints no version is an error
+/// that also names the minimum and the install command.
 pub(crate) fn require_version(command: Command) -> Result<(), String> {
-    version_error(super::installed_version(command)?).map_or(Ok(()), Err)
+    let version = super::installed_version(command)
+        .map_err(|error| format!("{error}; Rayline needs {}", upgrade()))?;
+    version_error(version).map_or(Ok(()), Err)
 }
 
 fn version_error(version: (u64, u64, u64)) -> Option<String> {
     (version < MIN_VERSION).then(|| {
-        let (major, minor, patch) = MIN_VERSION;
         format!(
-            "OpenClaw {}.{}.{} can't load the config Rayline writes; upgrade to OpenClaw \
-             {major}.{minor}.{patch} or later: npm install -g openclaw",
-            version.0, version.1, version.2
+            "OpenClaw {}.{}.{} can't load the config Rayline writes; upgrade to {}",
+            version.0,
+            version.1,
+            version.2,
+            upgrade()
         )
     })
+}
+
+/// The minimum OpenClaw and how to install it.
+fn upgrade() -> String {
+    let (major, minor, patch) = MIN_VERSION;
+    format!("OpenClaw {major}.{minor}.{patch} or later: npm install -g openclaw")
 }
 pub(crate) const PROVIDER_ID: &str = "rayline";
 pub(crate) const RESPONSES_PROVIDER_ID: &str = "rayline-resp";
@@ -231,10 +242,17 @@ mod tests {
             "OpenClaw 2026.6.35 can't load the config Rayline writes; upgrade to OpenClaw \
              2026.9.6 or later: npm install -g openclaw"
         );
+        let unreadable = probe("echo nothing").unwrap_err();
+        assert!(unreadable.contains("printed no version"), "{unreadable}");
         assert!(
-            probe("echo nothing")
-                .unwrap_err()
-                .contains("printed no version")
+            unreadable
+                .ends_with("; Rayline needs OpenClaw 2026.9.6 or later: npm install -g openclaw"),
+            "{unreadable}"
+        );
+        let failed = probe("exit 3").unwrap_err();
+        assert!(
+            failed.ends_with("; Rayline needs OpenClaw 2026.9.6 or later: npm install -g openclaw"),
+            "{failed}"
         );
         // Other harnesses have no minimum here.
         assert_eq!(
