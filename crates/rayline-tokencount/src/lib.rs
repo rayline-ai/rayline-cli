@@ -67,12 +67,9 @@ impl PromptCounter {
     pub fn from_dir(dir: &Path) -> Result<Self> {
         let tokenizer_bytes = std::fs::read(dir.join(TOKENIZER_FILE))
             .with_context(|| format!("read {}", dir.join(TOKENIZER_FILE).display()))?;
-        let config_path = dir.join(TOKENIZER_CONFIG_FILE);
-        let config = read_json(&config_path)?;
-        if config.as_ref().is_some_and(|config| !config.is_object()) {
-            bail!("{} is not a JSON object", config_path.display());
-        }
-        let templates = read_templates(dir, config.as_ref())?;
+        let config = read_config(dir)?;
+        let templates = read_templates(dir, config.as_ref())?
+            .ok_or_else(|| anyhow!("the model has no chat template"))?;
         let mut images = None;
         for file in [PROCESSOR_FILE, PREPROCESSOR_FILE] {
             let path = dir.join(file);
@@ -293,9 +290,25 @@ fn read_json(path: &Path) -> Result<Option<Value>> {
     }
 }
 
+/// The chat templates [`PromptCounter::from_dir`] reads from a model snapshot
+/// directory, `None` when it publishes none.
+pub fn chat_templates(dir: &Path) -> Result<Option<ChatTemplates>> {
+    read_templates(dir, read_config(dir)?.as_ref())
+}
+
+/// `tokenizer_config.json`, which must be a JSON object when present.
+fn read_config(dir: &Path) -> Result<Option<Value>> {
+    let path = dir.join(TOKENIZER_CONFIG_FILE);
+    let config = read_json(&path)?;
+    if config.as_ref().is_some_and(|config| !config.is_object()) {
+        bail!("{} is not a JSON object", path.display());
+    }
+    Ok(config)
+}
+
 /// `chat_template.jinja` when published, else `tokenizer_config.json`'s
 /// `chat_template`: a string, or named templates (`default`, `tool_use`).
-fn read_templates(dir: &Path, config: Option<&Value>) -> Result<ChatTemplates> {
+fn read_templates(dir: &Path, config: Option<&Value>) -> Result<Option<ChatTemplates>> {
     let named = |name: &str| -> Option<String> {
         config?
             .get("chat_template")?
@@ -308,25 +321,25 @@ fn read_templates(dir: &Path, config: Option<&Value>) -> Result<ChatTemplates> {
     };
     match std::fs::read_to_string(dir.join(TEMPLATE_FILE)) {
         Ok(default) => {
-            return Ok(ChatTemplates {
+            return Ok(Some(ChatTemplates {
                 default,
                 tool_use: named("tool_use"),
-            });
+            }));
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error).context("read chat_template.jinja"),
     }
     match config.and_then(|config| config.get("chat_template")) {
-        Some(Value::String(default)) => Ok(ChatTemplates {
+        Some(Value::String(default)) => Ok(Some(ChatTemplates {
             default: default.clone(),
             tool_use: None,
-        }),
-        Some(Value::Array(_)) => Ok(ChatTemplates {
+        })),
+        Some(Value::Array(_)) => Ok(Some(ChatTemplates {
             default: named("default")
                 .ok_or_else(|| anyhow!("tokenizer_config.json has no default chat template"))?,
             tool_use: named("tool_use"),
-        }),
-        _ => bail!("the model has no chat template"),
+        })),
+        _ => Ok(None),
     }
 }
 

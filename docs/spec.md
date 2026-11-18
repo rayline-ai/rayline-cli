@@ -62,7 +62,7 @@ Arguments after the harness name, or after --, go to the harness.
 | Command | Does |
 |---|---|
 | `rayline auth login` | Sign in with Rayline session login in the browser. Writes `credentials.json`. |
-| `rayline auth logout` | Revoke the stored session and remove the stored router key. |
+| `rayline auth logout` | Revoke the stored session and remove the stored router key, also from the harness configs Rayline wrote. |
 | `rayline auth status` | Show the signed-in account and environment. |
 | `rayline auth token` | Print a valid account bearer token. |
 
@@ -92,7 +92,8 @@ rayline run <HARNESS> [--mode <cloud|local>] [--config <file>] [HARNESS ARGS]...
 10. Local mode refuses OpenClaw container mode, before anything starts: `rayline run openclaw` when `OPENCLAW_CONTAINER` is set to a non-empty value, or when any harness argument is `--container` or `--container=<value>`.
 11. Before a cloud-mode `rayline run hermes` launch, on every OS, Rayline runs `hermes pm install --extra anthropic` with the launch's environment (`HERMES_HOME` set to Rayline's Hermes home), once per Hermes install and home; later launches skip it. If the install fails or cannot run, the launch stops with Hermes' last output and the command to run by hand with that home.
 12. Local mode refuses `rayline run pi` before anything starts when `pi` isn't on `PATH`, or when `pi --version` can't run, exits non-zero, prints no version or prints one older than 0.87.1 (an older pi sends no session id). When pi is older, the error names the minimum version and `npm install -g @earendil-works/pi-coding-agent`.
-13. Rayline sets each launch up for ARC and passes the harness arguments through unread, a harness's own model flag included. The endpoint decides what a model id means:
+13. `rayline run openclaw`, in cloud and local mode, refuses before writing its config when `openclaw --version` can't run, exits non-zero, prints no version or prints one older than 2026.9.6 (an older OpenClaw rejects the whole config over fields it doesn't know). The error names the minimum version and `npm install -g openclaw`.
+14. Rayline sets each launch up for ARC and passes the harness arguments through unread, a harness's own model flag included. The endpoint decides what a model id means:
     - cloud mode: the Rayline router serves the model id the harness sends, or refuses it;
     - local mode: the declared model is `rayline-auto`; a model id the harness sends is a request, and ARC decides which model runs;
     - a harness may change its own request for the model it named, and the endpoint answers that request. Codex sends GPT reasoning fields and non-function tools for a model id it recognises as a GPT reasoning model (for example `codex -m openai/gpt-6.1-sol`); in local mode the core refuses that request with 400 naming the field, before anything runs. OpenClaw sends its session header only for a model Rayline declares; in local mode any other `--model` is refused by the core with 400 session_identity_required.
@@ -411,7 +412,7 @@ The action ARC identifies is the model id after its provider prefix (`qwen/qwen3
 | `model` | string | yes | The name that server knows the model by. |
 | `context_window` | integer > 0 | yes, when the local process starts (item 5) | Context window in tokens. |
 | `max_output_tokens` | integer > 0 | yes, when the local process starts (item 5) | Output ceiling in tokens. |
-| `tokenizer` | string | no | Hugging Face tokenizer repo for token counting. |
+| `tokenizer` | string | no | Hugging Face tokenizer repo for token counting (item 7). |
 | `price` | object `input`, `output`, `cache_read`, `cache_write` (numbers >= 0) | no | Overrides ARC's price for this model only. |
 
 1. When ARC picks a model in `models`, the local process sends the request to its endpoint under its `model` name.
@@ -428,6 +429,7 @@ The action ARC identifies is the model id after its provider prefix (`qwen/qwen3
 4. Main/subagent routes are not supported.
 5. ARC doesn't publish the models it knows yet, so it knows no model's limits. Every entry must state `context_window` and `max_output_tokens`, and the local process refuses to start without them (section 5.8 item 13).
 6. In local mode Rayline tells every harness a context window of 1,000,000 tokens, whichever model serves the turn.
+7. With a `tokenizer`, the local process counts each request it sends to the model over `openai_chat` in the model's own tokens, with the repo's tokenizer and chat template. It doesn't count the model's other requests. Start refuses a `tokenizer` when the model's endpoint doesn't list `openai_chat`, or when the repo publishes no chat template, as a base model's repo often doesn't; its instruct or chat variant does (section 5.8 items 15 and 16).
 
 ### 5.4 `local.routing`
 
@@ -538,6 +540,8 @@ When the local process starts, before it serves anything, it also refuses:
 12. An `api_key_env` naming an env var that isn't set.
 13. A model entry that is missing `context_window` or `max_output_tokens`. ARC knows no model today, so this applies to every entry (section 5.3 item 5).
 14. An `api_key_env` naming `RAYLINE_ROUTER_API_KEY`, which holds the Rayline router key.
+15. A model entry with a `tokenizer` whose endpoint doesn't list `openai_chat`.
+16. A `tokenizer` repo that publishes no chat template: no `chat_template.jinja`, and in `tokenizer_config.json` no `chat_template` string or named `default` template. The error names the model's `tokenizer` key.
 
 ### 5.9 Migration from the earlier shape
 
@@ -563,7 +567,7 @@ When the local process starts, before it serves anything, it also refuses:
 
 ## 6. `credentials.json`
 
-One file: `~/.config/rayline/credentials.json`. `rayline auth login` writes `session` and `router_key` together (it mints the router key at sign-in), `rayline auth logout` removes them, and a token refresh rewrites `session` only, because refresh tokens rotate. Nothing else writes it. It is the only source for Rayline's session and router key: no env var or flag overrides it.
+One file: `~/.config/rayline/credentials.json`. `rayline auth login` writes `session` and `router_key` together (it mints the router key at sign-in), `rayline auth logout` revokes the session, then removes them and cuts the router key out of the harness configs Rayline wrote (`~/.rayline/harness/*/` and the Codex `rayline` profile), and a token refresh rewrites `session` only, because refresh tokens rotate. Nothing else writes it. It is the only source for Rayline's session and router key: no env var or flag overrides it.
 
 ```json
 {
@@ -715,7 +719,7 @@ These keep today's behaviour for now, under the new command shape. Their aliases
 1. `rayline auth login`: `-b, --no-browser` (device-code login) and `-p, --paste` (paste the callback URL). `--paste` with `--no-browser` behaves as today (`--paste` wins). Launching a harness while signed out signs in on the spot with the default flow when stdin and stdout are both terminals. Otherwise the launch fails as signed out. A local-mode launch that reuses a running local process doesn't read the credentials, so it runs even when signed out.
 2. `rayline update`: `--check`, `--version <version>`, `--force`, `--dry-run`.
 3. `rayline run claude --isolated`: gives Claude Code its own config folder (`~/.rayline/harness/claude-code/`) so it can run beside other sessions.
-4. `rayline run codex`: the subcommands `rayline run codex app [WORKSPACE]` (launches the Codex desktop app on its own `CODEX_HOME`, `~/.rayline/harness/codex-app/`) and `rayline run codex configure` (writes a Codex profile, `rayline.config.toml`, to the user's Codex home: `CODEX_HOME`, else `~/.codex`, Codex's own default).
+4. `rayline run codex`: the subcommands `rayline run codex app [WORKSPACE]` (launches the Codex desktop app on its own `CODEX_HOME`, `~/.rayline/harness/codex-app/`) and `rayline run codex configure` (writes a Codex profile, `rayline.config.toml`, to the user's Codex home: `CODEX_HOME`, else `~/.codex`, Codex's own default). On Windows, the `config.toml` of each Rayline Codex home (`rayline run codex`'s and the app's) gets `[windows] sandbox` when it has none: the user's own value from `config.toml` in their Codex home, else `unelevated`, which needs no admin setup. A value already in the Rayline home is kept. A user `config.toml` that can't be read or parsed is an error naming it.
 
 ## 10. Removed
 

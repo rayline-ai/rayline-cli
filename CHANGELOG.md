@@ -7,6 +7,25 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 
 ### Changed
 
+- **`rayline auth logout` also removes the router key from the harness
+  configs Rayline wrote** under `~/.rayline/harness/` and from the Codex
+  `rayline` profile; each file keeps its other settings. Logout now revokes
+  the session first: if the router can't be reached, you stay logged in and
+  can run it again. If the router says the session is already invalid,
+  logout still signs you out locally and reports it.
+- **`rayline run codex` and `rayline run codex app` on Windows can run shell
+  commands.** The Codex config Rayline writes now has a `[windows] sandbox`
+  setting: yours from `~/.codex/config.toml` when you set one, else
+  `unelevated`, which needs no admin setup. Before, Codex had no sandbox
+  setting there and rejected every command as "blocked by policy". A value
+  already in the Rayline Codex home is kept.
+- Sign-in hints name the exact command, including `--env <name>` for a
+  configured environment: "Not signed in to Rayline" (from `rayline auth status` and
+  every launch) and the login timeout and expiry messages, which also say to
+  run it again.
+- `rayline run openclaw` refuses an OpenClaw older than 2026.9.6 with a
+  message naming the version to install, instead of handing it a config it
+  rejects as invalid.
 - **`rayline run claude` gives Claude Code ARC's real context window.**
   Claude Code doesn't know ARC model ids and assumed 200K for them, which
   also capped the auto-compact window, so long sessions compacted at a
@@ -17,6 +36,16 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   launch after updating shows the running-daemon prompt.
 - `rayline update` updates every install that Homebrew doesn't manage, and
   `rayline update --help` names Homebrew only.
+
+### Fixed
+
+- `rayline local start` no longer fails when a `local.inference.models` entry
+  has a `tokenizer` and its endpoint lists other protocols besides
+  `openai_chat`, as in the documented example. The tokenizer counts the
+  model's OpenAI Chat requests.
+- `rayline local start` refuses a `tokenizer` whose endpoint doesn't list
+  `openai_chat`, and a tokenizer repo with no chat template (a base model's),
+  with an error naming the model's `tokenizer` key.
 
 ## 0.5.6 (2026-11-17)
 
