@@ -11,10 +11,10 @@ The installed binary is `rayline` (`~/.rayline/bin/rayline`).
 ## Release Tags
 
 Prod releases are cut by the Rayline release pipeline, which builds a pinned
-commit of this repo, signs `SHA256SUMS` and `latest.txt` with minisign, signs
-and notarizes the macOS menu bar app, publishes to `https://get.rayline.ai`,
-then creates the `vX.Y.Z` tag on that commit and the GitHub release with the
-same files. Do not push `v*` tags by hand.
+commit of this repo, signs `SHA256SUMS` and `latest.txt` with minisign,
+publishes to `https://get.rayline.ai`, then creates the `vX.Y.Z` tag on that
+commit and the GitHub release with the same files. Do not push `v*` tags by
+hand.
 
 `.github/workflows/release.yml` is a manual fallback only: it runs from
 `workflow_dispatch` with an existing tag, never on a tag push, and fails if a

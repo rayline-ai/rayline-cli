@@ -11,6 +11,8 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   configured environment: "Not signed in to Rayline" (from `rayline auth status` and
   every launch) and the login timeout and expiry messages, which also say to
   run it again.
+- `rayline update` updates every install that Homebrew doesn't manage, and
+  `rayline update --help` names Homebrew only.
 
 ## 0.5.6 (2026-11-17)
 
