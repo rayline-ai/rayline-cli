@@ -176,9 +176,9 @@ With no `--version` or `--force`, when the running version is newer than the cha
 
 `rayline update` installs the ARC encoder (section 5.4 item 2) only when `~/.rayline/arc/` already holds one: it then downloads the new version's encoder files into `~/.rayline/arc/<version>/`, each checked against the release's signed `SHA256SUMS`, and after a successful update, while no local process runs, removes every other version directory in `~/.rayline/arc/` (a running local process restarts its encoder from its own). Otherwise it downloads no encoder. Downloads stream to disk; one fails when connecting takes over 30 seconds or no data arrives for 60 seconds.
 
-`rayline update` refuses Homebrew and Rayline.app installs: with any of its options (`--check`, `--version`, `--force`, `--dry-run`), it replaces nothing and exits 0. When the binary it would replace is inside a `.app` bundle, it prints ``rayline is managed by Rayline.app. Update the app to update the CLI:`` and, on the next line, ``re-download from https://get.rayline.ai``. When that binary is under `brew --prefix` (with `brew` on `PATH`), it prints ``Installed via Homebrew. Run `brew upgrade rayline` to update.``
+`rayline update` refuses Homebrew installs: with any of its options (`--check`, `--version`, `--force`, `--dry-run`), it replaces nothing and exits 0. When the binary it would replace is under `brew --prefix` (with `brew` on `PATH`), it prints ``Installed via Homebrew. Run `brew upgrade rayline` to update.``
 
-When the binary is not inside a `.app` bundle and `brew` is on `PATH` but `brew --prefix` fails or prints nothing, `rayline update` fails: it replaces nothing, prints ``Error: `brew --prefix` (<brew>) failed: <reason>`` to stderr and exits 1. `<brew>` is the path of the `brew` it ran, and `<reason>` is the exit status, the error from starting it, ``it printed no prefix`` or ``it printed a prefix that is not UTF-8``.
+When `brew` is on `PATH` but `brew --prefix` fails or prints nothing, `rayline update` fails: it replaces nothing, prints ``Error: `brew --prefix` (<brew>) failed: <reason>`` to stderr and exits 1. `<brew>` is the path of the `brew` it ran, and `<reason>` is the exit status, the error from starting it, ``it printed no prefix`` or ``it printed a prefix that is not UTF-8``.
 
 ### 3.6 Installers
 
