@@ -7,6 +7,13 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 
 ### Changed
 
+- **`rayline run hermes` works again with Hermes 0.23 on macOS and Linux.**
+  Hermes 0.23 refuses to start, even for `hermes --version`, in a home with
+  no dependency environment, and Rayline's Hermes home starts empty. Rayline
+  read that refusal as a Hermes older than 0.21.6. It now runs `hermes pm
+  repair` once for its Hermes home before the first launch on every OS, as it
+  already did on Windows, in cloud and local mode. A `hermes --version` that
+  fails is reported with Hermes' own output, not as an old Hermes.
 - `rayline auth logout` also deletes the copies of its config that Hermes
   keeps in Rayline's Hermes home (`~/.rayline/harness/hermes/backups/config/`),
   which held the router key.
@@ -47,6 +54,11 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   launch after updating shows the running-daemon prompt.
 - `rayline update` updates every install that Homebrew doesn't manage, and
   `rayline update --help` names Homebrew only.
+- A model's `tokenizer` now sizes the turns of Claude Code, omp and Codex in
+  the model's own tokens, as well as those of OpenAI Chat clients, so a local
+  model with a small context window takes the turns that fit it. A turn with
+  content its chat template doesn't render as text, such as a document, is
+  still sized from its bytes.
 
 ### Fixed
 
@@ -61,12 +73,10 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   Gemma 4 instruct repo, such as `google/gemma-4-e4b-it`. Each image in a
   request counts as the most tokens Gemma 4 gives an image.
 - `rayline local start` no longer fails when a `local.inference.models` entry
-  has a `tokenizer` and its endpoint lists other protocols besides
-  `openai_chat`, as in the documented example. The tokenizer counts the
-  model's OpenAI Chat requests.
-- `rayline local start` refuses a `tokenizer` whose endpoint doesn't list
-  `openai_chat`, and a tokenizer repo with no chat template (a base model's),
-  with an error naming the model's `tokenizer` key.
+  has a `tokenizer` and its endpoint lists several protocols, as in the
+  documented example.
+- `rayline local start` refuses a tokenizer repo with no chat template (a base
+  model's), with an error naming the model's `tokenizer` key.
 
 ## 0.5.6 (2026-11-17)
 
