@@ -7,6 +7,13 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 
 ### Changed
 
+- **`rayline run hermes` works again with Hermes 0.23 on macOS and Linux.**
+  Hermes 0.23 refuses to start, even for `hermes --version`, in a home with
+  no dependency environment, and Rayline's Hermes home starts empty. Rayline
+  read that refusal as a Hermes older than 0.21.6. It now runs `hermes pm
+  repair` once for its Hermes home before the first launch on every OS, as it
+  already did on Windows, in cloud and local mode. A `hermes --version` that
+  fails is reported with Hermes' own output, not as an old Hermes.
 - `rayline auth logout` also deletes the copies of its config that Hermes
   keeps in Rayline's Hermes home (`~/.rayline/harness/hermes/backups/config/`),
   which held the router key.
