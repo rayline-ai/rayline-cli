@@ -397,6 +397,16 @@ impl Harness {
         }
     }
 
+    /// Refuse an installed harness too old for the config Rayline writes:
+    /// OpenClaw older than [`openclaw::MIN_VERSION`]. `probe` is the harness
+    /// with the launch's environment.
+    pub(crate) fn require_version(self, probe: Command) -> Result<(), String> {
+        match self {
+            Self::OpenClaw => openclaw::require_version(probe),
+            _ => Ok(()),
+        }
+    }
+
     /// Refuse `args` local mode can't run: OpenClaw's container mode.
     pub(crate) fn require_hybrid_args(self, args: &[OsString]) -> io::Result<()> {
         let env_container =
@@ -528,6 +538,7 @@ async fn prepare(request: RunRequest) -> Result<Command, String> {
     if harness == Harness::Omp {
         apply_hosted_prices(&router_url, &mut models).await?;
     }
+    harness.require_version(cloud_probe(&binary))?;
     let config_dir = config_dir(&home, harness);
     let ctx = RenderContext {
         key: &key,
@@ -675,6 +686,23 @@ fn cloud_probe(binary: &Path) -> Command {
     let mut command = Command::new(binary);
     command.env_remove(ROUTER_KEY_ENV);
     command
+}
+
+/// The version `command --version` prints on stdout. A harness that cannot
+/// run, exits non-zero or prints no version is an error naming the probe.
+pub(crate) fn installed_version(mut command: Command) -> Result<(u64, u64, u64), String> {
+    let shown = format!("`{} --version`", Path::new(command.get_program()).display());
+    let output = command
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|error| format!("failed to run {shown}: {error}"))?;
+    if !output.status.success() {
+        return Err(format!("{shown} failed: {}", output.status));
+    }
+    let printed = String::from_utf8_lossy(&output.stdout);
+    omp::parse_version(&printed)
+        .ok_or_else(|| format!("{shown} printed no version: {:?}", printed.trim()))
 }
 
 /// The files Rayline may have written a router key into: the top-level files
