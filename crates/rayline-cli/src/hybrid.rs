@@ -915,7 +915,7 @@ async fn probe_decisions(
     env: Option<&str>,
     say: &dyn Fn(String),
 ) -> io::Result<()> {
-    let env_flag = env_flag(env);
+    let env_flag = crate::status::env_flag(env);
     let url = config["decisions"]["url"]
         .as_str()
         .expect("core_config always names the Decisions URL");
@@ -989,12 +989,6 @@ fn models_url(decisions_url: &str) -> String {
 /// The readiness request: a bodiless `GET` with the router key.
 fn probe_request(client: &reqwest::Client, url: &str, key: &str) -> reqwest::RequestBuilder {
     client.get(url).bearer_auth(key)
-}
-
-/// The `--env` a command for `env` takes, with its trailing space: none for
-/// the built-in prod.
-fn env_flag(env: Option<&str>) -> String {
-    env.map(|env| format!("--env {env} ")).unwrap_or_default()
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -1601,6 +1595,9 @@ fn harness_command(
             let harness = crate::harness::Harness::from_command(name).ok_or_else(|| {
                 io::Error::other(format!("unsupported local-mode harness {name:?}"))
             })?;
+            harness
+                .require_version(withheld_command(&program, withheld))
+                .map_err(io::Error::other)?;
             let major_version = harness
                 .major_version(withheld_command(&program, withheld))
                 .map_err(io::Error::other)?;
@@ -2324,8 +2321,9 @@ mod tests {
     // `environments.prod` instead.
     #[test]
     fn commands_for_an_environment_name_its_env() {
-        assert_eq!(env_flag(None), "");
-        assert_eq!(env_flag(Some("dev")), "--env dev ");
+        assert_eq!(crate::status::env_flag(None), "");
+        assert_eq!(crate::status::env_flag(Some("dev")), "--env dev ");
+        assert_eq!(crate::status::env_flag(Some("-dev")), "--env=-dev ");
     }
 
     /// Serializes the tests that set a process-wide env var.
@@ -2359,6 +2357,18 @@ mod tests {
                      echo 'opencode v2.0.25'\n",
                 )
                 .unwrap();
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt as _;
+                    fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
+                }
+            }
+            // An OpenClaw new enough for the config Rayline writes.
+            if cfg!(windows) {
+                fs::write(dir.join("openclaw.cmd"), "@echo OpenClaw 2026.11.3\r\n").unwrap();
+            } else {
+                let binary = dir.join("openclaw");
+                fs::write(&binary, "#!/bin/sh\necho 'OpenClaw 2026.11.3'\n").unwrap();
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt as _;

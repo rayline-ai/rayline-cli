@@ -7,6 +7,25 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 
 ### Changed
 
+- **`rayline auth logout` also removes the router key from the harness
+  configs Rayline wrote** under `~/.rayline/harness/` and from the Codex
+  `rayline` profile; each file keeps its other settings. Logout now revokes
+  the session first: if the router can't be reached, you stay logged in and
+  can run it again. If the router says the session is already invalid,
+  logout still signs you out locally and reports it.
+- **`rayline run codex` and `rayline run codex app` on Windows can run shell
+  commands.** The Codex config Rayline writes now has a `[windows] sandbox`
+  setting: yours from `~/.codex/config.toml` when you set one, else
+  `unelevated`, which needs no admin setup. Before, Codex had no sandbox
+  setting there and rejected every command as "blocked by policy". A value
+  already in the Rayline Codex home is kept.
+- Sign-in hints name the exact command, including `--env <name>` for a
+  configured environment: "Not signed in to Rayline" (from `rayline auth status` and
+  every launch) and the login timeout and expiry messages, which also say to
+  run it again.
+- `rayline run openclaw` refuses an OpenClaw older than 2026.9.6 with a
+  message naming the version to install, instead of handing it a config it
+  rejects as invalid.
 - `rayline update` updates every install that Homebrew doesn't manage, and
   `rayline update --help` names Homebrew only.
 - A model's `tokenizer` now sizes the turns of Claude Code, omp and Codex in
