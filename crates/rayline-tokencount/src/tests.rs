@@ -94,6 +94,27 @@ fn an_image_costs_its_patches_instead_of_its_placeholder() {
 }
 
 #[test]
+fn a_gemma4_image_costs_its_budget_instead_of_its_placeholder() {
+    let processor = json!({"image_processor": {"patch_size": 16, "pooling_kernel_size": 3, "max_soft_tokens": 280}});
+    let body = json!({"messages": [{"role": "user", "content": [
+        {"type": "text", "text": "what"},
+        {"type": "image_url", "image_url": {"url": "https://x/y.png"}}
+    ]}]});
+    let text_only =
+        json!({"messages": [{"role": "user", "content": [{"type": "text", "text": "what"}]}]});
+    let counter = counter(Some(processor));
+    assert!(counter.accepts_images());
+    let without = counter.count_chat(&text_only).unwrap().prompt_tokens;
+    assert_eq!(
+        counter.count_chat(&body).unwrap(),
+        Count {
+            prompt_tokens: without + 282,
+            images: 1
+        }
+    );
+}
+
+#[test]
 fn refuses_what_it_cannot_size() {
     let image = json!({"messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "https://x/y.png"}}]}]});
     assert!(

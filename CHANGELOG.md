@@ -18,6 +18,10 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 
 ### Fixed
 
+- A Gemma 4 instruct repo, such as `google/gemma-4-e4b-it`, can be a model's
+  `tokenizer`. `rayline local start` failed on its image processor. Each
+  image in a request now counts as the most tokens Gemma 4 gives an image
+  (282 with Google's published settings).
 - `rayline local start` no longer fails when a `local.inference.models` entry
   has a `tokenizer` and its endpoint lists other protocols besides
   `openai_chat`, as in the documented example. The tokenizer counts the
