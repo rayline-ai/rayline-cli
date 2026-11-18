@@ -106,8 +106,12 @@ heavy_args() {
   esac
 }
 
+# The harness starts the MCP server itself, not through bash, so on Windows (Git
+# Bash, MSYS2, Cygwin) the path must be a native one such as C:/x/y.py, not /c/x/y.py.
 mcp_args_json() {
-  printf '["-I","%s","--value","%s"]' "$MCP_SERVER" "$RUN_TOKEN"
+  local server=$MCP_SERVER
+  command -v cygpath >/dev/null 2>&1 && server=$(cygpath -m "$server")
+  printf '["-I","%s","--value","%s"]' "$server" "$RUN_TOKEN"
 }
 
 # session_args <harness> <turn 1|2> <dir>: sets `args` to the flags that put
@@ -229,8 +233,10 @@ report_pass() {
   echo "PASS    $harness $profile $case$detail"
   pass=$((pass + 1))
   record PASS ""
-  # A turn that passed but logged an error or a 4xx still has a story.
-  grep -m 1 -i -E '\berror\b|\b4[0-9][0-9]\b' <<<"$out" | sed 's/^/NOTE    /' | cut -c1-220
+  # A turn that passed but logged an error or a 4xx still has a story. Three
+  # digits inside a longer number, such as the token count 7,465, are not a status.
+  grep -m 1 -i -E '\berror\b|(^|[^[:alnum:]_.,])4[0-9]{2}($|[^[:alnum:]_.,]|[.,]($|[^0-9]))' <<<"$out" |
+    sed 's/^/NOTE    /' | cut -c1-220
 }
 
 report_fail() {
