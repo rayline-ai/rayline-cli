@@ -337,8 +337,17 @@ async fn logout_from_home(hosted: &HostedEnvironment, home: &Path) -> Result<Str
     // before the stored account goes, so a failure here can be run again.
     crate::harness::remove_router_key(home, &account.router_key.api_key)
         .map_err(AuthError::WriteFailed)?;
-    credentials.remove_account(hosted.slot());
-    credentials::save(home, &credentials).map_err(AuthError::WriteFailed)?;
+    // Read the file again: another command may have written it during the
+    // revoke. The slot goes only while it still holds the revoked router key;
+    // a sign-in since then is kept.
+    credentials = credentials::load(home)?;
+    if credentials
+        .account(hosted.slot())
+        .is_some_and(|current| current.router_key.api_key == account.router_key.api_key)
+    {
+        credentials.remove_account(hosted.slot());
+        credentials::save(home, &credentials).map_err(AuthError::WriteFailed)?;
+    }
     match revoked {
         Err(RevokeError::Refused(error)) => Err(AuthError::RevokeRefused {
             env_name: hosted.name().to_owned(),
