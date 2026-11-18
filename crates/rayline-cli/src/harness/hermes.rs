@@ -854,7 +854,7 @@ providers:
         use super::super::super::tests::temp_dir;
         use super::super::{
             EXTRA_MARKER, Finished, INSTALL_EXTRA, READY_MARKER, finish, launcher_identity,
-            launcher_path, prepare_cloud_home, prepare_home, sibling,
+            prepare_cloud_home, prepare_home, sibling,
         };
         use std::path::Path;
         use std::process::Command;
@@ -870,6 +870,7 @@ providers:
         #[cfg(unix)]
         #[test]
         fn a_bare_launcher_is_found_on_the_launch_path() {
+            use super::super::launcher_path;
             use std::os::unix::fs::PermissionsExt as _;
             let dir = temp_dir("hermes-launcher-path");
             let bin = dir.join("bin");
