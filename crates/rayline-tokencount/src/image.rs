@@ -65,14 +65,20 @@ impl ImageSizing {
             }
             return Ok(None);
         };
-        // Gemma 4 (`Gemma4ImageProcessor`): an image becomes at most
-        // `max_soft_tokens` tokens, which the processor writes between a
-        // begin-image and an end-image token.
-        if let Some(budget) = processor.get("max_soft_tokens") {
-            let Some(budget) = budget.as_u64().filter(|budget| *budget > 0) else {
+        // Gemma 4 (`Gemma4ImageProcessor`) has no `merge_size`: an image
+        // becomes at most `max_soft_tokens` tokens, which the processor
+        // writes between a begin-image and an end-image token.
+        if processor.get("merge_size").is_none()
+            && let Some(budget) = processor.get("max_soft_tokens")
+        {
+            let Some(tokens) = budget
+                .as_u64()
+                .filter(|budget| *budget > 0)
+                .and_then(|budget| budget.checked_add(2))
+            else {
                 bail!("the image processor's `max_soft_tokens` is not a positive integer");
             };
-            return Ok(Some(Self::PerImage { tokens: budget + 2 }));
+            return Ok(Some(Self::PerImage { tokens }));
         }
         let Some(merge) = processor.get("merge_size").and_then(Value::as_u64) else {
             bail!(
@@ -298,8 +304,17 @@ mod tests {
     }
 
     #[test]
+    fn a_merge_size_keeps_the_resize_sizing_beside_a_soft_token_budget() {
+        let config = json!({"patch_size": 16, "merge_size": 2, "min_image_tokens": 64, "max_image_tokens": 16384, "max_soft_tokens": 280});
+        let sizing = ImageSizing::from_processor_config(&config)
+            .unwrap()
+            .unwrap();
+        assert_eq!(sizing.tokens(Source::Unknown), 16384);
+    }
+
+    #[test]
     fn a_soft_token_budget_that_is_not_a_positive_integer_is_an_error() {
-        for budget in [json!(0), json!("280"), json!(280.5)] {
+        for budget in [json!(0), json!("280"), json!(280.5), json!(u64::MAX)] {
             let mut config = gemma4();
             config["image_processor"]["max_soft_tokens"] = budget;
             let error = ImageSizing::from_processor_config(&config).unwrap_err();
