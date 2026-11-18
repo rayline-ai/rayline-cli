@@ -8,6 +8,8 @@ pub(crate) mod arc_release;
 pub(crate) mod auth_callback_page;
 pub mod claude;
 pub(crate) mod claude_daemon;
+#[cfg(unix)]
+pub(crate) mod claude_print;
 mod cli;
 pub mod codex;
 pub mod codex_app;
@@ -97,6 +99,8 @@ pub async fn run_argv(original_argv: &[OsString]) -> ExitCode {
             println!("{CLI_BIN} {RAYLINE_VERSION}");
             return ExitCode::SUCCESS;
         }
+        #[cfg(unix)]
+        Ok(cli::Parsed::ClaudeStderr(ids)) => return claude_print::relay_main(ids),
         Ok(cli::Parsed::LocalProcess(args)) => {
             return match rayline_daemon::run(args).await {
                 Ok(()) => ExitCode::SUCCESS,
@@ -375,6 +379,11 @@ async fn exec_claude(request: crate::claude::RunRequest) -> ExitCode {
     }
     eprintln!("{}", "─".repeat(72));
 
+    #[cfg(unix)]
+    if print_mode {
+        // Claude Code gets its models from the environment here.
+        claude_print::relay_stderr(&mut command, &[]);
+    }
     exec_or_status(&mut command, "claude")
 }
 
@@ -388,7 +397,7 @@ fn pass_through(binary: &str, arg: &OsString) -> ExitCode {
 }
 
 #[cfg(unix)]
-fn exec_or_status(command: &mut Command, binary: &str) -> ExitCode {
+pub(crate) fn exec_or_status(command: &mut Command, binary: &str) -> ExitCode {
     use std::os::unix::process::CommandExt;
 
     let error = command.exec();
