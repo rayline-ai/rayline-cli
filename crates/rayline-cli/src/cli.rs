@@ -179,7 +179,7 @@ Options:
   --dry-run            Download and verify without replacing Rayline
   --help               Show this message and exit
 
-Homebrew and Rayline.app installs update through brew or the app.
+Homebrew installs update through brew.
 ";
 
 /// The first argument that runs the local process (section 4.3). Only

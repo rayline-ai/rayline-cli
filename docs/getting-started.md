@@ -235,9 +235,8 @@ rayline update --check
 | `--force` | Installs even when the target version isn't newer. |
 | `--dry-run` | Downloads and verifies the update, then reports what it would install, without installing it. |
 
-If Rayline was installed with Homebrew or comes with Rayline.app,
-`rayline update` installs nothing and tells you to update through Homebrew or
-the app instead.
+If Rayline was installed with Homebrew, `rayline update` installs nothing and
+tells you to update through Homebrew instead.
 
 ## Files
 
