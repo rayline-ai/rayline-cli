@@ -18,7 +18,9 @@ Run the script in Git Bash, which provides `bash` and `perl`, and `cygpath` to g
 The harnesses start the MCP tool server as `python3` themselves, not through `bash`, so `python3` on `PATH` must start a real Python:
 
 - The `python3` that Windows ships is an App Execution Alias for the Microsoft Store: with arguments it prints "Python was not found" and exits non-zero. Turn it off in Settings > Apps > Advanced app settings > App execution aliases, or put a real `python3.exe` before it on `PATH`.
-- The python.org installer provides `python.exe` but no `python3.exe`. A virtual environment's `Scripts` directory has both: create one with `python -m venv <dir>` and put `<dir>\Scripts` first on `PATH`.
+- The python.org installer provides `python.exe` but no `python3.exe`, and so does a virtual environment made from it. To get one, create a virtual environment with `python -m venv <dir>`, copy `<dir>\Scripts\python.exe` to `<dir>\Scripts\python3.exe`, and put `<dir>\Scripts` first on `PATH`.
+
+`python3 -I --version` in Git Bash prints the Python version when `python3` is set up.
 
 ## Profiles
 
