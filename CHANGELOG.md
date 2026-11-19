@@ -14,6 +14,22 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   repair` once for its Hermes home before the first launch on every OS, as it
   already did on Windows, in cloud and local mode. A `hermes --version` that
   fails is reported with Hermes' own output, not as an old Hermes.
+- **`rayline top` is redesigned.** The header says where ARC decides, the
+  policy, where requests ran, token totals with the share served from the
+  providers' prompt caches, and the decisions' median time. One list shows
+  each request, newest first, with requests in flight at the top: the harness
+  that sent it, the turn, where and how fast ARC decided, the model and where
+  it ran. A `why` line under the selected row gives the decision's reason;
+  `Enter` opens a request's details and `f` filters by harness. Narrow
+  terminals drop columns instead of wrapping. Decisions made in Rayline
+  Platform now show their time, thinking level and reason too.
+- `rayline top --json` adds, per request, `harness`, `thinking_level`,
+  `decision_reason`, `p_pass`, `min_p_pass`, `arc_encoded_tokens`,
+  `arc_restored_tokens` and `cache_write_tokens`, and `totals.cache_read_tokens`
+  and `router.preset`. `decision_ms` is now also set for decisions made in
+  Rayline Platform. No field was renamed or removed.
+- A local-mode launch points each harness at its own path on the local
+  process's gateway, `/h/<harness>`, so `rayline top` can name it.
 - `rayline auth logout` also deletes the copies of its config that Hermes
   keeps in Rayline's Hermes home (`~/.rayline/harness/hermes/backups/config/`),
   which held the router key.

@@ -210,9 +210,11 @@ async fn routes_is_answered_here_with_its_route_id_and_cell() {
 async fn each_answered_decision_is_reported_with_its_route_id() {
     let (sender, mut reported) = mpsc::unbounded_channel();
     let harness = harness_with(FakeDecider::default(), catalog(), |config| {
-        config.on_decision = Some(Arc::new(move |route_id: &str, ms: u64| {
-            let _ = sender.send((route_id.to_owned(), ms));
-        }));
+        config.on_decision = Some(Arc::new(
+            move |route_id: &str, decided: &rayline_arc_routes::Decided| {
+                let _ = sender.send((route_id.to_owned(), *decided));
+            },
+        ));
     })
     .await;
     let body: Value = harness
@@ -223,9 +225,13 @@ async fn each_answered_decision_is_reported_with_its_route_id() {
         .json()
         .await
         .unwrap();
-    let (route_id, ms) = reported.try_recv().expect("reported");
+    let (route_id, decided) = reported.try_recv().expect("reported");
     assert_eq!(body["route_id"], json!(route_id));
-    assert!(ms < 60_000);
+    assert!(decided.ms < 60_000);
+    // The encoder's token counts, as the decider reported them: it read
+    // 1,234 tokens and reports no reuse.
+    assert_eq!(decided.encoded_tokens, Some(1234));
+    assert_eq!(decided.restored_tokens, None);
     // A refused request is no decision.
     let refused = harness
         .client

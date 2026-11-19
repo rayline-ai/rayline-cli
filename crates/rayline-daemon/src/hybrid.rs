@@ -240,7 +240,11 @@ pub async fn run(args: Args) -> Result<()> {
             &encoder,
             &args.router_url,
             access,
-            Arc::new(move |route_id: &str, ms: u64| times.record(route_id, ms)),
+            Arc::new(
+                move |route_id: &str, decided: &rayline_arc_routes::Decided| {
+                    times.record(route_id, decided)
+                },
+            ),
         )
         .await?;
         arc_routes = Some(task);
@@ -465,7 +469,7 @@ async fn serve(listener: TcpListener, state: Arc<Gateway>) -> Result<()> {
     }
 }
 
-async fn handle(state: Arc<Gateway>, request: Request<Incoming>) -> Response<Body> {
+async fn handle(state: Arc<Gateway>, mut request: Request<Incoming>) -> Response<Body> {
     // Reuse the existing browser/DNS-rebinding guard, then authenticate even health.
     if let Some(response) = rayline_local_router::reject_untrusted_request(
         state.port,
@@ -480,6 +484,25 @@ async fn handle(state: Arc<Gateway>, request: Request<Incoming>) -> Response<Bod
         );
         return response;
     }
+    // A local-mode launch points each harness at `/h/<harness>`: the rest
+    // of the path is the request, and the harness names its metrics row.
+    let harness = match rayline_local_router::harness_path(request.uri().path()) {
+        rayline_local_router::HarnessPath::None => None,
+        rayline_local_router::HarnessPath::Unknown => {
+            return error_response(StatusCode::NOT_FOUND, "unknown harness path");
+        }
+        rayline_local_router::HarnessPath::Harness(harness, rest) => {
+            let rest = match request.uri().query() {
+                Some(query) => format!("{rest}?{query}"),
+                None => rest.to_owned(),
+            };
+            match rest.parse() {
+                Ok(uri) => *request.uri_mut() = uri,
+                Err(_) => return error_response(StatusCode::BAD_REQUEST, "invalid request path"),
+            }
+            Some(harness)
+        }
+    };
     if let Err(error) = state.inbound.check(&Method::POST, "/", request.headers()) {
         // Claude Code checks `/api/hello` without a key at every start.
         if request.uri().path() == "/api/hello" {
@@ -557,7 +580,7 @@ async fn handle(state: Arc<Gateway>, request: Request<Incoming>) -> Response<Bod
             "pid":std::process::id(), "instance_id":state.instance_id}),
         );
     }
-    match forward(&state, request).await {
+    match forward(&state, request, harness).await {
         Ok(response) => response,
         Err(error) => {
             tracing::warn!(%error, "execution core request failed");
@@ -590,7 +613,11 @@ fn model_capabilities(health: &serde_json::Value) -> Result<ModelCapabilities> {
     Ok(capabilities)
 }
 
-async fn forward(state: &Gateway, request: Request<Incoming>) -> Result<Response<Body>> {
+async fn forward(
+    state: &Gateway,
+    request: Request<Incoming>,
+    harness: Option<&str>,
+) -> Result<Response<Body>> {
     let (parts, body) = request.into_parts();
     // Buffered (within the core's own limit) so a turn can be sent again.
     let body = match http_body_util::Limited::new(body, MAX_REQUEST_BYTES)
@@ -622,14 +649,16 @@ async fn forward(state: &Gateway, request: Request<Incoming>) -> Result<Response
                  local process",
             ));
         };
-        return send_classifier_to_cloud(state, route, &parts, &body).await;
+        return send_classifier_to_cloud(state, route, &parts, &body, harness).await;
     }
     let mut observation = (parts.method == Method::POST
         && matches!(
             parts.uri.path(),
             "/v1/messages" | "/v1/chat/completions" | "/v1/responses"
         ))
-    .then(|| RequestObservation::start(state.metrics.clone(), &body));
+    .then(|| {
+        RequestObservation::start(state.metrics.clone(), &body, harness).sent_to(parts.uri.path())
+    });
     let mut retried = false;
     loop {
         let upstream = send_to_core(state, &parts, body.clone()).await?;
@@ -731,6 +760,7 @@ async fn send_classifier_to_cloud(
     route: &crate::hybrid_classifier::Route,
     parts: &hyper::http::request::Parts,
     body: &[u8],
+    harness: Option<&str>,
 ) -> Result<Response<Body>> {
     let key = std::env::var(&route.auth_env)?;
     let pinned = crate::hybrid_classifier::pinned_body(body, &route.wire_model)
@@ -752,7 +782,7 @@ async fn send_classifier_to_cloud(
             outgoing = outgoing.header(name, value);
         }
     }
-    let mut observation = RequestObservation::start(state.metrics.clone(), body);
+    let mut observation = RequestObservation::start(state.metrics.clone(), body, harness);
     observation.record_classifier(&route.wire_model);
     let upstream = outgoing.bearer_auth(key).body(pinned).send().await?;
     let status = upstream.status();

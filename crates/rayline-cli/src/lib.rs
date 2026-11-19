@@ -23,6 +23,7 @@ pub(crate) mod hybrid_tokenizer;
 pub(crate) mod start_progress;
 pub mod status;
 mod top;
+mod top_view;
 pub mod update;
 
 pub const CLI_BIN: &str = "rayline";

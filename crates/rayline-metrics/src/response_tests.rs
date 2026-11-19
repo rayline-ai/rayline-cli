@@ -611,3 +611,36 @@ fn buffered_json_is_parsed_whole_and_only_in_band_signals_fail() {
     assert_eq!(validity, ResponseValidity::Invalid);
     assert!(!updates.is_empty());
 }
+
+/// Anthropic usage reports cache writes, which the cache update carries
+/// beside the reads; the OpenAI formats report none.
+#[test]
+fn anthropic_usage_reports_cache_writes() {
+    let anthropic = "{\"type\":\"message\",\"usage\":{\"input_tokens\":4,\"cache_read_input_tokens\":30,\"cache_creation_input_tokens\":6,\"output_tokens\":9}}";
+    let (_, updates, _) = observe(anthropic.as_bytes(), false, 64);
+    assert!(
+        updates.iter().any(|update| matches!(
+            update,
+            MetricsUpdate::PromptCache {
+                prompt_tokens: Some(40),
+                cache_tokens: Some(30),
+                cache_write_tokens: Some(6),
+                ..
+            }
+        )),
+        "{updates:?}"
+    );
+    let openai = "{\"object\":\"response\",\"status\":\"completed\",\"usage\":{\"input_tokens\":40,\"output_tokens\":9,\"input_tokens_details\":{\"cached_tokens\":5}}}";
+    let (_, updates, _) = observe(openai.as_bytes(), false, 64);
+    assert!(
+        updates.iter().any(|update| matches!(
+            update,
+            MetricsUpdate::PromptCache {
+                cache_tokens: Some(5),
+                cache_write_tokens: None,
+                ..
+            }
+        )),
+        "{updates:?}"
+    );
+}

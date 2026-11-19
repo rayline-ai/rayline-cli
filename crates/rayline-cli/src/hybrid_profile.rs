@@ -104,6 +104,21 @@ pub(crate) fn counted_deployments(settings: &Settings) -> Vec<(&str, &str, Vec<S
         .collect()
 }
 
+/// The `local.inference.endpoints` key each local deployment runs on, by
+/// deployment id.
+pub(crate) fn endpoint_keys(settings: &Settings) -> std::collections::BTreeMap<String, String> {
+    settings
+        .models
+        .iter()
+        .flat_map(|(id, model)| {
+            settings.endpoints[&model.endpoint]
+                .protocols
+                .iter()
+                .map(move |&protocol| (deployment_id(id, protocol), model.endpoint.clone()))
+        })
+        .collect()
+}
+
 /// The deployment serving `model`, a `models` key or a cloud pin's registry
 /// id, over `protocol`.
 pub(crate) fn deployment_id(model: &str, protocol: Protocol) -> String {
@@ -237,6 +252,20 @@ pub(crate) fn core_config(settings: &Settings, router_url: &str) -> Result<Value
 
 #[cfg(test)]
 mod tests {
+
+    /// The metrics name the deployment a request ran on by the protocol its
+    /// path speaks: that name must be the one each deployment is written with.
+    #[test]
+    fn deployment_protocols_match_the_gateway_paths() {
+        for protocol in [
+            Protocol::AnthropicMessages,
+            Protocol::OpenaiChat,
+            Protocol::OpenaiResponses,
+        ] {
+            let (name, path) = wire(protocol);
+            assert_eq!(rayline_local_router::protocol_at(path), Some(name));
+        }
+    }
     use super::*;
 
     /// `text` loaded as the settings.json of a temp dir named after `name`.
@@ -410,6 +439,18 @@ mod tests {
                         "overrides": {"selection": {"min_p_pass": 0.5}}}}
             }
         }"#,
+        );
+        // `rayline top` names the endpoint of each local deployment below.
+        assert_eq!(
+            endpoint_keys(&settings),
+            [
+                ("qwen/qwen3.8-27b-chat", "ollama"),
+                ("z-ai/glm-5.3-flash-chat", "gpu-box"),
+                ("z-ai/glm-5.3-flash-messages", "gpu-box"),
+            ]
+            .map(|(deployment, endpoint)| (deployment.to_owned(), endpoint.to_owned()))
+            .into_iter()
+            .collect()
         );
         let router = "https://api.rayline.ai";
         let local = |id: &str,

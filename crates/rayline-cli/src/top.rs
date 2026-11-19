@@ -1,5 +1,6 @@
 //! `rayline top`: live request metrics from the local hybrid process.
 
+use std::collections::BTreeMap;
 use std::io::{self, IsTerminal, Write};
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -10,6 +11,8 @@ use crossterm::style::{Attribute, Color, Print, ResetColor, SetAttribute, SetFor
 use crossterm::terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{execute, queue};
 use serde_json::Value;
+
+use crate::top_view::{self, Context, Style, ViewState};
 
 const TOP_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 
@@ -27,7 +30,7 @@ async fn render_top_from_home(home: &Path, request: &TopRequest) -> io::Result<S
     let state_dir = crate::hybrid::state_dir(home);
     // The live view waits for a local process and follows a restarted one.
     if !request.json && io::stdout().is_terminal() {
-        run_top_tui(&state_dir).await?;
+        run_top_tui(home, &state_dir).await?;
         return Ok(String::new());
     }
     let source = TopSource::connect(&state_dir).await?;
@@ -43,7 +46,8 @@ async fn render_top_from_home(home: &Path, request: &TopRequest) -> io::Result<S
     }
 
     let snapshot = source.fetch_snapshot().await?;
-    Ok(format_top_snapshot(&snapshot))
+    let locals = Locals::load(home)?;
+    Ok(top_view::text(&snapshot, &context(&locals, 0), TEXT_WIDTH))
 }
 
 /// The authenticated snapshot endpoint of one live local process, and the
@@ -217,38 +221,6 @@ const TOTALS: &[&str] = &[
     "output_tokens",
 ];
 
-/// The `key` rows of a snapshot `validate_top_snapshot` accepted.
-fn rows<'a>(snapshot: &'a Value, key: &str) -> &'a [Value] {
-    snapshot[key]
-        .as_array()
-        .expect("validate_top_snapshot checked the rows")
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum TopSort {
-    Started,
-    Ttft,
-    Throughput,
-}
-
-impl TopSort {
-    fn next(self) -> Self {
-        match self {
-            Self::Started => Self::Ttft,
-            Self::Ttft => Self::Throughput,
-            Self::Throughput => Self::Started,
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Started => "started",
-            Self::Ttft => "ttft",
-            Self::Throughput => "tg",
-        }
-    }
-}
-
 struct TopTerminalGuard;
 
 impl TopTerminalGuard {
@@ -270,7 +242,46 @@ impl Drop for TopTerminalGuard {
     }
 }
 
-async fn run_top_tui(state_dir: &Path) -> io::Result<()> {
+/// The running local process's local models, as it recorded them at start.
+#[derive(Default)]
+struct Locals {
+    /// `local.inference.models` has a model.
+    models: bool,
+    /// The `local.inference.endpoints` key of each local deployment.
+    endpoints: BTreeMap<String, String>,
+}
+
+impl Locals {
+    /// From the running local process's record; none while none runs.
+    fn load(home: &Path) -> io::Result<Self> {
+        Ok(match crate::hybrid::running_endpoints(home)? {
+            Some(endpoints) => Self {
+                models: !endpoints.is_empty(),
+                endpoints,
+            },
+            None => Self::default(),
+        })
+    }
+}
+
+/// What a frame is drawn with, at `now`.
+fn context(locals: &Locals, tick: usize) -> Context<'_> {
+    let now_unix_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| {
+            u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
+        });
+    Context {
+        now_unix_ms,
+        utc_offset_s,
+        local_models: locals.models,
+        endpoints: &locals.endpoints,
+        on_mac: cfg!(target_os = "macos"),
+        tick,
+    }
+}
+
+async fn run_top_tui(home: &Path, state_dir: &Path) -> io::Result<()> {
     let mut stdout = io::stdout();
     let _guard = TopTerminalGuard::enter(&mut stdout)?;
     let mut source = None;
@@ -279,18 +290,15 @@ async fn run_top_tui(state_dir: &Path) -> io::Result<()> {
     let mut not_running = false;
     let mut last_error: Option<String> = None;
     let mut last_fetch: Option<Instant> = None;
-    let mut paused = false;
-    let mut force_refresh = true;
+    let mut view = ViewState::default();
+    let mut tick = 0usize;
+    // The config of the instance `locals_for` names.
+    let mut locals = Locals::default();
+    let mut locals_for: Option<Value> = None;
     let mut needs_draw = true;
-    let mut sort = TopSort::Started;
 
     loop {
-        let should_refresh = force_refresh
-            || (!paused
-                && last_fetch
-                    .map(|last| last.elapsed() >= TOP_REFRESH_INTERVAL)
-                    .unwrap_or(true));
-        if should_refresh {
+        if last_fetch.is_none_or(|last| last.elapsed() >= TOP_REFRESH_INTERVAL) {
             match refresh(state_dir, &mut source).await {
                 Refresh::Snapshot(next_snapshot) => {
                     snapshot = Some(next_snapshot);
@@ -313,39 +321,62 @@ async fn run_top_tui(state_dir: &Path) -> io::Result<()> {
                     last_error = Some(message);
                 }
             }
+            if let Some(snapshot) = &snapshot {
+                keep_view(snapshot, &mut view);
+            }
+            // A new local process may run from another config.
+            let identity = source.as_ref().map(|source| source.identity.clone());
+            if identity.is_some() && identity != locals_for {
+                match Locals::load(home) {
+                    Ok(loaded) => {
+                        locals = loaded;
+                        locals_for = identity;
+                    }
+                    Err(error) => {
+                        locals = Locals::default();
+                        last_error = Some(error.to_string());
+                    }
+                }
+            }
             last_fetch = Some(Instant::now());
-            force_refresh = false;
+            tick = tick.wrapping_add(1);
             needs_draw = true;
         }
 
         if needs_draw {
-            draw_top(
-                &mut stdout,
+            let mut warnings = Vec::new();
+            if not_running {
+                warnings.push("Local process: not running".to_owned());
+            }
+            if let Some(error) = &last_error {
+                warnings.push(format!("last fetch error: {error}"));
+            }
+            let (width, height) = terminal::size().map_err(io::Error::other)?;
+            let lines = top_view::frame(
                 snapshot.as_ref(),
-                not_running,
-                last_error.as_deref(),
-                paused,
-                sort,
-            )?;
+                &view,
+                &context(&locals, tick),
+                &warnings,
+                usize::from(width),
+                usize::from(height),
+            );
+            draw(&mut stdout, &lines)?;
             needs_draw = false;
         }
 
         if event::poll(Duration::from_millis(100)).map_err(io::Error::other)? {
             match event::read().map_err(io::Error::other)? {
-                Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
-                    KeyCode::Char('q') | KeyCode::Esc => break,
-                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => break,
-                    KeyCode::Char('p') => {
-                        paused = !paused;
-                        needs_draw = true;
+                Event::Key(key) if key.kind == KeyEventKind::Press => {
+                    if key.code == KeyCode::Char('q')
+                        || (key.code == KeyCode::Char('c')
+                            && key.modifiers.contains(KeyModifiers::CONTROL))
+                    {
+                        break;
                     }
-                    KeyCode::Char('r') => force_refresh = true,
-                    KeyCode::Char('s') => {
-                        sort = sort.next();
-                        needs_draw = true;
+                    if let Some(snapshot) = &snapshot {
+                        needs_draw |= on_key(snapshot, &mut view, key.code);
                     }
-                    _ => {}
-                },
+                }
                 Event::Resize(_, _) => needs_draw = true,
                 _ => {}
             }
@@ -355,483 +386,163 @@ async fn run_top_tui(state_dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn draw_top(
-    stdout: &mut io::Stdout,
-    snapshot: Option<&Value>,
-    not_running: bool,
-    last_error: Option<&str>,
-    paused: bool,
-    sort: TopSort,
-) -> io::Result<()> {
-    let (width, height) = terminal::size().map_err(io::Error::other)?;
+/// Keeps the view on rows a new snapshot still has: a filter on a harness
+/// with no requests left goes back to all requests, and a selected request
+/// that left the list moves the selection to the first row.
+fn keep_view(snapshot: &Value, view: &mut ViewState) {
+    if let Some(harness) = &view.filter
+        && !top_view::harnesses(snapshot).contains(harness)
+    {
+        view.filter = None;
+    }
+    let rows = top_view::list_rows(snapshot, view.filter.as_deref());
+    let index = top_view::selected_index(&rows, view.selected.as_deref());
+    let selected = index.and_then(|index| rows[index]["request_id"].as_str());
+    if selected != view.selected.as_deref() {
+        view.details = false;
+    }
+    view.selected = selected.map(str::to_owned);
+}
+
+/// Applies a key (spec section 3.4 item 7). Returns whether the view changed.
+fn on_key(snapshot: &Value, view: &mut ViewState, key: KeyCode) -> bool {
+    if view.details {
+        if key == KeyCode::Esc {
+            view.details = false;
+            return true;
+        }
+        return false;
+    }
+    let rows = top_view::list_rows(snapshot, view.filter.as_deref());
+    let index = top_view::selected_index(&rows, view.selected.as_deref());
+    let select = |view: &mut ViewState, index: usize| {
+        view.selected = rows[index]["request_id"].as_str().map(str::to_owned);
+    };
+    match (key, index) {
+        (KeyCode::Up, Some(index)) => select(view, index.saturating_sub(1)),
+        (KeyCode::Down, Some(index)) => select(view, (index + 1).min(rows.len() - 1)),
+        (KeyCode::Enter, Some(_)) => view.details = true,
+        (KeyCode::Char('f'), _) => {
+            view.filter = top_view::next_filter(snapshot, view.filter.as_deref());
+            view.selected = None;
+            keep_view(snapshot, view);
+        }
+        _ => return false,
+    }
+    true
+}
+
+fn draw(stdout: &mut io::Stdout, lines: &[top_view::Line]) -> io::Result<()> {
     queue!(stdout, MoveTo(0, 0), Clear(ClearType::All))?;
-
-    let mut y = 0;
-    y = draw_title(stdout, y, width, "Rayline CLI Top")?;
-    if not_running {
-        y = draw_colored_line(
-            stdout,
-            y,
-            width,
-            Color::DarkYellow,
-            "Local process: not running",
-        )?;
-    }
-    if let Some(snapshot) = snapshot {
-        if let Some(router) = router_line(snapshot) {
-            y = draw_colored_line(stdout, y, width, Color::DarkCyan, &router)?;
+    for (y, line) in lines.iter().enumerate() {
+        let Ok(y) = u16::try_from(y) else { break };
+        queue!(stdout, MoveTo(0, y))?;
+        match line.style {
+            Style::Plain => queue!(stdout, Print(&line.text))?,
+            Style::Title => queue!(
+                stdout,
+                SetAttribute(Attribute::Bold),
+                Print(&line.text),
+                SetAttribute(Attribute::Reset)
+            )?,
+            Style::ColumnNames | Style::Dim => queue!(
+                stdout,
+                SetForegroundColor(Color::DarkGrey),
+                Print(&line.text),
+                ResetColor
+            )?,
+            Style::Local => queue!(
+                stdout,
+                SetForegroundColor(Color::DarkCyan),
+                Print(&line.text),
+                ResetColor
+            )?,
+            Style::Errored => queue!(
+                stdout,
+                SetForegroundColor(Color::Red),
+                Print(&line.text),
+                ResetColor
+            )?,
+            Style::Warning => queue!(
+                stdout,
+                SetForegroundColor(Color::DarkYellow),
+                Print(&line.text),
+                ResetColor
+            )?,
+            Style::Selected => queue!(
+                stdout,
+                SetAttribute(Attribute::Reverse),
+                Print(&line.text),
+                SetAttribute(Attribute::Reset)
+            )?,
         }
-        y = draw_top_summary(stdout, y, width, snapshot, paused, sort)?;
     }
-    if let Some(error) = last_error {
-        y = draw_colored_line(
-            stdout,
-            y,
-            width,
-            Color::Red,
-            &format!("last fetch error: {error}"),
-        )?;
-    }
-    y = draw_line(stdout, y, width, "")?;
-
-    let footer_y = height.saturating_sub(1);
-    if let Some(snapshot) = snapshot {
-        let active = sorted_top_rows(snapshot, "active", sort);
-        let recent = sorted_top_rows(snapshot, "recent", sort);
-        let remaining = height.saturating_sub(y).saturating_sub(1);
-        let active_budget = if remaining > 12 {
-            remaining / 2
-        } else {
-            remaining
-        };
-        y = draw_table_section(
-            stdout,
-            y,
-            width,
-            y.saturating_add(active_budget),
-            "Active",
-            &active,
-        )?;
-        if y < footer_y {
-            y = draw_line(stdout, y, width, "")?;
-        }
-        draw_table_section(stdout, y, width, footer_y, "Recent", &recent)?;
-    }
-
-    let footer = "q/Esc quit  p pause  r refresh  s sort  | --json for scripts";
-    queue!(
-        stdout,
-        MoveTo(0, footer_y),
-        Clear(ClearType::CurrentLine),
-        SetForegroundColor(Color::DarkGrey),
-        Print(fit_width(footer, width as usize)),
-        ResetColor
-    )?;
     stdout.flush()
 }
 
-fn draw_top_summary(
-    stdout: &mut io::Stdout,
-    mut y: u16,
-    width: u16,
-    snapshot: &Value,
-    paused: bool,
-    sort: TopSort,
-) -> io::Result<u16> {
-    let totals = &snapshot["totals"];
-    y = draw_line(
-        stdout,
-        y,
-        width,
-        &format!(
-            "active={}  recent={}  mode={}  sort={}  refresh={}ms",
-            row_count(snapshot, "active"),
-            row_count(snapshot, "recent"),
-            if paused { "paused" } else { "live" },
-            sort.label(),
-            TOP_REFRESH_INTERVAL.as_millis(),
-        ),
-    )?;
-    draw_line(
-        stdout,
-        y,
-        width,
-        &format!(
-            "overall completed={}  errors={}  local={}  cloud={}  input={}  output={}",
-            totals_u64(totals, "completed_requests"),
-            totals_u64(totals, "errored_requests"),
-            totals_u64(totals, "local_requests"),
-            totals_u64(totals, "cloud_requests"),
-            totals_u64(totals, "input_tokens"),
-            totals_u64(totals, "output_tokens"),
-        ),
-    )
-}
+/// The width `rayline top` writes to a file or pipe.
+const TEXT_WIDTH: usize = 140;
 
-fn draw_table_section(
-    stdout: &mut io::Stdout,
-    mut y: u16,
-    width: u16,
-    bottom_exclusive: u16,
-    title: &str,
-    rows: &[Value],
-) -> io::Result<u16> {
-    if y >= bottom_exclusive {
-        return Ok(y);
+/// The local time zone's offset from UTC at `unix_ms`, in seconds; 0 when
+/// the system can't say.
+#[cfg(unix)]
+fn utc_offset_s(unix_ms: u64) -> i64 {
+    let Ok(time) = libc::time_t::try_from(unix_ms / 1000) else {
+        return 0;
+    };
+    let mut tm = std::mem::MaybeUninit::<libc::tm>::zeroed();
+    // SAFETY: `localtime_r` writes only to the `tm` it is given, which lives
+    // for the call; a null return means it wrote nothing usable.
+    let converted = unsafe { libc::localtime_r(&time, tm.as_mut_ptr()) };
+    if converted.is_null() {
+        return 0;
     }
+    // SAFETY: `localtime_r` returned non-null, so it initialized `tm`.
+    let offset = unsafe { tm.assume_init() }.tm_gmtoff;
+    // `tm_gmtoff` is a C `long`: `i64` on 64-bit targets, `i32` on others.
+    #[allow(clippy::useless_conversion)]
+    i64::from(offset)
+}
 
-    y = draw_heading(
-        stdout,
-        y,
-        width,
-        &format!("{title} requests ({})", rows.len()),
-    )?;
-    if y >= bottom_exclusive {
-        return Ok(y);
+/// The local time zone's offset from UTC at `unix_ms`, in seconds, by the
+/// zone's daylight-saving rules for that date; 0 when the system can't say.
+#[cfg(windows)]
+fn utc_offset_s(unix_ms: u64) -> i64 {
+    use windows_sys::Win32::Foundation::{FILETIME, SYSTEMTIME};
+    use windows_sys::Win32::System::Time::{
+        FileTimeToSystemTime, SystemTimeToFileTime, SystemTimeToTzSpecificLocalTime,
+    };
+    // FILETIME counts 100 ns from 1601-01-01 UTC.
+    const UNIX_EPOCH_FILETIME: u64 = 116_444_736_000_000_000;
+    let ticks =
+        |time: &FILETIME| (u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime);
+    let Some(utc_ticks) = (unix_ms / 1000)
+        .checked_mul(10_000_000)
+        .and_then(|ticks| ticks.checked_add(UNIX_EPOCH_FILETIME))
+    else {
+        return 0;
+    };
+    let utc = FILETIME {
+        dwLowDateTime: utc_ticks as u32,
+        dwHighDateTime: (utc_ticks >> 32) as u32,
+    };
+    // SAFETY: SYSTEMTIME and FILETIME are plain data; all zeros is valid.
+    let mut utc_parts: SYSTEMTIME = unsafe { std::mem::zeroed() };
+    let mut local_parts: SYSTEMTIME = unsafe { std::mem::zeroed() };
+    let mut local: FILETIME = unsafe { std::mem::zeroed() };
+    // SAFETY: each call reads and writes only the valid, live values it is
+    // given; a null zone means the current zone; a zero return means it
+    // wrote nothing usable.
+    let converted = unsafe {
+        FileTimeToSystemTime(&utc, &mut utc_parts) != 0
+            && SystemTimeToTzSpecificLocalTime(std::ptr::null(), &utc_parts, &mut local_parts) != 0
+            && SystemTimeToFileTime(&local_parts, &mut local) != 0
+    };
+    if !converted {
+        return 0;
     }
-
-    y = draw_colored_line(stdout, y, width, Color::DarkGrey, &top_table_header(width))?;
-    if rows.is_empty() {
-        if y < bottom_exclusive {
-            y = draw_line(stdout, y, width, "no requests")?;
-        }
-        return Ok(y);
-    }
-
-    let available = bottom_exclusive.saturating_sub(y) as usize;
-    let rendered_rows = rows.len().min(available);
-    for row in rows.iter().take(rendered_rows) {
-        let rendered = top_table_row(row, width);
-        y = match top_row_color(row) {
-            Some(color) => draw_colored_line(stdout, y, width, color, &rendered)?,
-            None => draw_line(stdout, y, width, &rendered)?,
-        };
-    }
-    if rows.len() > rendered_rows && y < bottom_exclusive {
-        y = draw_colored_line(
-            stdout,
-            y,
-            width,
-            Color::DarkGrey,
-            &format!("... {} more", rows.len() - rendered_rows),
-        )?;
-    }
-    Ok(y)
-}
-
-fn draw_title(stdout: &mut io::Stdout, y: u16, width: u16, text: &str) -> io::Result<u16> {
-    queue!(
-        stdout,
-        MoveTo(0, y),
-        SetAttribute(Attribute::Bold),
-        SetForegroundColor(Color::Cyan),
-        Print(fit_width(text, width as usize)),
-        ResetColor,
-        SetAttribute(Attribute::Reset)
-    )?;
-    Ok(y.saturating_add(1))
-}
-
-fn draw_heading(stdout: &mut io::Stdout, y: u16, width: u16, text: &str) -> io::Result<u16> {
-    queue!(
-        stdout,
-        MoveTo(0, y),
-        SetAttribute(Attribute::Bold),
-        Print(fit_width(text, width as usize)),
-        SetAttribute(Attribute::Reset)
-    )?;
-    Ok(y.saturating_add(1))
-}
-
-fn draw_colored_line(
-    stdout: &mut io::Stdout,
-    y: u16,
-    width: u16,
-    color: Color,
-    text: &str,
-) -> io::Result<u16> {
-    queue!(
-        stdout,
-        MoveTo(0, y),
-        SetForegroundColor(color),
-        Print(fit_width(text, width as usize)),
-        ResetColor
-    )?;
-    Ok(y.saturating_add(1))
-}
-
-fn draw_line(stdout: &mut io::Stdout, y: u16, width: u16, text: &str) -> io::Result<u16> {
-    queue!(stdout, MoveTo(0, y), Print(fit_width(text, width as usize)))?;
-    Ok(y.saturating_add(1))
-}
-
-fn top_row_color(row: &Value) -> Option<Color> {
-    (value_str(row, "target") == "local").then_some(Color::DarkCyan)
-}
-
-fn row_count(snapshot: &Value, key: &str) -> usize {
-    rows(snapshot, key).len()
-}
-
-fn sorted_top_rows(snapshot: &Value, key: &str, sort: TopSort) -> Vec<Value> {
-    let mut rows = rows(snapshot, key).to_vec();
-    rows.sort_by(|left, right| {
-        top_sort_value(right, sort)
-            .partial_cmp(&top_sort_value(left, sort))
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    rows
-}
-
-fn top_sort_value(row: &Value, sort: TopSort) -> f64 {
-    match sort {
-        TopSort::Started => row
-            .get("started_at_unix_ms")
-            .and_then(Value::as_u64)
-            .unwrap_or(0) as f64,
-        TopSort::Ttft => row.get("ttft_ms").and_then(Value::as_u64).unwrap_or(0) as f64,
-        TopSort::Throughput => row.get("output_tps").and_then(Value::as_f64).unwrap_or(0.0),
-    }
-}
-
-/// The router that decides, from the snapshot's `router`: `None` from a
-/// local process that doesn't say.
-fn router_line(snapshot: &Value) -> Option<String> {
-    let router = snapshot.get("router")?;
-    let model = router
-        .get("model")
-        .and_then(Value::as_str)
-        .map(|model| format!(" ({model})"))
-        .unwrap_or_default();
-    match router.get("kind").and_then(Value::as_str)? {
-        "local" => Some(format!("Router: local ARC{model} on this machine")),
-        "cloud" => Some(format!("Router: cloud ARC{model} in Rayline Platform")),
-        _ => None,
-    }
-}
-
-/// The router that decided a row, with how long a local decision took.
-fn router_cell(row: &Value) -> String {
-    match (
-        value_str(row, "router"),
-        row.get("decision_ms").and_then(Value::as_u64),
-    ) {
-        (made, Some(ms)) => format!("{made} {}", format_ms(ms)),
-        (made, None) => made.to_owned(),
-    }
-}
-
-/// Terminals at least this wide show every column; narrower ones leave out
-/// input tokens, cache %, age, prefill rate and the decision's event, so the
-/// model stays in view.
-const WIDE_TOP: u16 = 140;
-
-fn top_table_header(width: u16) -> String {
-    if width < WIDE_TOP {
-        format!(
-            "{:<14} {:<7} {:<10} {:>7} {:>7} {:>6} {:<11} MODEL",
-            "REQ", "TARGET", "STATE", "OUT", "TTFT", "TG", "ROUTER"
-        )
-    } else {
-        format!(
-            "{:<18} {:<8} {:<10} {:>7} {:>7} {:>7} {:>8} {:>8} {:>6} {:>6} {:<11} {:<11} MODEL / POLICY",
-            "REQ",
-            "TARGET",
-            "STATE",
-            "IN",
-            "OUT",
-            "CACHE %",
-            "AGE",
-            "TTFT",
-            "PF",
-            "TG",
-            "ROUTER",
-            "EVENT"
-        )
-    }
-}
-
-fn top_table_row(row: &Value, width: u16) -> String {
-    let target = truncate_cell(value_str(row, "target"), 8);
-    let state = truncate_cell(value_str(row, "state"), 10);
-    let output_tokens = count_cell(row, "output_tokens");
-    let ttft = ms_cell(row, "ttft_ms");
-    let generation_tps = rate_cell(row, "output_tps");
-    let router = truncate_cell(&router_cell(row), 11);
-    let model = top_model_cell(row);
-
-    if width < WIDE_TOP {
-        let request_id = truncate_cell(value_str(row, "request_id"), 14);
-        return format!(
-            "{request_id:<14} {target:<7} {state:<10} {output_tokens:>7} {ttft:>7} {generation_tps:>6} {router:<11} {model}"
-        );
-    }
-
-    let request_id = truncate_cell(value_str(row, "request_id"), 18);
-    let event = truncate_cell(value_str(row, "decision_event"), 11);
-    let input_tokens = count_cell(row, "input_tokens");
-    let cache_hit = percent_cell(row, "cache_hit_ratio");
-    let age = ms_cell(row, "duration_ms");
-    let prefill_tps = rate_cell(row, "prefill_tps");
-    format!(
-        "{request_id:<18} {target:<8} {state:<10} {input_tokens:>7} {output_tokens:>7} {cache_hit:>7} {age:>8} {ttft:>8} {prefill_tps:>6} {generation_tps:>6} {router:<11} {event:<11} {model}"
-    )
-}
-
-fn format_top_snapshot(snapshot: &Value) -> String {
-    let active = row_count(snapshot, "active");
-    let recent = row_count(snapshot, "recent");
-    let totals = &snapshot["totals"];
-    let mut output = "Rayline CLI top snapshot\n".to_owned();
-    if let Some(router) = router_line(snapshot) {
-        output.push_str(&router);
-        output.push('\n');
-    }
-    output.push_str(&format!(
-        "active: {active}  recent: {recent}  completed: {}  errors: {}\n",
-        totals_u64(totals, "completed_requests"),
-        totals_u64(totals, "errored_requests"),
-    ));
-    for row in rows(snapshot, "active") {
-        output.push_str(&format_top_row(row));
-    }
-    if active == 0 {
-        output.push_str("no active requests\n");
-    }
-    output
-}
-
-fn format_top_row(row: &Value) -> String {
-    let request_id = value_str(row, "request_id");
-    let target = value_str(row, "target");
-    let model = value_str(row, "executed_model");
-    let state = value_str(row, "state");
-    let ttft = ms_cell(row, "ttft_ms");
-    let output_tokens = count_cell(row, "output_tokens");
-    let prefill_tps = rate_cell(row, "prefill_tps");
-    let generation_tps = rate_cell(row, "output_tps");
-    let cache_hit = percent_cell(row, "cache_hit_ratio");
-    let router = router_cell(row);
-    let event = value_str(row, "decision_event");
-    format!(
-        "{request_id:<22} {target:<10} {state:<10} out={output_tokens:<7} cache%={cache_hit:<7} ttft={ttft:<8} pf={prefill_tps:<6} tg={generation_tps:<6} router={router:<12} event={event:<11} {model}\n"
-    )
-}
-
-fn value_str<'a>(row: &'a Value, key: &str) -> &'a str {
-    row.get(key)
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("-")
-}
-
-fn totals_u64(totals: &Value, key: &str) -> u64 {
-    totals[key]
-        .as_u64()
-        .expect("validate_top_snapshot checked the totals")
-}
-
-fn count_cell(row: &Value, key: &str) -> String {
-    row.get(key)
-        .and_then(Value::as_u64)
-        .map(|value| format_compact_number(value as f64, 0))
-        .unwrap_or_else(|| "-".to_owned())
-}
-
-fn ms_cell(row: &Value, key: &str) -> String {
-    row.get(key)
-        .and_then(Value::as_u64)
-        .map(format_ms)
-        .unwrap_or_else(|| "-".to_owned())
-}
-
-fn format_ms(value: u64) -> String {
-    if value < 1000 {
-        format!("{value}ms")
-    } else {
-        format!("{}s", format_compact_number(value as f64 / 1000.0, 1))
-    }
-}
-
-fn rate_cell(row: &Value, key: &str) -> String {
-    row.get(key)
-        .and_then(Value::as_f64)
-        .map(|value| format_compact_number(value, 1))
-        .unwrap_or_else(|| "-".to_owned())
-}
-
-fn percent_cell(row: &Value, key: &str) -> String {
-    row.get(key)
-        .and_then(Value::as_f64)
-        .map(|value| format!("{}%", format_compact_number(value * 100.0, 0)))
-        .unwrap_or_else(|| "-".to_owned())
-}
-
-/// The model that served the row, then the routing preset when there is one.
-/// A row whose execution model is unknown shows `-`, never the requested model.
-fn top_model_cell(row: &Value) -> String {
-    let model = value_str(row, "executed_model");
-    match value_str(row, "policy") {
-        "-" => model.to_owned(),
-        policy => format!("{model} / {policy}"),
-    }
-}
-
-fn format_compact_number(value: f64, plain_decimals: usize) -> String {
-    if !value.is_finite() {
-        return "-".to_owned();
-    }
-
-    let units = [
-        (1.0, ""),
-        (1_000.0, "k"),
-        (1_000_000.0, "M"),
-        (1_000_000_000.0, "B"),
-        (1_000_000_000_000.0, "T"),
-    ];
-    let abs = value.abs();
-    let mut unit_index = 0;
-    while unit_index + 1 < units.len() && abs >= units[unit_index + 1].0 {
-        unit_index += 1;
-    }
-    while unit_index + 1 < units.len() && abs / units[unit_index].0 >= 999.95 {
-        unit_index += 1;
-    }
-
-    let (scale, suffix) = units[unit_index];
-    if unit_index == 0 {
-        format!("{value:.plain_decimals$}")
-    } else {
-        format!("{:.1}{suffix}", value / scale)
-    }
-}
-
-fn truncate_cell(value: &str, width: usize) -> String {
-    if value.chars().count() <= width {
-        value.to_owned()
-    } else {
-        fit_width(value, width)
-    }
-}
-
-fn fit_width(text: &str, width: usize) -> String {
-    if width == 0 {
-        return String::new();
-    }
-    let mut chars = text.chars();
-    let mut output = String::new();
-    for _ in 0..width {
-        let Some(ch) = chars.next() else {
-            return output;
-        };
-        output.push(ch);
-    }
-    if chars.next().is_none() {
-        return output;
-    }
-    output.pop();
-    output.push('~');
-    output
+    let difference = i128::from(ticks(&local)) - i128::from(utc_ticks);
+    i64::try_from(difference / 10_000_000).unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -1003,8 +714,7 @@ mod tests {
         assert_eq!(snapshot["runtime"], "rayline-local");
         assert_eq!(snapshot["recent"][0]["executed_model"], Value::Null);
         assert_eq!(snapshot["recent"][0]["output_tokens"], 12);
-        assert_eq!(value_str(&snapshot["recent"][0], "target"), "cloud");
-        assert!(!top_model_cell(&snapshot["recent"][0]).contains("virtual-model"));
+        assert_eq!(snapshot["recent"][0]["target"], "cloud");
 
         fs::write(
             crate::hybrid::state_dir(&home).join("gateway-token"),
@@ -1198,138 +908,46 @@ mod tests {
         }
     }
 
+    /// The keys of spec section 3.4 item 7, and a refresh that drops the
+    /// selected request or the filtered harness.
     #[test]
-    fn top_numeric_cells_use_compact_suffixes() {
-        let row = serde_json::json!({
-            "input_tokens": 10_200,
-            "output_tokens": 1_200_000,
-            "duration_ms": 10_200,
-            "ttft_ms": 999,
-            "prefill_tps": 12_000.2,
-            "output_tps": 1_200_000.0,
-            "cache_hit_ratio": 0.876,
-        });
+    fn keys_select_open_details_and_cycle_the_filter() {
+        let row = |id: &str, harness: &str, started: u64| {
+            serde_json::json!({"request_id": id, "harness": harness,
+                "started_at_unix_ms": started, "completed_at_unix_ms": started})
+        };
+        let snapshot = serde_json::json!({"active": [], "recent": [
+            row("a", "claude", 3), row("b", "codex", 2), row("c", "claude", 1)
+        ]});
+        let mut view = ViewState::default();
+        keep_view(&snapshot, &mut view);
+        assert_eq!(view.selected.as_deref(), Some("a"));
+        assert!(on_key(&snapshot, &mut view, KeyCode::Down));
+        assert!(on_key(&snapshot, &mut view, KeyCode::Down));
+        assert!(on_key(&snapshot, &mut view, KeyCode::Down));
+        assert_eq!(view.selected.as_deref(), Some("c"));
+        assert!(on_key(&snapshot, &mut view, KeyCode::Up));
+        assert_eq!(view.selected.as_deref(), Some("b"));
+        assert!(on_key(&snapshot, &mut view, KeyCode::Enter));
+        assert!(view.details);
+        // In the details view only Esc acts.
+        assert!(!on_key(&snapshot, &mut view, KeyCode::Down));
+        assert!(on_key(&snapshot, &mut view, KeyCode::Esc));
+        assert!(!view.details);
 
-        assert_eq!(count_cell(&row, "input_tokens"), "10.2k");
-        assert_eq!(count_cell(&row, "output_tokens"), "1.2M");
-        assert_eq!(ms_cell(&row, "duration_ms"), "10.2s");
-        assert_eq!(ms_cell(&row, "ttft_ms"), "999ms");
-        assert_eq!(rate_cell(&row, "prefill_tps"), "12.0k");
-        assert_eq!(rate_cell(&row, "output_tps"), "1.2M");
-        assert_eq!(percent_cell(&row, "cache_hit_ratio"), "88%");
-    }
-
-    #[test]
-    fn top_table_places_cache_percent_after_token_columns() {
-        let header = top_table_header(140);
-        let input = header.find("IN").expect("header includes input column");
-        let output = header.find("OUT").expect("header includes output column");
-        let cache = header
-            .find("CACHE %")
-            .expect("header includes cache percent column");
-        let age = header.rfind("AGE").expect("header includes age column");
-        assert!(input < output);
-        assert!(output < cache);
-        assert!(cache < age);
-
-        let row = serde_json::json!({
-            "request_id": "req",
-            "target": "local",
-            "state": "done",
-            "router": "local",
-            "decision_ms": 38,
-            "decision_event": "task_start",
-            "executed_model": "model",
-            "input_tokens": 10_200,
-            "output_tokens": 1_200_000,
-            "duration_ms": 10_200,
-            "ttft_ms": 999,
-            "prefill_tps": 12_000.2,
-            "output_tps": 1_200_000.0,
-            "cache_hit_ratio": 0.876,
-        });
-
-        let cells = top_table_row(&row, 140)
-            .split_whitespace()
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
-        assert_eq!(
-            cells,
-            [
-                "req",
-                "local",
-                "done",
-                "10.2k",
-                "1.2M",
-                "88%",
-                "10.2s",
-                "999ms",
-                "12.0k",
-                "1.2M",
-                "local",
-                "38ms",
-                "task_start",
-                "model"
-            ]
-        );
-        // The model starts where its header does, and in view, at every width.
-        for width in [80, 119, 120, 139, 140, 200] {
-            let header = top_table_header(width);
-            let model = header.find("MODEL").expect("model column");
-            assert!(model + 10 <= usize::from(width), "{width}: {header}");
-            let line = top_table_row(&row, width);
-            assert_eq!(line.find("model"), Some(model), "{width}: {line}");
-            assert!(line.contains("local 38ms "), "{width}: {line}");
-            assert_eq!(line.contains("task_start"), width >= WIDE_TOP, "{width}");
+        for expected in [Some("claude"), Some("codex"), None] {
+            assert!(on_key(&snapshot, &mut view, KeyCode::Char('f')));
+            assert_eq!(view.filter.as_deref(), expected);
         }
-    }
+        on_key(&snapshot, &mut view, KeyCode::Char('f'));
+        assert_eq!(view.selected.as_deref(), Some("a"));
 
-    #[test]
-    fn top_names_the_router_that_decides() {
-        let snapshot = |router: Value| serde_json::json!({ "router": router });
-        assert_eq!(
-            router_line(&snapshot(
-                serde_json::json!({"kind": "local", "model": "arc-swift-1.0"})
-            )),
-            Some("Router: local ARC (arc-swift-1.0) on this machine".to_owned())
-        );
-        assert_eq!(
-            router_line(&snapshot(
-                serde_json::json!({"kind": "cloud", "model": "arc-sage-1.0"})
-            )),
-            Some("Router: cloud ARC (arc-sage-1.0) in Rayline Platform".to_owned())
-        );
-        assert_eq!(
-            router_line(&snapshot(
-                serde_json::json!({"kind": "cloud", "model": null})
-            )),
-            Some("Router: cloud ARC in Rayline Platform".to_owned())
-        );
-        assert_eq!(router_line(&serde_json::json!({})), None);
-
-        let row = serde_json::json!({"router": "cloud", "decision_event": "tool_result"});
-        assert_eq!(router_cell(&row), "cloud");
-        assert_eq!(router_cell(&serde_json::json!({})), "-");
-        assert_eq!(
-            router_cell(&serde_json::json!({"router": "local", "decision_ms": 1_250})),
-            "local 1.2s"
-        );
-    }
-
-    #[test]
-    fn top_model_cell_shows_the_routing_preset() {
-        let row = serde_json::json!({"executed_model": "model", "policy": "balanced"});
-        assert_eq!(top_model_cell(&row), "model / balanced");
-        let row = serde_json::json!({"executed_model": "model"});
-        assert_eq!(top_model_cell(&row), "model");
-    }
-
-    #[test]
-    fn top_row_color_highlights_local_requests() {
-        let local = serde_json::json!({ "target": "local" });
-        let cloud = serde_json::json!({ "target": "cloud" });
-
-        assert_eq!(top_row_color(&local), Some(Color::DarkCyan));
-        assert_eq!(top_row_color(&cloud), None);
+        // The harness and the request left the list: all requests, first row.
+        view.details = true;
+        let later = serde_json::json!({"active": [], "recent": [row("d", "codex", 4)]});
+        keep_view(&later, &mut view);
+        assert_eq!(view.filter, None);
+        assert_eq!(view.selected.as_deref(), Some("d"));
+        assert!(!view.details);
     }
 }
