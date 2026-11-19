@@ -5,6 +5,15 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 
 ## Unreleased
 
+### Changed
+
+- **Claude Code's `/model` offers your ARC models in cloud mode.** Its
+  entries name the models your key can use, by name, instead of Claude
+  models Rayline Platform doesn't serve: `cloud.model.id` is the Opus entry
+  and the default, `cloud.smol_model.id` the Haiku entry, and Sonnet, Fable
+  and a custom entry take the key's other models, or `cloud.model.id` when
+  there are none. Claude Code's `sonnet` and `fable` aliases follow them.
+
 ### Fixed
 
 - **A misspelt `tokenizer` repo no longer looks like an access problem.**
