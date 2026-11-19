@@ -71,9 +71,8 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   that way is sent unchanged.
 - For an OpenAI Chat turn to a local model with a `tokenizer`, the
   context-window check adds 50 tokens to the exact prompt count, so a turn
-  right at the limit no longer
-  overflows on servers whose chat template adds a few tokens of its own (LM
-  Studio, for one).
+  right at the limit no longer overflows on servers whose chat template adds
+  a few tokens of its own (LM Studio, for one).
 - With decisions made in Rayline Platform, the routing decision and the turn
   it served now carry the same conversation and branch ids, so the Platform
   can tie them together. A session or branch id over 1,024 bytes, or with a
