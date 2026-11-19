@@ -121,7 +121,9 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   has a `tokenizer` and its endpoint lists several protocols, as in the
   documented example.
 - `rayline local start` refuses a tokenizer repo with no chat template (a base
-  model's), with an error naming the model's `tokenizer` key.
+  model's), with an error naming the model's `tokenizer` key. Before, start
+  went on and the local process failed with "the model has no chat template",
+  naming a Hugging Face cache path.
 
 ### Rollback
 
