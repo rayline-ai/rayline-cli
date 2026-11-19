@@ -615,10 +615,12 @@ async fn run_harness(
         &home,
         harness,
         args,
-        url(&state)?,
-        &token,
-        declared,
-        &harness_capabilities(model_capabilities(&state)?),
+        Gateway {
+            url: url(&state)?,
+            token: &token,
+            declared,
+            capabilities: &harness_capabilities(model_capabilities(&state)?),
+        },
         &withheld,
     )?;
     for name in withheld {
@@ -1566,18 +1568,32 @@ fn withheld_command(program: &Path, withheld: &[&str]) -> Command {
     command
 }
 
+/// What a local-mode launch points its harness at.
+#[derive(Clone, Copy)]
+struct Gateway<'a> {
+    /// The local process's gateway URL.
+    url: &'a str,
+    token: &'a str,
+    /// The model every harness declares: [`crate::config::Routing::declared_model`].
+    declared: &'a str,
+    capabilities: &'a ModelCapabilities,
+}
+
 /// `withheld` names each endpoint's key variable. [`run_harness`] removes
-/// them from the launch, except one the harness sets to `token`.
+/// them from the launch, except one the harness sets to `gateway.token`.
 fn harness_command(
     home: &Path,
     name: &str,
     args: &[OsString],
-    endpoint: &str,
-    token: &str,
-    declared: &str,
-    capabilities: &ModelCapabilities,
+    gateway: Gateway<'_>,
     withheld: &[&str],
 ) -> io::Result<Command> {
+    let Gateway {
+        url: endpoint,
+        token,
+        declared,
+        capabilities,
+    } = gateway;
     // Each harness has its own gateway path, which names it in `top`.
     let endpoint = &format!("{endpoint}/h/{name}");
     let program = crate::harness::launch_program(name, std::env::var_os("PATH"));
@@ -2617,10 +2633,12 @@ mod tests {
                     &home,
                     harness.name(),
                     &[],
-                    "http://127.0.0.1:1",
-                    "local-token",
-                    "local/arc-sage-1.0",
-                    &capabilities,
+                    Gateway {
+                        url: "http://127.0.0.1:1",
+                        token: "local-token",
+                        declared: "local/arc-sage-1.0",
+                        capabilities: &capabilities,
+                    },
                     &[],
                 )
                 .unwrap();
@@ -2693,13 +2711,15 @@ mod tests {
             &home,
             "opencode",
             &[],
-            "http://127.0.0.1:1",
-            "local-token",
-            "local/arc-sage-1.0",
-            &ModelCapabilities {
-                context_window: 16384,
-                max_output_tokens: 8192,
-                input_modalities: vec!["text".into()],
+            Gateway {
+                url: "http://127.0.0.1:1",
+                token: "local-token",
+                declared: "local/arc-sage-1.0",
+                capabilities: &ModelCapabilities {
+                    context_window: 16384,
+                    max_output_tokens: 8192,
+                    input_modalities: vec!["text".into()],
+                },
             },
             &endpoint_key_envs(&settings),
         );
@@ -2731,13 +2751,15 @@ mod tests {
                 Path::new("/unused"),
                 name,
                 &[],
-                "http://127.0.0.1:20815",
-                "local-token",
-                "local/arc-sage-1.0",
-                &ModelCapabilities {
-                    context_window: 16384,
-                    max_output_tokens: 8192,
-                    input_modalities: vec!["text".into()],
+                Gateway {
+                    url: "http://127.0.0.1:20815",
+                    token: "local-token",
+                    declared: "local/arc-sage-1.0",
+                    capabilities: &ModelCapabilities {
+                        context_window: 16384,
+                        max_output_tokens: 8192,
+                        input_modalities: vec!["text".into()],
+                    },
                 },
                 &[],
             )
@@ -2778,10 +2800,12 @@ mod tests {
                 &home,
                 name,
                 &[],
-                "http://127.0.0.1:20815",
-                "local-token",
-                "local/arc-sage-1.0",
-                &capabilities,
+                Gateway {
+                    url: "http://127.0.0.1:20815",
+                    token: "local-token",
+                    declared: "local/arc-sage-1.0",
+                    capabilities: &capabilities,
+                },
                 &[],
             )
             .unwrap();
@@ -2838,7 +2862,10 @@ mod tests {
             omp_roles.contains("default: \"rayline/local/arc-sage-1.0\""),
             "{omp_roles}"
         );
-        assert!(hermes.contains("default: \"local/arc-sage-1.0\""), "{hermes}");
+        assert!(
+            hermes.contains("default: \"local/arc-sage-1.0\""),
+            "{hermes}"
+        );
         assert_eq!(
             openclaw["agents"]["defaults"]["model"]["primary"],
             "rayline/local/arc-sage-1.0"
@@ -2853,10 +2880,12 @@ mod tests {
             &home,
             "claude",
             &[],
-            "http://127.0.0.1:20815",
-            "local-token",
-            "local/arc-sage-1.0",
-            &capabilities,
+            Gateway {
+                url: "http://127.0.0.1:20815",
+                token: "local-token",
+                declared: "local/arc-sage-1.0",
+                capabilities: &capabilities,
+            },
             &[],
         )
         .unwrap();
@@ -2912,10 +2941,12 @@ mod tests {
             &home,
             "codex",
             &[],
-            "http://127.0.0.1:20815",
-            "local-token",
-            "local/arc-sage-1.0",
-            &capabilities,
+            Gateway {
+                url: "http://127.0.0.1:20815",
+                token: "local-token",
+                declared: "local/arc-sage-1.0",
+                capabilities: &capabilities,
+            },
             &[],
         )
         .unwrap();
