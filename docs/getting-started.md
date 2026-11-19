@@ -213,12 +213,11 @@ the first command that reads it writes this default file and says so:
 | Codex, pi, Hermes Agent, OpenClaw | their model | not used |
 
 Every harness except Codex offers the models your key can use in its model
-picker. In Claude Code's `/model`, `model` is the Opus entry and the default,
-`smol_model` the Haiku entry, and the Sonnet, Fable and custom entries hold
-the key's other models, or `model` when there are none. Claude Code has five
-entries, so a key with more than five models shows the first five; run
-another with `--model <id>`. Codex's `/model` lists only Codex's own models:
-use `-m <id>`.
+picker. Claude Code's `/model` shows only those, each once, with `model` as
+the default; a `--settings` of your own replaces that list with Claude
+Code's own. Its `opus` alias is `model`, `haiku` is `smol_model`, and
+`sonnet` and `fable` are the key's other models, or `model` when there are
+none. Codex's `/model` lists only Codex's own models: use `-m <id>`.
 
 Rayline checks the whole file once, when it loads, and stops with an error
 that names the key it refuses. A settings file from an earlier release,
