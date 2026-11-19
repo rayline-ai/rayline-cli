@@ -117,11 +117,11 @@ pub fn hf_api_get_commit(repo: &str) -> Result<String, String> {
     Ok(info.sha)
 }
 
-/// The error for a refused repo lookup. Without a token the Hub answers 401
-/// both for a repo that does not exist and for a private one, so the status
-/// cannot say which; 404 is a repo it says is not there.
+/// The error for a repo lookup the Hub did not answer with success. Without
+/// a token the Hub answers 401 both for a repo that does not exist and for a
+/// private one, so the status cannot say which.
 fn api_status_error(status: reqwest::StatusCode) -> String {
-    if matches!(status.as_u16(), 401 | 404) {
+    if status == reqwest::StatusCode::UNAUTHORIZED {
         format!(
             "HF API returned status {status}: Hugging Face has no public repo with this id (it does not exist, or it is private); check the spelling"
         )
@@ -814,16 +814,17 @@ mod tests {
     }
 
     #[test]
-    fn a_repo_lookup_refused_with_401_or_404_says_the_repo_is_not_public() {
-        for code in [401, 404] {
-            let error = api_status_error(reqwest::StatusCode::from_u16(code).unwrap());
-            assert!(error.starts_with(&format!("HF API returned status {code}")));
-            assert!(error.contains("no public repo with this id"), "{error}");
-            assert!(error.contains("check the spelling"), "{error}");
-        }
+    fn a_repo_lookup_refused_with_401_says_the_repo_is_not_public() {
+        let error = api_status_error(reqwest::StatusCode::UNAUTHORIZED);
+        assert!(
+            error.starts_with("HF API returned status 401 Unauthorized"),
+            "{error}"
+        );
+        assert!(error.contains("no public repo with this id"), "{error}");
+        assert!(error.contains("check the spelling"), "{error}");
         assert_eq!(
-            api_status_error(reqwest::StatusCode::BAD_GATEWAY),
-            "HF API returned status 502 Bad Gateway"
+            api_status_error(reqwest::StatusCode::NOT_FOUND),
+            "HF API returned status 404 Not Found"
         );
     }
 
