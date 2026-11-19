@@ -89,6 +89,79 @@ fn role_model_env_switches(
     ]
 }
 
+/// Claude Code's `/model` picker slots, as `(model env var, its name's env
+/// var, its description's env var)`. Its `opus` alias (and its default model)
+/// is the first, `haiku` the last.
+const PICKER_SLOTS: [(&str, &str, &str); 5] = [
+    (
+        "ANTHROPIC_DEFAULT_OPUS_MODEL",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL_DESCRIPTION",
+    ),
+    (
+        "ANTHROPIC_DEFAULT_SONNET_MODEL",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL_DESCRIPTION",
+    ),
+    (
+        "ANTHROPIC_DEFAULT_FABLE_MODEL",
+        "ANTHROPIC_DEFAULT_FABLE_MODEL_NAME",
+        "ANTHROPIC_DEFAULT_FABLE_MODEL_DESCRIPTION",
+    ),
+    (
+        "ANTHROPIC_CUSTOM_MODEL_OPTION",
+        "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME",
+        "ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION",
+    ),
+    (
+        HAIKU_MODEL_ENV,
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL_DESCRIPTION",
+    ),
+];
+
+/// The models Claude Code's `/model` picker offers, as `(env var, value)`: a
+/// `Some` is set on the launch and a `None` removed, so the user's own values
+/// never reach it. Opus is `cloud.model.id` and Haiku `cloud.smol_model.id`
+/// (set by [`role_model_env_switches`]); Sonnet, Fable and the custom option
+/// take the other models the router lists for the key, in its order. A slot
+/// with no model left takes `cloud.model.id`, so the picker and Claude Code's
+/// `sonnet` and `fable` aliases name only models the router serves; the
+/// custom option is then left out. A listed model is named by its
+/// `display_name` and described by its id; an unlisted one has neither.
+fn picker_env(hosted: &crate::harness::LaunchModels) -> Vec<(&'static str, Option<String>)> {
+    let main = hosted.main_model();
+    let mut others = hosted
+        .offered
+        .iter()
+        .filter(|model| model.id != hosted.main && model.id != hosted.background);
+    let background = hosted
+        .offered
+        .iter()
+        .find(|model| model.id == hosted.background);
+    let mut env = Vec::new();
+    for (index, (model_env, name_env, description_env)) in PICKER_SLOTS.into_iter().enumerate() {
+        let model = match index {
+            0 => Some(main),
+            1 | 2 => Some(others.next().unwrap_or(main)),
+            3 => others.next(),
+            _ => background,
+        };
+        // Haiku's id is a role model, set with the subagent model.
+        if model_env != HAIKU_MODEL_ENV {
+            env.push((model_env, model.map(|model| model.id.clone())));
+        }
+        let details =
+            model.and_then(|model| model.details.as_ref().map(|details| (model, details)));
+        env.push((
+            name_env,
+            details.map(|(_, details)| details.display_name.clone()),
+        ));
+        env.push((description_env, details.map(|(model, _)| model.id.clone())));
+    }
+    env
+}
+
 /// The main model's context window for `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, when
 /// the router sizes the session (`routed`: it answered an auto-compact
 /// window, so Claude Code doesn't know the id and would assume 200K, capping
@@ -262,6 +335,12 @@ async fn run_command_from_home(
     command.env("ANTHROPIC_BASE_URL", &router_url);
     command.env("ANTHROPIC_AUTH_TOKEN", &key);
     command.env("ANTHROPIC_MODEL", &model);
+    for (name, value) in picker_env(&hosted_models) {
+        match value {
+            Some(value) => command.env(name, value),
+            None => command.env_remove(name),
+        };
+    }
     set_auto_compact_window_env(&mut command, auto_compact_window.as_deref());
     command.env(RAYLINE_ENV_NAME_ENV, &env_name);
     remove_claude_env(&mut command);
@@ -1296,6 +1375,94 @@ mod arc_default_tests {
         let mut unlisted = models.clone();
         unlisted.offered.retain(|model| model.id != models.main);
         assert_eq!(max_context_tokens(&unlisted, true), None);
+    }
+
+    // Two listed models: Opus is the main one and Haiku the background one;
+    // Sonnet and Fable fall back to the main one; no custom option.
+    #[test]
+    fn the_picker_offers_the_listed_models_by_name() {
+        let env = picker_env(&crate::harness::tests::hosted_models());
+        let env: Vec<_> = env
+            .iter()
+            .map(|(name, value)| (*name, value.as_deref()))
+            .collect();
+        assert_eq!(
+            env,
+            [
+                ("ANTHROPIC_DEFAULT_OPUS_MODEL", Some("arc-sage-1.0")),
+                ("ANTHROPIC_DEFAULT_OPUS_MODEL_NAME", Some("ARC Sage")),
+                (
+                    "ANTHROPIC_DEFAULT_OPUS_MODEL_DESCRIPTION",
+                    Some("arc-sage-1.0")
+                ),
+                ("ANTHROPIC_DEFAULT_SONNET_MODEL", Some("arc-sage-1.0")),
+                ("ANTHROPIC_DEFAULT_SONNET_MODEL_NAME", Some("ARC Sage")),
+                (
+                    "ANTHROPIC_DEFAULT_SONNET_MODEL_DESCRIPTION",
+                    Some("arc-sage-1.0")
+                ),
+                ("ANTHROPIC_DEFAULT_FABLE_MODEL", Some("arc-sage-1.0")),
+                ("ANTHROPIC_DEFAULT_FABLE_MODEL_NAME", Some("ARC Sage")),
+                (
+                    "ANTHROPIC_DEFAULT_FABLE_MODEL_DESCRIPTION",
+                    Some("arc-sage-1.0")
+                ),
+                ("ANTHROPIC_CUSTOM_MODEL_OPTION", None),
+                ("ANTHROPIC_CUSTOM_MODEL_OPTION_NAME", None),
+                ("ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION", None),
+                ("ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME", Some("ARC Swift")),
+                (
+                    "ANTHROPIC_DEFAULT_HAIKU_MODEL_DESCRIPTION",
+                    Some("arc-swift-1.0")
+                ),
+            ]
+        );
+    }
+
+    // More listed models fill Sonnet, Fable and the custom option in the
+    // listing's order; one past those is not offered. An unlisted main id
+    // has no name or description.
+    #[test]
+    fn extra_listed_models_fill_sonnet_fable_and_the_custom_option() {
+        let mut body = crate::harness::tests::listing(None);
+        for id in ["a/one", "b/two", "c/three", "d/four"] {
+            body["data"]
+                .as_array_mut()
+                .unwrap()
+                .push(serde_json::json!({
+                    "id": id, "object": "model", "owned_by": "x", "display_name": id.to_uppercase(),
+                    "context_length": 32_000, "max_output_tokens": 4_096,
+                    "capabilities": {"vision": false, "tools": true, "reasoning": true}
+                }));
+        }
+        let mut cloud = crate::harness::tests::cloud(None);
+        cloud.model.id = "unlisted/main".to_owned();
+        let models = crate::harness::LaunchModels::from_listing(&body, &cloud).unwrap();
+        let env = picker_env(&models);
+        let value = |name: &str| {
+            env.iter()
+                .find(|(key, _)| *key == name)
+                .and_then(|(_, value)| value.as_deref())
+        };
+        assert_eq!(value("ANTHROPIC_DEFAULT_OPUS_MODEL"), Some("unlisted/main"));
+        assert_eq!(value("ANTHROPIC_DEFAULT_OPUS_MODEL_NAME"), None);
+        assert_eq!(value("ANTHROPIC_DEFAULT_OPUS_MODEL_DESCRIPTION"), None);
+        // arc-sage-1.0 is listed and is neither main nor background.
+        assert_eq!(
+            value("ANTHROPIC_DEFAULT_SONNET_MODEL"),
+            Some("arc-sage-1.0")
+        );
+        assert_eq!(value("ANTHROPIC_DEFAULT_FABLE_MODEL"), Some("a/one"));
+        assert_eq!(value("ANTHROPIC_DEFAULT_FABLE_MODEL_NAME"), Some("A/ONE"));
+        assert_eq!(value("ANTHROPIC_CUSTOM_MODEL_OPTION"), Some("b/two"));
+        assert_eq!(
+            value("ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION"),
+            Some("b/two")
+        );
+        assert!(
+            !env.iter()
+                .any(|(_, value)| value.as_deref() == Some("c/three"))
+        );
     }
 
     /// `(subagent model, force, haiku model)` for a key's data mode (`None`:

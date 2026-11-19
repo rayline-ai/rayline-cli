@@ -13,10 +13,14 @@ const NOTICE_PREFIX: &[u8] = b"[claude-code:unrecognized_model] ";
 /// A held line longer than this is not a notice; it is passed on.
 const MAX_NOTICE_LEN: usize = 4096;
 /// The env vars through which Rayline names models for Claude Code.
-const MODEL_ENVS: [&str; 3] = [
+const MODEL_ENVS: [&str; 7] = [
     "ANTHROPIC_MODEL",
     "CLAUDE_CODE_SUBAGENT_MODEL",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_FABLE_MODEL",
+    "ANTHROPIC_CUSTOM_MODEL_OPTION",
 ];
 
 /// The model ids `command` sets through [`MODEL_ENVS`], plus `extra`.
