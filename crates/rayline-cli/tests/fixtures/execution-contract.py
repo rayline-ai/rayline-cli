@@ -167,7 +167,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("x-rayline-selected-model", "fixture-model")
         if config.get("derived_actions"):
             requested = json.loads(body).get("model")
-            # A routed model such as rayline-auto, or none, names no action.
+            # A routed model such as local/arc-sage-1.0, or none, names no action.
             entry = next((row for row in config["derived_actions"] if row["model"] == requested), None)
             if entry is not None:
                 self.send_header("x-rayline-instance-id", f"fixture-{os.getpid()}")

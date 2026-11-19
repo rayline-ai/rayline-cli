@@ -605,12 +605,19 @@ async fn run_harness(
     health(&client, &paths, &state).await?;
     let token = fs::read_to_string(paths.token())?;
     let withheld = endpoint_key_envs(settings);
+    let declared = settings
+        .routing
+        .as_ref()
+        .ok_or_else(|| io::Error::other("local mode needs `local.routing`"))?
+        .declared_model();
+    let declared = declared.as_str();
     let mut command = harness_command(
         &home,
         harness,
         args,
         url(&state)?,
         &token,
+        declared,
         &harness_capabilities(model_capabilities(&state)?),
         &withheld,
     )?;
@@ -633,8 +640,8 @@ async fn run_harness(
     // does: signals reach it directly and its exit is Rayline's.
     #[cfg(unix)]
     if harness == "claude" && crate::claude::print_mode_flag(args).is_some() {
-        // `--model rayline-auto` names the model here.
-        crate::claude_print::relay_stderr(&mut command, &[crate::VIRTUAL_ROUTER_MODEL]);
+        // `--model <declared>` names the model here.
+        crate::claude_print::relay_stderr(&mut command, &[declared]);
         return Ok(crate::exec_or_status(&mut command, "claude"));
     }
     let status = command.status()?;
@@ -1567,6 +1574,7 @@ fn harness_command(
     args: &[OsString],
     endpoint: &str,
     token: &str,
+    declared: &str,
     capabilities: &ModelCapabilities,
     withheld: &[&str],
 ) -> io::Result<Command> {
@@ -1585,7 +1593,7 @@ fn harness_command(
                     "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
                     capabilities.max_output_tokens.to_string(),
                 )
-                // `rayline-auto` is not in Claude Code's model catalog, so it
+                // The declared model is not in Claude Code's catalog, so it
                 // assumes a 200k window and auto-compacts long before the
                 // gateway's. State the window the gateway advertises, as
                 // `model_context_window` already does for codex.
@@ -1593,7 +1601,7 @@ fn harness_command(
                     crate::claude::MAX_CONTEXT_TOKENS_ENV,
                     capabilities.context_window.to_string(),
                 )
-                .args(["--model", "rayline-auto"]);
+                .args(["--model", declared]);
             // Claude Code 2.1.321+ asks the API to judge auto mode's actions
             // inside each turn (`safeguards`, answered in `safeguard_results`).
             // A turn the local model serves carries no verdict, so every
@@ -1609,7 +1617,7 @@ fn harness_command(
             command.env("RAYLINE_HYBRID_GATEWAY_TOKEN", token);
             for setting in [
                 "model_provider=\"rayline-local\"".to_owned(),
-                "model=\"rayline-auto\"".to_owned(),
+                format!("model=\"{declared}\""),
                 "model_providers.rayline-local.name=\"Rayline local\"".to_owned(),
                 format!("model_providers.rayline-local.base_url=\"{endpoint}/v1\""),
                 "model_providers.rayline-local.wire_api=\"responses\"".to_owned(),
@@ -1638,7 +1646,7 @@ fn harness_command(
                 config_dir: &config_dir,
                 capabilities: Some(capabilities),
                 harness_major_version: major_version,
-                models: crate::harness::LaunchModels::hybrid(capabilities),
+                models: crate::harness::LaunchModels::hybrid(declared, capabilities),
             };
             let plan = harness.plan(&ctx).map_err(io::Error::other)?;
             crate::harness::write_files(&config_dir, &plan.files)?;
@@ -2611,6 +2619,7 @@ mod tests {
                     &[],
                     "http://127.0.0.1:1",
                     "local-token",
+                    "local/arc-sage-1.0",
                     &capabilities,
                     &[],
                 )
@@ -2686,6 +2695,7 @@ mod tests {
             &[],
             "http://127.0.0.1:1",
             "local-token",
+            "local/arc-sage-1.0",
             &ModelCapabilities {
                 context_window: 16384,
                 max_output_tokens: 8192,
@@ -2723,6 +2733,7 @@ mod tests {
                 &[],
                 "http://127.0.0.1:20815",
                 "local-token",
+                "local/arc-sage-1.0",
                 &ModelCapabilities {
                     context_window: 16384,
                     max_output_tokens: 8192,
@@ -2769,6 +2780,7 @@ mod tests {
                 &[],
                 "http://127.0.0.1:20815",
                 "local-token",
+                "local/arc-sage-1.0",
                 &capabilities,
                 &[],
             )
@@ -2780,7 +2792,7 @@ mod tests {
             (&pi["contextWindow"], &pi["maxTokens"], &pi["input"]),
             (&json!(1_000_000), &json!(4096), &json!(["text"]))
         );
-        let opencode = &json("harness/opencode/opencode.json")["provider"]["rayline"]["models"]["rayline-auto"];
+        let opencode = &json("harness/opencode/opencode.json")["provider"]["rayline"]["models"]["local/arc-sage-1.0"];
         assert_eq!(
             opencode["limit"],
             json!({"context": 1_000_000, "output": 4096})
@@ -2812,6 +2824,25 @@ mod tests {
         }
         let hermes = read("harness/hermes/config.yaml");
         assert!(hermes.contains("context_length: 1000000"), "{hermes}");
+        // Every harness's default is the declared model.
+        assert_eq!(
+            json("harness/pi/settings.json")["defaultModel"],
+            "local/arc-sage-1.0"
+        );
+        assert_eq!(
+            json("harness/opencode/opencode.json")["model"],
+            "rayline/local/arc-sage-1.0"
+        );
+        let omp_roles = read("harness/omp/config.yml");
+        assert!(
+            omp_roles.contains("default: \"rayline/local/arc-sage-1.0\""),
+            "{omp_roles}"
+        );
+        assert!(hermes.contains("default: \"local/arc-sage-1.0\""), "{hermes}");
+        assert_eq!(
+            openclaw["agents"]["defaults"]["model"]["primary"],
+            "rayline/local/arc-sage-1.0"
+        );
         assert!(
             hermes.contains("provider: \"custom:rayline-resp\""),
             "{hermes}"
@@ -2824,6 +2855,7 @@ mod tests {
             &[],
             "http://127.0.0.1:20815",
             "local-token",
+            "local/arc-sage-1.0",
             &capabilities,
             &[],
         )
@@ -2834,13 +2866,20 @@ mod tests {
                 .any(|(key, value)| key == "CLAUDE_CODE_MAX_OUTPUT_TOKENS"
                     && value == Some(std::ffi::OsStr::new("4096")))
         );
-        // `rayline-auto` is not in Claude Code's catalog, so the window it
+        // `local/arc-sage-1.0` is not in Claude Code's catalog, so the window it
         // may budget against is stated rather than assumed (200k).
         assert!(
             claude
                 .get_envs()
                 .any(|(key, value)| key == "CLAUDE_CODE_MAX_CONTEXT_TOKENS"
                     && value == Some(std::ffi::OsStr::new("1000000")))
+        );
+        let claude_args: Vec<_> = claude.get_args().collect();
+        assert!(
+            claude_args
+                .windows(2)
+                .any(|pair| pair == ["--model", "local/arc-sage-1.0"]),
+            "{claude_args:?}"
         );
         // Auto mode's checks come from Claude Code's own classifier requests,
         // not from the API inside a turn the local model may serve, so the
@@ -2875,11 +2914,16 @@ mod tests {
             &[],
             "http://127.0.0.1:20815",
             "local-token",
+            "local/arc-sage-1.0",
             &capabilities,
             &[],
         )
         .unwrap();
         let args: Vec<_> = codex.get_args().map(|arg| arg.to_string_lossy()).collect();
+        assert!(
+            args.iter().any(|arg| arg == "model=\"local/arc-sage-1.0\""),
+            "{args:?}"
+        );
         assert!(
             args.iter().any(|arg| arg == "model_context_window=1000000"),
             "{args:?}"

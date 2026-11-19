@@ -210,16 +210,16 @@ note: \"line one\\nline two\"
         let dir = super::super::tests::temp_dir("omp-model-roster");
         let mut ctx = super::super::tests::render_context(&dir);
         let hosted = super::plan(&ctx).unwrap();
-        assert!(!hosted.files[0].contents.contains("id: \"rayline-auto\""));
+        assert!(!hosted.files[0].contents.contains("id: \"local/arc-sage-1.0\""));
         let capabilities = rayline_local_router::ModelCapabilities {
             context_window: 16384,
             max_output_tokens: 8192,
             input_modalities: vec!["text".into()],
         };
         ctx.capabilities = Some(&capabilities);
-        ctx.models = super::super::LaunchModels::hybrid(&capabilities);
+        ctx.models = super::super::LaunchModels::hybrid("local/arc-sage-1.0", &capabilities);
         let hybrid = super::plan(&ctx).unwrap();
-        assert!(hybrid.files[0].contents.contains("id: \"rayline-auto\""));
+        assert!(hybrid.files[0].contents.contains("id: \"local/arc-sage-1.0\""));
         assert!(!hybrid.files[0].contents.contains("id: \"arc-sage-1.0\""));
     }
 
