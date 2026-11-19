@@ -140,10 +140,11 @@ and the local process refuses to start without them.
 
 With a `tokenizer`, the requests sent to the model are sized in the model's
 own tokens, whichever harness sends them, so a model with a small context
-window takes the turns that fit it. A request with content its chat template
-doesn't render as text, such as a document, is sized from its bytes instead.
-The repo must publish a chat template: name a model's instruct or chat
-variant, not its base model.
+window takes the turns that fit it. For a vision model, the images in a
+request are counted too. A request with content its chat template doesn't
+render as text, such as a document, is sized from its bytes instead. The repo
+must publish a chat template: name a model's instruct or chat variant, not its
+base model, for example `google/gemma-4-E4B-it`, not `google/gemma-4-E4B`.
 
 The only other models ARC can pick are three Rayline Platform models:
 `anthropic/claude-opus-5.5`, `anthropic/claude-sonnet-5.5` and

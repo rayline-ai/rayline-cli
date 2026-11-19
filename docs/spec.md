@@ -120,7 +120,7 @@ Harness-specific options and subcommands are **kept for review** (section 9).
 6. The token counter reads the tokenizer repo's files in the layouts Hugging Face models publish:
    - `tokenizer.json`;
    - the chat template: `chat_template.jinja`, else the `chat_template` key of `tokenizer_config.json` (a string, or named templates `default` and `tool_use`);
-   - image sizing: `processor_config.json`, else `preprocessor_config.json`. In its `image_processor` object, else at its top level: `patch_size` and `merge_size`, and the image limits `min_image_tokens` and `max_image_tokens`, else `min_pixels` and `max_pixels`, else `size.min_pixels` and `size.max_pixels`, else `size.shortest_edge` and `size.longest_edge`.
+   - image sizing: `processor_config.json`, else `preprocessor_config.json`. In its `image_processor` object, else at its top level: `patch_size` and `merge_size`, and the image limits `min_image_tokens` and `max_image_tokens`, else `min_pixels` and `max_pixels`, else `size.min_pixels` and `size.max_pixels`, else `size.shortest_edge` and `size.longest_edge`. Gemma 4's processor gives `patch_size` and `max_soft_tokens` and no `merge_size`: every image counts as `max_soft_tokens` plus its begin-image and end-image tokens.
 
    An image given only by URL, or whose bytes don't decode as an image, counts as the processor's maximum.
 7. The local process passes each request on with a session id and a branch id:
