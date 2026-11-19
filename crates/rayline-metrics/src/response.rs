@@ -241,7 +241,7 @@ impl ResponseObserver {
         let anthropic = matches!(kind, "message" | "message_start" | "message_delta")
             || usage.get("cache_read_input_tokens").is_some()
             || usage.get("cache_creation_input_tokens").is_some();
-        let (input, output, cache) = if anthropic {
+        let (input, output, cache, cache_write) = if anthropic {
             let input = number(usage, "input_tokens");
             let read = number(usage, "cache_read_input_tokens");
             let creation = number(usage, "cache_creation_input_tokens");
@@ -262,7 +262,7 @@ impl ResponseObserver {
             } else {
                 None
             };
-            (total, number(usage, "output_tokens"), read)
+            (total, number(usage, "output_tokens"), read, creation)
         } else {
             (
                 number(usage, "prompt_tokens").or_else(|| number(usage, "input_tokens")),
@@ -271,6 +271,8 @@ impl ResponseObserver {
                     .pointer("/prompt_tokens_details/cached_tokens")
                     .or_else(|| usage.pointer("/input_tokens_details/cached_tokens"))
                     .and_then(Value::as_u64),
+                // The OpenAI formats report no cache writes.
+                None,
             )
         };
         if input.is_some() || output.is_some() {
@@ -280,11 +282,12 @@ impl ResponseObserver {
                 output_tokens: output,
             });
         }
-        if input.is_some() || cache.is_some() {
+        if input.is_some() || cache.is_some() || cache_write.is_some() {
             self.sink.record(MetricsUpdate::PromptCache {
                 request_id: self.request_id.clone(),
                 prompt_tokens: input,
                 cache_tokens: cache,
+                cache_write_tokens: cache_write,
                 processed_tokens: input,
                 prompt_ms: None,
                 prompt_tps: None,

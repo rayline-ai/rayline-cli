@@ -328,7 +328,37 @@ async fn all_protocols_preserve_body_and_identity_then_stop_owned_core() {
         );
         assert_eq!(response.text().await.unwrap(), body);
     }
+    // A harness's own path reaches the core as the plain path and names the
+    // harness in its row; a name that isn't a harness is refused.
+    let response = client
+        .post(format!("{url}/h/claude/v1/messages"))
+        .bearer_auth(&token)
+        .header("content-type", "application/json")
+        .header("x-session-affinity", "session-one")
+        .header("x-claude-code-agent-id", "branch-one")
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.text().await.unwrap(), body);
+    let unknown = client
+        .post(format!("{url}/h/other/v1/messages"))
+        .bearer_auth(&token)
+        .header("content-type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unknown.status(), 404);
     let snapshot = top_snapshot(&client, &url, &token).await;
+    let harnesses: Vec<&Value> = snapshot["recent"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| &row["harness"])
+        .collect();
+    assert_eq!(harnesses.iter().filter(|h| **h == "claude").count(), 1);
+    assert_eq!(harnesses.iter().filter(|h| h.is_null()).count(), 3);
     assert_eq!(snapshot["totals"]["local_requests"], 0);
     assert_eq!(
         snapshot["totals"]["cloud_requests"], 0,
@@ -339,7 +369,8 @@ async fn all_protocols_preserve_body_and_identity_then_stop_owned_core() {
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
-    assert_eq!(events.len(), 3);
+    assert_eq!(events.len(), 4);
+    assert_eq!(events[3]["path"], "/v1/messages");
     for event in events {
         assert_eq!(event["body"], body);
         assert_eq!(event["session"], "session-one");
@@ -453,7 +484,7 @@ async fn empty_responses_close_the_row_with_the_real_status() {
 async fn derived_models_sharing_a_worker_attribute_the_executed_deployment() {
     // Derived action IDs are produced by the core, not enumerated in daemon config.
     // The shared worker alone is ambiguous; the executed model disambiguates it.
-    let members = r#","deployments":[{"id":"local","kind":"local","wire_model":"local-wire"},{"id":"cloud","kind":"cloud","wire_model":"cloud-wire"}],"derived_actions":[{"worker":"shared","model":"local-model","deployment_id":"local"},{"worker":"shared","model":"cloud-model","deployment_id":"cloud"}]"#;
+    let members = r#","deployments":[{"id":"local","kind":"local","wire_model":"local-wire","protocol":"openai.chat.v1"},{"id":"cloud","kind":"cloud","wire_model":"cloud-wire","protocol":"openai.chat.v1"}],"derived_actions":[{"worker":"shared","model":"local-model","deployment_id":"local"},{"worker":"shared","model":"cloud-model","deployment_id":"cloud"}]"#;
     let mut runtime = Runtime::start_with_decisions(
         1,
         0,

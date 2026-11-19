@@ -88,6 +88,11 @@ struct Supervisor {
     /// it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     routing_defaults: bool,
+    /// The `local.inference.endpoints` key of each local deployment, by
+    /// deployment id, as its config said at start: `rayline top` names
+    /// where a request ran by it.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    endpoints: std::collections::BTreeMap<String, String>,
 }
 
 /// `local.routing.router`, and for `local` the ARC release with the
@@ -512,6 +517,18 @@ pub(crate) fn running_from_routing_defaults() -> Option<crate::config::Router> {
     }
 }
 
+/// The `local.inference.endpoints` key of each local deployment of the
+/// running local process, as its config said when it started. `None` while
+/// no local process runs.
+pub(crate) fn running_endpoints(
+    home: &Path,
+) -> io::Result<Option<std::collections::BTreeMap<String, String>>> {
+    Ok(running(&Paths {
+        dir: state_dir(home),
+    })?
+    .map(|supervisor| supervisor.endpoints))
+}
+
 /// Refuses a run's launch from the `--router` defaults: they serve a
 /// run only on the process started from them, which has stopped since the
 /// run loaded them.
@@ -824,6 +841,7 @@ async fn launch(
                 .routing
                 .as_ref()
                 .is_some_and(|routing| routing.defaults),
+            endpoints: crate::hybrid_profile::endpoint_keys(settings),
         };
         write_private_json(
             &paths.supervisor(),
@@ -1552,6 +1570,8 @@ fn harness_command(
     capabilities: &ModelCapabilities,
     withheld: &[&str],
 ) -> io::Result<Command> {
+    // Each harness has its own gateway path, which names it in `top`.
+    let endpoint = &format!("{endpoint}/h/{name}");
     let program = crate::harness::launch_program(name, std::env::var_os("PATH"));
     let mut command = withheld_command(&program, withheld);
     match name {
@@ -2796,6 +2816,8 @@ mod tests {
             hermes.contains("provider: \"custom:rayline-resp\""),
             "{hermes}"
         );
+        // Each harness is pointed at its own gateway path.
+        assert!(hermes.contains("127.0.0.1:20815/h/hermes/v1"), "{hermes}");
         let claude = harness_command(
             &home,
             "claude",
@@ -2824,6 +2846,12 @@ mod tests {
         // not from the API inside a turn the local model may serve, so the
         // child always gets `0`.
         let claude_env: std::collections::BTreeMap<_, _> = claude.get_envs().collect();
+        assert_eq!(
+            claude_env.get(std::ffi::OsStr::new("ANTHROPIC_BASE_URL")),
+            Some(&Some(std::ffi::OsStr::new(
+                "http://127.0.0.1:20815/h/claude"
+            )))
+        );
         assert_eq!(
             claude_env.get(std::ffi::OsStr::new(AUTO_MODE_SERVER_ENV)),
             Some(&Some(std::ffi::OsStr::new("0")))
@@ -2854,6 +2882,11 @@ mod tests {
         let args: Vec<_> = codex.get_args().map(|arg| arg.to_string_lossy()).collect();
         assert!(
             args.iter().any(|arg| arg == "model_context_window=1000000"),
+            "{args:?}"
+        );
+        assert!(
+            args.iter().any(|arg| arg
+                == "model_providers.rayline-local.base_url=\"http://127.0.0.1:20815/h/codex/v1\""),
             "{args:?}"
         );
         let _ = fs::remove_dir_all(&home);
@@ -2967,6 +3000,7 @@ mod tests {
             dir: PathBuf::from("/home/u/.rayline/local"),
         };
         let mut running = Supervisor {
+            endpoints: Default::default(),
             pid: 7,
             config: PathBuf::from("/home/u/.config/rayline/settings.json"),
             env: None,
@@ -3012,6 +3046,7 @@ mod tests {
     #[test]
     fn claude_code_runs_only_on_a_process_started_with_a_classifier_model() {
         let mut running = Supervisor {
+            endpoints: Default::default(),
             pid: 7,
             config: PathBuf::from("/c.json"),
             env: None,
@@ -3086,6 +3121,7 @@ mod tests {
     #[test]
     fn a_process_started_from_the_router_defaults_says_so_in_its_record() {
         let mut record = Supervisor {
+            endpoints: Default::default(),
             pid: 1,
             config: PathBuf::from("/c.json"),
             env: None,
@@ -3183,6 +3219,7 @@ mod tests {
         let dir = temp_dir("serves");
         let started = local_settings(&dir, "a.json", None);
         let supervisor = Supervisor {
+            endpoints: Default::default(),
             pid: 7,
             config: canonical_config(&started).unwrap(),
             env: None,
@@ -3267,6 +3304,31 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// `rayline top` names endpoints from the running process's record,
+    /// not from its config file, which may have changed since it started.
+    #[test]
+    fn running_endpoints_come_from_the_record() {
+        let home = temp_dir("running-endpoints");
+        assert!(running_endpoints(&home).unwrap().is_none());
+        let paths = Paths {
+            dir: state_dir(&home),
+        };
+        fs::create_dir_all(&paths.dir).unwrap();
+        fs::write(
+            paths.supervisor(),
+            json!({"pid": std::process::id(), "config": home.join("gone.json"),
+                   "endpoints": {"qwen-chat": "spark"}})
+            .to_string(),
+        )
+        .unwrap();
+        let endpoints = running_endpoints(&home).unwrap().unwrap();
+        assert_eq!(
+            endpoints.get("qwen-chat").map(String::as_str),
+            Some("spark")
+        );
+        let _ = fs::remove_dir_all(&home);
+    }
+
     #[test]
     fn a_cloud_run_notes_a_running_local_process_only_when_one_runs() {
         let dir = temp_dir("note");
@@ -3309,6 +3371,7 @@ mod tests {
         assert_eq!(
             record(u64::from(std::process::id())).unwrap(),
             Some(Supervisor {
+                endpoints: Default::default(),
                 pid: std::process::id(),
                 config: PathBuf::from("/c.json"),
                 env: Some("dev".to_owned()),

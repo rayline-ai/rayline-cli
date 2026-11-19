@@ -75,9 +75,20 @@ fn origin(url: &str, what: &str) -> Result<String, RouterError> {
     Ok(parsed.origin().ascii_serialization())
 }
 
-/// Called with each answered decision's route id and how long it took, in
-/// milliseconds.
-pub type DecisionHook = Arc<dyn Fn(&str, u64) + Send + Sync>;
+/// Called with each answered decision's route id and what [`Decided`] says
+/// about it.
+pub type DecisionHook = Arc<dyn Fn(&str, &Decided) + Send + Sync>;
+
+/// One answered decision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Decided {
+    /// How long it took, in milliseconds.
+    pub ms: u64,
+    /// The prompt tokens the encoder read, and how many of them it reused
+    /// from an earlier turn.
+    pub encoded_tokens: Option<u64>,
+    pub restored_tokens: Option<u64>,
+}
 
 pub struct RouterConfig {
     pub catalog: Catalog,
@@ -271,7 +282,12 @@ impl Router {
                 let ms = elapsed();
                 if let (Some(hook), Some(route_id)) = (&self.on_decision, out["route_id"].as_str())
                 {
-                    hook(route_id, ms);
+                    let decided = Decided {
+                        ms,
+                        encoded_tokens: out["usage"]["encoded_input_tokens"].as_u64(),
+                        restored_tokens,
+                    };
+                    hook(route_id, &decided);
                 }
                 tracing::info!(
                     ms,
