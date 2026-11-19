@@ -69,8 +69,9 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   `oneOf` or `anyOf` is now sent with that schema rewritten into one object
   schema, the shape the Messages format accepts. A schema it can't rewrite
   that way is sent unchanged.
-- For a local model with a `tokenizer`, the context-window check adds 50
-  tokens to the exact prompt count, so a turn right at the limit no longer
+- For an OpenAI Chat turn to a local model with a `tokenizer`, the
+  context-window check adds 50 tokens to the exact prompt count, so a turn
+  right at the limit no longer
   overflows on servers whose chat template adds a few tokens of its own (LM
   Studio, for one).
 - With decisions made in Rayline Platform, the routing decision and the turn
