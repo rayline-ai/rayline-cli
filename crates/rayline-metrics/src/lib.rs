@@ -823,7 +823,7 @@ mod tests {
                 request_id: "req".into(),
                 harness: None,
                 source: "hybrid".into(),
-                requested_model: Some("rayline-auto".into()),
+                requested_model: Some("local/arc-sage-1.0".into()),
             });
             let mut updates = [
                 identity("req", Some("decision"), None),
@@ -846,7 +846,7 @@ mod tests {
             let row = &metrics.snapshot().active[0];
             assert_eq!(row.decision_model.as_deref(), Some("decision"));
             assert_eq!(row.executed_model.as_deref(), Some("executed"));
-            assert_eq!(row.requested_model.as_deref(), Some("rayline-auto"));
+            assert_eq!(row.requested_model.as_deref(), Some("local/arc-sage-1.0"));
         }
     }
 
@@ -910,14 +910,14 @@ mod tests {
             request_id: "req-1".to_owned(),
             harness: None,
             source: "hybrid".to_owned(),
-            requested_model: Some("rayline-auto".to_owned()),
+            requested_model: Some("local/arc-sage-1.0".to_owned()),
         });
         metrics.record(MetricsUpdate::RouteDecided {
             request_id: "req-1".to_owned(),
             route_id: Some("local-1".to_owned()),
             target: Some("local".to_owned()),
             endpoint_id: Some("local".to_owned()),
-            requested_model: Some("rayline-auto".to_owned()),
+            requested_model: Some("local/arc-sage-1.0".to_owned()),
             policy: Some("subagent:Explore".to_owned()),
             task_class: Some("subagent".to_owned()),
             router: Some("local".to_owned()),
@@ -961,7 +961,7 @@ mod tests {
             request_id: "req-1".to_owned(),
             harness: None,
             source: "hybrid".to_owned(),
-            requested_model: Some("rayline-auto".to_owned()),
+            requested_model: Some("local/arc-sage-1.0".to_owned()),
         });
         metrics.record(MetricsUpdate::RequestCompleted {
             request_id: "req-1".to_owned(),

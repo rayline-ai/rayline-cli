@@ -206,7 +206,7 @@ mod tests {
     use super::*;
 
     fn ids() -> Vec<String> {
-        vec!["arc-sage-1.0".to_owned(), "rayline-auto".to_owned()]
+        vec!["arc-sage-1.0".to_owned(), "local/arc-sage-1.0".to_owned()]
     }
 
     fn filtered(chunks: &[&[u8]]) -> Vec<u8> {
@@ -225,7 +225,7 @@ mod tests {
     #[test]
     fn a_notice_for_an_id_rayline_set_is_dropped() {
         assert_eq!(filtered(&[OWN]), b"");
-        let local = b"[claude-code:unrecognized_model] {\"query_source\":\"agent:x\",\"model\":\"rayline-auto\",\"new\":1}\n";
+        let local = b"[claude-code:unrecognized_model] {\"query_source\":\"agent:x\",\"model\":\"local/arc-sage-1.0\",\"new\":1}\n";
         assert_eq!(
             filtered(&[b"before\n", local, b"after\n"]),
             b"before\nafter\n"
@@ -307,8 +307,8 @@ mod tests {
             .env("ANTHROPIC_DEFAULT_HAIKU_MODEL", "arc-swift-1.0")
             .env("ANTHROPIC_BASE_URL", "https://example.test")
             .env_remove("CLAUDE_CODE_SUBAGENT_MODEL");
-        let mut ids = launch_model_ids(&command, &["rayline-auto"]);
+        let mut ids = launch_model_ids(&command, &["local/arc-sage-1.0"]);
         ids.sort();
-        assert_eq!(ids, ["arc-sage-1.0", "arc-swift-1.0", "rayline-auto"]);
+        assert_eq!(ids, ["arc-sage-1.0", "arc-swift-1.0", "local/arc-sage-1.0"]);
     }
 }

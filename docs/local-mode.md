@@ -286,9 +286,11 @@ so a local-mode `rayline run pi` refuses it.
 
 ### Models
 
-The model local mode declares to each harness is `rayline-auto`. A model you
-name with the harness's own flag, such as `--model` or `-m`, is a request, and
-ARC decides which model runs. OpenClaw works only with the declared model. A
+The model local mode declares to each harness is `local/` followed by
+`local.routing.decisions_model.id`, for example `local/arc-sage-1.0`, and
+the harness's model picker shows it. A model you name with the harness's own
+flag, such as `--model` or `-m`, is a request, and ARC decides which model
+runs. OpenClaw works only with the declared model. A
 model pinned in the harness's own config, such as a subagent model in Claude
 Code's `settings.json`, overrides the models Rayline sets.
 

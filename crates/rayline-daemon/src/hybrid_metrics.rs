@@ -594,7 +594,7 @@ mod tests {
         .unwrap();
         let metrics = RouterMetrics::new("hybrid");
         let observation =
-            RequestObservation::start(metrics.clone(), br#"{"model":"rayline-auto"}"#, None);
+            RequestObservation::start(metrics.clone(), br#"{"model":"local/arc-sage-1.0"}"#, None);
         let mut headers = HeaderMap::new();
         for (key, value) in [
             ("x-rayline-instance-id", "instance"),

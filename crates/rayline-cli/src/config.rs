@@ -210,6 +210,13 @@ pub struct Routing {
 }
 
 impl Routing {
+    /// The model local mode declares to every harness:
+    /// `local/<decisions_model.id>`. A request for it names no model, and
+    /// ARC decides which one runs.
+    pub fn declared_model(&self) -> String {
+        format!("local/{}", self.decisions_model.id)
+    }
+
     /// The `settings.json` that runs Claude Code with this routing: it with
     /// `classifier_model`, which has no default.
     pub fn with_classifier_model(&self) -> String {
@@ -2324,6 +2331,7 @@ pub(crate) mod tests {
             .routing
             .expect("routing");
         assert_eq!(routing.decisions_model.id, "arc-1.0");
+        assert_eq!(routing.declared_model(), "local/arc-1.0");
     }
 
     #[test]

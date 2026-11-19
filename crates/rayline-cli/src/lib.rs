@@ -33,9 +33,6 @@ pub const DISPLAY_NAME: &str = "Rayline CLI";
 pub const CONFIG_DIR: &str = "rayline";
 pub const DOT_CONFIG_DIR: &str = ".rayline";
 pub const ROUTER_PROD_URL: &str = "https://api.rayline.ai";
-/// The virtual model of the local process: the hybrid execution core's only
-/// model. It names no hosted model; the hosted router refuses it.
-pub const VIRTUAL_ROUTER_MODEL: &str = "rayline-auto";
 pub const UPDATE_BASE_URL: &str = "https://get.rayline.ai";
 /// The GitHub release downloads, where a release's signed `latest.txt` names
 /// its full version.

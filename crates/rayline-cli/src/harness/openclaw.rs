@@ -342,7 +342,7 @@ mod tests {
             config_dir: &dir,
             capabilities: Some(&capabilities),
             harness_major_version: None,
-            models: LaunchModels::hybrid(&capabilities),
+            models: LaunchModels::hybrid("local/arc-sage-1.0", &capabilities),
         };
         let plan = super::plan(&ctx);
         let file = plan

@@ -137,8 +137,9 @@ like any other argument. Rayline doesn't read it.
 - In cloud mode Rayline sets the harness up with the models in `cloud` (see
   [Settings](#settings)). The flag names a model, and Rayline Platform serves
   it or refuses it. Rayline doesn't check it.
-- In local mode the declared model is `rayline-auto`. A model the flag names
-  is a request, and ARC decides which model runs. OpenClaw in local mode works
+- In local mode the declared model is `local/` followed by
+  `local.routing.decisions_model.id`, for example `local/arc-sage-1.0`. A
+  model the flag names is a request, and ARC decides which model runs. OpenClaw in local mode works
   only with the declared model.
 - A model pinned in the harness's own config, such as a subagent model in
   Claude Code's `settings.json`, overrides the models Rayline sets.

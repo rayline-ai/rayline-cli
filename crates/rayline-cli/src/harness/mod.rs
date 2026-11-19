@@ -24,8 +24,10 @@
 //! model role, that role to `cloud.smol_model.id`, both as `settings.json`
 //! writes them. Rayline doesn't check those ids against the listing: one it
 //! doesn't have is offered by its id alone, with no name or limits.
-//! Under a local-mode `rayline run <harness>` every renderer keeps `rayline-auto` (the execution
-//! core's virtual model) and advertises the hybrid runtime's admitted limits
+//! Under a local-mode `rayline run <harness>` every renderer offers only
+//! `local/<local.routing.decisions_model.id>` ([`LaunchModels::hybrid`]), a
+//! model id that names no model: ARC decides which model runs. It advertises
+//! the hybrid runtime's admitted limits
 //! instead ([`RenderContext::capabilities`]): a harness that asks for more
 //! output than the execution core admits has every turn refused.
 //!
@@ -64,9 +66,6 @@ const ROUTER_KEY_ENV: &str = "RAYLINE_ROUTER_API_KEY";
 /// episode on. Most harnesses send it under this name on their own; Hermes
 /// needs the name written into its config ([`hermes::SESSION_AFFINITY_KEY`]).
 pub const SESSION_AFFINITY_HEADER: &str = "x-session-affinity";
-/// The execution core's virtual model under a local-mode `rayline run <harness>`.
-pub const ROUTER_MODEL: &str = crate::VIRTUAL_ROUTER_MODEL;
-
 /// A model's price in USD per million tokens, from the router's
 /// `GET /v1/arc/prices` card.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -219,14 +218,18 @@ impl LaunchModels {
             .collect()
     }
 
-    /// A local-mode `rayline run <harness>`: the execution core serves one virtual model, at
-    /// the limits the hybrid runtime admits.
-    pub(crate) fn hybrid(capabilities: &rayline_local_router::ModelCapabilities) -> Self {
+    /// A local-mode `rayline run <harness>`: one model, `declared` (see
+    /// [`crate::config::Routing::declared_model`]), at the limits the hybrid
+    /// runtime admits.
+    pub(crate) fn hybrid(
+        declared: &str,
+        capabilities: &rayline_local_router::ModelCapabilities,
+    ) -> Self {
         Self {
-            main: ROUTER_MODEL.to_owned(),
-            background: ROUTER_MODEL.to_owned(),
+            main: declared.to_owned(),
+            background: declared.to_owned(),
             offered: vec![LaunchModel {
-                id: ROUTER_MODEL.to_owned(),
+                id: declared.to_owned(),
                 details: Some(ModelDetails {
                     display_name: "Rayline router".to_owned(),
                     context_window: capabilities.context_window,
