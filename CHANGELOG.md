@@ -117,6 +117,9 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   code and signals are unchanged. In local mode, `rayline run claude -p` now
   runs Claude Code in Rayline's place, as cloud mode does, so stopping the
   run with SIGTERM stops Claude Code too.
+- `rayline local start` no longer fails when a model's `tokenizer` is a
+  Gemma 4 instruct repo, such as `google/gemma-4-e4b-it`. Each image in a
+  request counts as the most tokens Gemma 4 gives an image.
 - `rayline local start` no longer fails when a `local.inference.models` entry
   has a `tokenizer` and its endpoint lists several protocols, as in the
   documented example.

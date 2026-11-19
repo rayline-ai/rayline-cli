@@ -238,7 +238,8 @@ impl PromptCounter {
             for image in &images {
                 // The template writes one placeholder token per image; the
                 // server expands it to the image's patch tokens.
-                tokens = tokens - 1 + sizing.tokens(*image);
+                // Saturating: an absurd image limit overcounts, never wraps.
+                tokens = (tokens - 1).saturating_add(sizing.tokens(*image));
             }
         }
         Ok(Count {

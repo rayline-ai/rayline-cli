@@ -1,17 +1,22 @@
-//! What an image costs a vision model: the Qwen2-VL-style `smart_resize`
-//! that GLM and Qwen image processors share. The image is scaled to a
-//! multiple of `patch_size * merge_size` within the processor's token limits;
-//! each merged patch is one token.
+//! What an image costs a vision model. GLM and Qwen image processors share
+//! the Qwen2-VL-style `smart_resize`: the image is scaled to a multiple of
+//! `patch_size * merge_size` within the processor's token limits; each merged
+//! patch is one token. Gemma 4's processor scales each image to at most
+//! `max_soft_tokens` tokens.
 
 use anyhow::{Result, bail};
 use base64::Engine;
 use serde_json::Value;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ImageSizing {
-    factor: u64,
-    min_tokens: u64,
-    max_tokens: u64,
+pub enum ImageSizing {
+    Resized {
+        factor: u64,
+        min_tokens: u64,
+        max_tokens: u64,
+    },
+    /// Every image is charged `tokens`, whatever its size.
+    PerImage { tokens: u64 },
 }
 
 /// An image part's pixel size when the request carries its bytes; an image
@@ -60,8 +65,23 @@ impl ImageSizing {
             }
             return Ok(None);
         };
+        // Gemma 4 (`Gemma4ImageProcessor`) has no `merge_size`: an image
+        // becomes at most `max_soft_tokens` tokens, which the processor
+        // writes between a begin-image and an end-image token.
+        if processor.get("merge_size").is_none()
+            && let Some(budget) = processor.get("max_soft_tokens")
+        {
+            let Some(budget) = budget.as_u64().filter(|budget| *budget > 0) else {
+                bail!("the image processor's `max_soft_tokens` is not a positive integer");
+            };
+            return Ok(Some(Self::PerImage {
+                tokens: budget.saturating_add(2),
+            }));
+        }
         let Some(merge) = processor.get("merge_size").and_then(Value::as_u64) else {
-            bail!("the image processor has a `patch_size` but no integer `merge_size`");
+            bail!(
+                "the image processor has a `patch_size` but no integer `merge_size` or `max_soft_tokens`"
+            );
         };
         let factor = patch * merge;
         let area = factor * factor;
@@ -98,7 +118,7 @@ impl ImageSizing {
         if factor == 0 || min_tokens == 0 || max_tokens < min_tokens {
             bail!("the image processor has inconsistent image limits");
         }
-        Ok(Some(Self {
+        Ok(Some(Self::Resized {
             factor,
             min_tokens,
             max_tokens,
@@ -106,18 +126,34 @@ impl ImageSizing {
     }
 
     pub(crate) fn tokens(&self, source: Source) -> usize {
-        let Source::Pixels { width, height } = source else {
-            return self.max_tokens as usize;
-        };
-        let (height, width) = self.resize(height, width);
-        ((height / self.factor) * (width / self.factor)) as usize
+        match (*self, source) {
+            (Self::PerImage { tokens }, _) => tokens as usize,
+            (Self::Resized { max_tokens, .. }, Source::Unknown) => max_tokens as usize,
+            (
+                Self::Resized {
+                    factor,
+                    min_tokens,
+                    max_tokens,
+                },
+                Source::Pixels { width, height },
+            ) => {
+                let (height, width) = Self::resize(height, width, factor, min_tokens, max_tokens);
+                ((height / factor) * (width / factor)) as usize
+            }
+        }
     }
 
-    fn resize(&self, height: u64, width: u64) -> (u64, u64) {
-        let factor = self.factor as f64;
+    fn resize(
+        height: u64,
+        width: u64,
+        factor: u64,
+        min_tokens: u64,
+        max_tokens: u64,
+    ) -> (u64, u64) {
+        let min_pixels = (min_tokens * factor * factor) as f64;
+        let max_pixels = (max_tokens * factor * factor) as f64;
+        let factor = factor as f64;
         let (h, w) = (height as f64, width as f64);
-        let min_pixels = (self.min_tokens * self.factor * self.factor) as f64;
-        let max_pixels = (self.max_tokens * self.factor * self.factor) as f64;
         let mut h_bar = (round_half_even(h / factor) * factor).max(factor);
         let mut w_bar = (round_half_even(w / factor) * factor).max(factor);
         if h_bar * w_bar > max_pixels {
@@ -220,9 +256,71 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(
-            (sizing.factor, sizing.min_tokens, sizing.max_tokens),
-            (32, 64, 16384)
+            sizing,
+            ImageSizing::Resized {
+                factor: 32,
+                min_tokens: 64,
+                max_tokens: 16384
+            }
         );
+    }
+
+    /// google/gemma-4-e4b-it's processor_config.json, trimmed to its image
+    /// keys.
+    fn gemma4() -> Value {
+        json!({
+            "image_processor": {
+                "image_processor_type": "Gemma4ImageProcessor",
+                "image_seq_length": 280,
+                "max_soft_tokens": 280,
+                "patch_size": 16,
+                "pooling_kernel_size": 3
+            },
+            "image_seq_length": 280,
+            "processor_class": "Gemma4Processor"
+        })
+    }
+
+    #[test]
+    fn a_gemma4_image_costs_its_soft_token_budget_and_its_two_markers() {
+        let sizing = ImageSizing::from_processor_config(&gemma4())
+            .unwrap()
+            .unwrap();
+        for source in [
+            Source::Pixels {
+                width: 512,
+                height: 512,
+            },
+            Source::Pixels {
+                width: 4000,
+                height: 50,
+            },
+            Source::Unknown,
+        ] {
+            assert_eq!(sizing.tokens(source), 282);
+        }
+    }
+
+    #[test]
+    fn a_merge_size_keeps_the_resize_sizing_beside_a_soft_token_budget() {
+        let config = json!({"patch_size": 16, "merge_size": 2, "min_image_tokens": 64, "max_image_tokens": 16384, "max_soft_tokens": 280});
+        let sizing = ImageSizing::from_processor_config(&config)
+            .unwrap()
+            .unwrap();
+        assert_eq!(sizing.tokens(Source::Unknown), 16384);
+    }
+
+    #[test]
+    fn a_soft_token_budget_that_is_not_a_positive_integer_is_an_error() {
+        for budget in [json!(0), json!("280"), json!(280.5)] {
+            let mut config = gemma4();
+            config["image_processor"]["max_soft_tokens"] = budget;
+            let error = ImageSizing::from_processor_config(&config).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "the image processor's `max_soft_tokens` is not a positive integer"
+            );
+        }
     }
 
     #[test]
