@@ -144,7 +144,7 @@ window takes the turns that fit it. For a vision model, the images in a
 request are counted too. A request with content its chat template doesn't
 render as text, such as a document, is sized from its bytes instead. The repo
 must publish a chat template: name a model's instruct or chat variant, not its
-base model, for example `google/gemma-4-E4B-it`, not `google/gemma-4-E4B`.
+base model, for example `google/gemma-4-E4B-it`, not `google/gemma-4-E4B`. A repo id Hugging Face has no public repo for, such as a misspelt one, stops the local process from starting, with an error that says to check the spelling.
 
 The only other models ARC can pick are three Rayline Platform models:
 `anthropic/claude-opus-5.5`, `anthropic/claude-sonnet-5.5` and

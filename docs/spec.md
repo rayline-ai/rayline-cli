@@ -588,6 +588,7 @@ When the local process starts, before it serves anything, it also refuses:
 13. A model entry that is missing `context_window` or `max_output_tokens`. ARC knows no model today, so this applies to every entry (section 5.3 item 5).
 14. An `api_key_env` naming `RAYLINE_ROUTER_API_KEY`, which holds the Rayline router key.
 15. A `tokenizer` repo that publishes no chat template: no `chat_template.jinja`, and in `tokenizer_config.json` no `chat_template` string or named `default` template. The error names the model's `tokenizer` key.
+16. A `tokenizer` repo that Hugging Face has no public repo for: the Hub answers 401 (or 404) for a repo that doesn't exist and, without a token, for a private one. The error says so and asks to check the spelling; it names the model's `tokenizer` key.
 
 ### 5.9 Migration from the earlier shape
 

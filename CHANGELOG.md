@@ -103,6 +103,12 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 
 ### Fixed
 
+- **A misspelt `tokenizer` repo is reported as not found.** Hugging Face
+  answers 401 for a repo that does not exist, so `rayline local start` read
+  like an access problem. It now says Hugging Face has no public repo with
+  that id, that it may not exist or may be private, and to check the
+  spelling.
+
 - **In local mode, Codex sessions on an LM Studio model get past their first
   turn.** The execution core resent Codex's earlier answers and tool results
   in shapes LM Studio refuses (HTTP 400), so every turn after the first
