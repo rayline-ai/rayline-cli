@@ -59,9 +59,41 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   model with a small context window takes the turns that fit it. A turn with
   content its chat template doesn't render as text, such as a document, is
   still sized from its bytes.
+- **Local mode can run more Codex and Claude Code turns on your local
+  models.** The execution core now sizes two request shapes it couldn't
+  before: Codex's sub-agent tools grouped in one `namespace` tool, and the
+  per-message effort setting Claude Code (2.1.325 and later) sends after the
+  first turn. It treated a turn with either as unknown in size, and the
+  prefer-local policy didn't send such a turn to a local model.
+- In local mode, an Anthropic Messages turn whose tool schema has a top-level
+  `oneOf` or `anyOf` is now sent with that schema rewritten into one object
+  schema, the shape the Messages format accepts. A schema it can't rewrite
+  that way is sent unchanged.
+- For a local model with a `tokenizer`, the context-window check adds 50
+  tokens to the exact prompt count, so a turn right at the limit no longer
+  overflows on servers whose chat template adds a few tokens of its own (LM
+  Studio, for one).
+- With decisions made in Rayline Platform, the routing decision and the turn
+  it served now carry the same conversation and branch ids, so the Platform
+  can tie them together. A session or branch id over 1,024 bytes, or with a
+  control character other than tab, is now refused before any call; before,
+  only CR, LF and NUL were.
+  With decisions made on this machine, a conversation whose id isn't plain
+  ASCII still keeps its routing history from turn to turn.
+- The execution core now describes each routing decision in its response
+  headers: how long the decision took, the thinking level it picked, and why
+  it picked its target, with the pass probability and threshold when the
+  prefer-local rule chose a local model.
 
 ### Fixed
 
+- **In local mode, Codex sessions on an LM Studio model get past their first
+  turn.** The execution core resent Codex's earlier answers and tool results
+  in shapes LM Studio refuses (HTTP 400), so every turn after the first
+  failed. It now resends them as Codex sends them. It also stopped cutting
+  off a streamed tool call whose final event carries no tool name, as LM
+  Studio and Ollama send it; Codex had reported "stream disconnected before
+  completion" and retried.
 - `rayline run claude -p` no longer shows Claude Code's
   `[claude-code:unrecognized_model]` line on stderr for the models Rayline
   sets, on Linux and macOS. The line still appears for any other model id,

@@ -195,6 +195,25 @@ fn header(headers: &HeaderMap, name: &str) -> Option<String> {
     headers.get(name)?.to_str().ok().map(str::to_owned)
 }
 
+/// A conversation or branch id, which keys the episode. The core sends the
+/// client's id as it is: any bytes but controls other than tab, so not
+/// always visible ASCII or even UTF-8. Every id keeps a key of its own:
+/// UTF-8 as it is, other bytes as NUL and their hex, which no header value
+/// can start with.
+fn identity_header(headers: &HeaderMap, name: &str) -> Option<String> {
+    let bytes = headers.get(name)?.as_bytes();
+    Some(match std::str::from_utf8(bytes) {
+        Ok(text) => text.to_owned(),
+        Err(_) => {
+            let mut key = String::from("\0");
+            for byte in bytes {
+                key.push_str(&format!("{byte:02x}"));
+            }
+            key
+        }
+    })
+}
+
 impl Router {
     pub fn new(config: RouterConfig, decider: Arc<dyn Decider>) -> Result<Self, RouterError> {
         // A redirect is the caller's to follow: the caller's credentials are
@@ -284,8 +303,8 @@ impl Router {
 
     async fn routes(&self, request: Request<Incoming>) -> Response<Body> {
         let headers = RequestHeaders {
-            conversation_id: header(request.headers(), "x-conversation-id"),
-            branch_id: header(request.headers(), "x-rayline-branch-id"),
+            conversation_id: identity_header(request.headers(), "x-conversation-id"),
+            branch_id: identity_header(request.headers(), "x-rayline-branch-id"),
             wire_format: header(request.headers(), "x-rayline-wire-format"),
             cell: header(request.headers(), CELL_HEADER),
         };
@@ -495,6 +514,26 @@ impl Router {
 
 #[cfg(test)]
 mod tests {
+    /// Every conversation id keeps an episode key of its own, ASCII,
+    /// UTF-8 or other bytes: none is dropped and no two collide.
+    #[test]
+    fn identity_headers_keep_every_id() {
+        let key = |value: &[u8]| {
+            let mut headers = HeaderMap::new();
+            headers.insert("x-conversation-id", HeaderValue::from_bytes(value).unwrap());
+            super::identity_header(&headers, "x-conversation-id").unwrap()
+        };
+        assert_eq!(key(b"main"), "main");
+        assert_eq!(key("sessión-ü\tb".as_bytes()), "sessión-ü\tb");
+        assert_eq!(key(b"caf\xe9"), "\u{0}636166e9");
+        assert_ne!(key(b"caf\xe9"), key(b"caf\xe8"));
+        assert_ne!(key(b"caf\xe9"), key(b"636166e9"));
+        assert_eq!(
+            super::identity_header(&HeaderMap::new(), "x-conversation-id"),
+            None
+        );
+    }
+
     use super::*;
 
     #[test]
