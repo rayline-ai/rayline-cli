@@ -105,7 +105,7 @@ pub fn hf_api_get_commit(repo: &str) -> Result<String, String> {
         .map_err(|e| format!("HF API request failed: {}", request_error(e)))?;
 
     if !response.status().is_success() {
-        return Err(format!("HF API returned status {}", response.status()));
+        return Err(api_status_error(response.status()));
     }
 
     let body = response
@@ -115,6 +115,19 @@ pub fn hf_api_get_commit(repo: &str) -> Result<String, String> {
         serde_json::from_str(&body).map_err(|e| format!("Failed to parse HF API response: {e}"))?;
 
     Ok(info.sha)
+}
+
+/// The error for a repo lookup the Hub did not answer with success. Without
+/// a token the Hub answers 401 both for a repo that does not exist and for a
+/// private one, so the status cannot say which.
+fn api_status_error(status: reqwest::StatusCode) -> String {
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        format!(
+            "HF API returned status {status}: Hugging Face has no public repo with this id (it does not exist, or it is private); check the spelling"
+        )
+    } else {
+        format!("HF API returned status {status}")
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -798,6 +811,21 @@ mod tests {
         let error = hf_token_from(&home, empty).unwrap_err();
         assert!(error.contains("HF_TOKEN"), "{error}");
         let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn a_repo_lookup_refused_with_401_says_the_repo_is_not_public() {
+        let error = api_status_error(reqwest::StatusCode::UNAUTHORIZED);
+        assert!(
+            error.starts_with("HF API returned status 401 Unauthorized"),
+            "{error}"
+        );
+        assert!(error.contains("no public repo with this id"), "{error}");
+        assert!(error.contains("check the spelling"), "{error}");
+        assert_eq!(
+            api_status_error(reqwest::StatusCode::NOT_FOUND),
+            "HF API returned status 404 Not Found"
+        );
     }
 
     #[test]

@@ -3,6 +3,15 @@
 User-facing changes in each Rayline release. Install commands and signed
 assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock/releases).
 
+## Unreleased
+
+### Fixed
+
+- **A misspelt `tokenizer` repo no longer looks like an access problem.**
+  Hugging Face answers 401 for a repo that does not exist, so `rayline local
+  start` read like one. It now says Hugging Face has no public repo with that
+  id, that it may not exist or may be private, and to check the spelling.
+
 ## 0.5.7 (2026-11-19)
 
 ### Changed
