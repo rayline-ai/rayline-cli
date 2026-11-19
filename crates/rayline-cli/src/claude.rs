@@ -89,6 +89,49 @@ fn role_model_env_switches(
     ]
 }
 
+/// Claude Code's model aliases `opus`, `sonnet` and `fable`, as `(env var,
+/// value)`, so a skill, agent or `--model` that names one runs a model the
+/// router serves: `opus` (also Claude Code's default) is `cloud.model.id`,
+/// and `sonnet` and `fable` take the other models the router lists for the
+/// key, in its order, or `cloud.model.id` when none is left. `haiku` is
+/// `cloud.smol_model.id` ([`role_model_env_switches`]).
+fn alias_env(hosted: &crate::harness::LaunchModels) -> [(&'static str, String); 3] {
+    let mut others = hosted
+        .offered
+        .iter()
+        .filter(|model| model.id != hosted.main && model.id != hosted.background)
+        .map(|model| model.id.clone());
+    let mut next = || others.next().unwrap_or_else(|| hosted.main.clone());
+    [
+        ("ANTHROPIC_DEFAULT_OPUS_MODEL", hosted.main.clone()),
+        ("ANTHROPIC_DEFAULT_SONNET_MODEL", next()),
+        ("ANTHROPIC_DEFAULT_FABLE_MODEL", next()),
+    ]
+}
+
+/// The `--settings` JSON that makes Claude Code's `/model` picker show its
+/// Default row and one row per model the launch offers, `cloud.model.id`
+/// first, then the router's listing in its order, instead of its built-in
+/// lineup. A row is labelled with the model's `display_name` (Claude Code
+/// uses the id for an unlisted one) and described by its id.
+fn picker_settings(hosted: &crate::harness::LaunchModels) -> String {
+    let options: Vec<Value> = hosted
+        .offered
+        .iter()
+        .map(|model| {
+            let mut row = serde_json::json!({"model": model.id, "description": model.id});
+            if let Some(details) = &model.details {
+                row["label"] = Value::from(details.display_name.clone());
+            }
+            row
+        })
+        .collect();
+    serde_json::json!({
+        "modelPicker": {"replaceBuiltInOptions": true, "options": options}
+    })
+    .to_string()
+}
+
 /// The main model's context window for `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, when
 /// the router sizes the session (`routed`: it answered an auto-compact
 /// window, so Claude Code doesn't know the id and would assume 200K, capping
@@ -255,6 +298,10 @@ async fn run_command_from_home(
     };
 
     let mut command = claude_command(&claude_bin);
+    // Before the user's arguments: a `--settings` of their own replaces it.
+    command
+        .arg("--settings")
+        .arg(picker_settings(&hosted_models));
     command.args(&request.args);
     if isolated {
         apply_isolated_config_dir(&mut command, home).map_err(RunError::IsolatedProfile)?;
@@ -262,6 +309,7 @@ async fn run_command_from_home(
     command.env("ANTHROPIC_BASE_URL", &router_url);
     command.env("ANTHROPIC_AUTH_TOKEN", &key);
     command.env("ANTHROPIC_MODEL", &model);
+    command.envs(alias_env(&hosted_models));
     set_auto_compact_window_env(&mut command, auto_compact_window.as_deref());
     command.env(RAYLINE_ENV_NAME_ENV, &env_name);
     remove_claude_env(&mut command);
@@ -1296,6 +1344,81 @@ mod arc_default_tests {
         let mut unlisted = models.clone();
         unlisted.offered.retain(|model| model.id != models.main);
         assert_eq!(max_context_tokens(&unlisted, true), None);
+    }
+
+    // Two listed models: the picker shows each once, main first; `sonnet`
+    // and `fable` fall back to the main one.
+    #[test]
+    fn the_picker_shows_each_listed_model_once() {
+        let models = crate::harness::tests::hosted_models();
+        let settings: Value = serde_json::from_str(&picker_settings(&models)).unwrap();
+        assert_eq!(
+            settings,
+            serde_json::json!({"modelPicker": {"replaceBuiltInOptions": true, "options": [
+                {"model": "arc-sage-1.0", "label": "ARC Sage", "description": "arc-sage-1.0"},
+                {"model": "arc-swift-1.0", "label": "ARC Swift", "description": "arc-swift-1.0"}
+            ]}})
+        );
+        assert_eq!(
+            alias_env(&models),
+            [
+                ("ANTHROPIC_DEFAULT_OPUS_MODEL", "arc-sage-1.0".to_owned()),
+                ("ANTHROPIC_DEFAULT_SONNET_MODEL", "arc-sage-1.0".to_owned()),
+                ("ANTHROPIC_DEFAULT_FABLE_MODEL", "arc-sage-1.0".to_owned()),
+            ]
+        );
+    }
+
+    // More listed models: every one is a picker row, and `sonnet` and
+    // `fable` take the first two others. An unlisted main id is a row with
+    // no label.
+    #[test]
+    fn every_listed_model_is_a_row_and_the_aliases_take_the_first_others() {
+        let mut body = crate::harness::tests::listing(None);
+        for id in ["a/one", "b/two", "c/three", "d/four"] {
+            body["data"]
+                .as_array_mut()
+                .unwrap()
+                .push(serde_json::json!({
+                    "id": id, "object": "model", "owned_by": "x", "display_name": id.to_uppercase(),
+                    "context_length": 32_000, "max_output_tokens": 4_096,
+                    "capabilities": {"vision": false, "tools": true, "reasoning": true}
+                }));
+        }
+        let mut cloud = crate::harness::tests::cloud(None);
+        cloud.model.id = "unlisted/main".to_owned();
+        let models = crate::harness::LaunchModels::from_listing(&body, &cloud).unwrap();
+        let settings: Value = serde_json::from_str(&picker_settings(&models)).unwrap();
+        let rows = settings["modelPicker"]["options"].as_array().unwrap();
+        let ids: Vec<_> = rows
+            .iter()
+            .map(|row| row["model"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            ids,
+            [
+                "unlisted/main",
+                "arc-swift-1.0",
+                "arc-sage-1.0",
+                "a/one",
+                "b/two",
+                "c/three",
+                "d/four"
+            ]
+        );
+        assert_eq!(
+            rows[0],
+            serde_json::json!({"model": "unlisted/main", "description": "unlisted/main"})
+        );
+        assert_eq!(rows[3]["label"], "A/ONE");
+        assert_eq!(
+            alias_env(&models),
+            [
+                ("ANTHROPIC_DEFAULT_OPUS_MODEL", "unlisted/main".to_owned()),
+                ("ANTHROPIC_DEFAULT_SONNET_MODEL", "arc-sage-1.0".to_owned()),
+                ("ANTHROPIC_DEFAULT_FABLE_MODEL", "a/one".to_owned()),
+            ]
+        );
     }
 
     /// `(subagent model, force, haiku model)` for a key's data mode (`None`:
