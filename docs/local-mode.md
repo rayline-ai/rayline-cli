@@ -354,10 +354,49 @@ rayline top --json
 ```
 
 `rayline top` shows live request metrics from the local process. `--json`
-prints one snapshot and exits. Under its title, `top` names the router that
-decides, such as `Router: local ARC (arc-swift-1.0) on this machine` (the
-`router` key in `--json`), and each request shows the router that decided it,
-how long a local decision took and the event it was decided for.
+prints one snapshot and exits.
+
+```
+Rayline top                                    local process · up 12 min · 14:35
+Routing   ARC Swift decides on this Mac · policy: prefer local
+Ran on    Rayline Platform 3 · your servers 1
+Tokens    35.2k in (72% cached) · 1.4k out
+Decisions 4 · median 108 ms · 1 errors
+
+ TIME  TOOL     TURN        DECIDED           MODEL            RAN ON        OUT
+ 14:35 codex    tool result Mac 95 ms →       qwen3.5-35b      spark     ⠋ 3.2 s
+ 14:35 claude   task start  Mac 122 ms →      claude-haiku-5.5 Platform      888
+   ▸ why: best value for this task · no local model configured
+ 14:34 codex    tool result Mac 95 ms →       qwen3.5-35b      spark         118
+
+ ↑↓ select · enter details · f filter: all · q quit
+```
+
+- The header says where decisions are made, with the policy preset, where
+  requests ran, the token totals with how much of the input the providers'
+  prompt caches served, and the decisions' count and median time.
+- Each row is one request, newest first, with requests in flight at the top.
+  `TOOL` is the harness that sent it: each local-mode launch points its
+  harness at its own path on the gateway, `/h/<harness>`. `DECIDED` says where
+  ARC decided and how long it took (`—` for a request no decision routed, such
+  as Claude Code's auto-mode classifier), `RAN ON` is `Platform` or the
+  `local.inference.endpoints` entry that served it, and `CACHED` is the share
+  of its input the provider's prompt cache served.
+- The selected row's `why` line gives the decision's reason, such as
+  `local model good enough (pass 0.82 ≥ 0.75)`.
+- `Enter` opens the selected request's details, including how many prompt
+  tokens ARC's encoder reused from an earlier turn when it decided on this
+  machine. `Esc` closes them.
+- `f` cycles the list through all requests, then each harness that has
+  requests.
+- Narrow terminals drop `TOK/S`, `TTFT`, `CACHED`, `IN` and `TOOL`, in that
+  order.
+
+`--json` carries each row's `harness`, `thinking_level`, `decision_reason`,
+`p_pass` and `min_p_pass`, `decision_ms` (for decisions made here or in
+Rayline Platform), `arc_encoded_tokens` and `arc_restored_tokens`, and
+`cache_write_tokens`, plus `totals.cache_read_tokens` and the policy preset in
+`router.preset`.
 
 The live view waits for a local process: while none runs it shows
 `Local process: not running` and checks again on every refresh, and when the

@@ -3,3 +3,5 @@ crates/rayline-cli/tests/fixtures/** -text
 encoder/patches/*.patch -text -whitespace
 # Written byte for byte as the default settings.json; keep it LF on every checkout.
 crates/rayline-cli/src/default-settings.json text eol=lf
+# rayline top snapshots: compared byte for byte; keep them LF on every checkout.
+crates/rayline-cli/src/top_view_snapshots/*.txt text eol=lf

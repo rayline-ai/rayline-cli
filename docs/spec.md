@@ -162,8 +162,52 @@ rayline top [--json]
 1. Shows live request metrics from the local process.
 2. `--json` prints one snapshot as JSON and exits.
 3. The live view (a terminal, without `--json`) waits for a local process: while none runs it shows `Local process: not running` and checks again every refresh. When the local process restarts, it follows the new one. `--json`, or output that isn't a terminal, with no local process running exits with the error ``no local process is running. Start one with `rayline local start` or `rayline run <harness> --mode local`.``
-4. Under its title, `top` names the router that decides: `Router: local ARC (<decisions_model>) on this machine`, or `Router: cloud ARC (<decisions_model>) in Rayline Platform`. The snapshot carries this as `router`: `{"kind": "local" | "cloud", "model": <decisions_model>}`.
-5. Each request shows the router that decided it, how long a local decision took, and the event it was decided for (`task_start`, `tool_result`, ...): the row fields `router` (`local`, `cloud`, or `null` for a request no decision routed, such as a classifier call), `decision_ms` (local decisions only) and `decision_event`.
+4. The live view's header has five lines:
+   - `Rayline top`, then right-aligned `local process · up <uptime> · <HH:MM>`;
+   - `Routing   <ARC name> decides <where> · policy: <preset name>`, where `<ARC name>` is the decisions model as a product name (`arc-swift-1.0` → `ARC Swift`), `<where>` is `on this Mac` (macOS), `on this PC` (Linux, Windows) or `in Rayline Platform`, and `<preset name>` is the preset in words (`arc-policy.prefer-local.v1` → `prefer local`; an unknown preset shows its id);
+   - `Ran on    Rayline Platform <n> · your servers <n>`;
+   - `Tokens    <in> in (<p>% cached) · <out> out`, where `<p>` is all cache reads over all input tokens;
+   - `Decisions <n> · median <ms> · <n> errors`.
+   Request counts, tokens and errors are since the local process started. The decision count and median cover the requests in the list.
+5. Below the header is one list, newest first. Requests in flight are at the top, with a spinner and their elapsed time in place of the result columns. Columns:
+   `TIME` (`HH:MM`), `TOOL` (the harness, or `—`), `TURN` (the decision event in words: `task start`, `tool result`, ...; `—` for none), `DECIDED`, `MODEL`, `RAN ON`, `IN`, `CACHED`, `OUT`, `TTFT`, `TOK/S`.
+   - `DECIDED`: `Mac <ms> →` or `this PC <ms> →` for a local decision, `Platform <ms> →` for a cloud one (`Platform →` when the core reports no time), `—` for a request no decision routed, such as a classifier call.
+   - `MODEL`: the model that served the request.
+   - `RAN ON`: `Platform`, or the key of the `local.inference.endpoints` entry it ran on, in the config the local process started from.
+   - `CACHED`: that request's cache reads over its input tokens, as a percentage.
+   Token counts of 1,000 or more show as `12.1k`; times under 1 s as `122 ms`, others as `0.9 s`. A value the request doesn't have is blank.
+6. The selected row has a `▸ why:` line beneath it, giving the decision's reason in words:
+   - `prefer_local_threshold` → `local model good enough (pass <p_pass> ≥ <min_p_pass>)`;
+   - `utility_fallback` → `best value for this task`, plus `· no local model configured` when `local.inference.models` is empty or missing in the config the local process started from;
+   - `schedule` → `scheduled`.
+   A thinking level other than `none` adds `· thinking <level>`.
+7. Keys: `↑`/`↓` select, `Enter` opens the details of the selected request (`Esc` closes them), `f` cycles the list's filter through all requests and each harness that has requests, `q` or `Ctrl-C` quits. The footer shows them.
+8. The details view of a request:
+   ```
+    <HH:MM:SS>  <harness> · <turn> · <request id>
+    Decided   <ARC name> on this Mac in <ms> (<restored> of <encoded> prompt tokens reused)
+    Picked    <model> · thinking <level> · reason: <why>
+    Ran on    <Rayline Platform | server> · TTFT <s> · <out> tokens at <tok/s> tok/s
+    Input     <in> · cache read <n> · cache write <n> · uncached <n>
+   ```
+   For a cloud decision, `Decided` reads `<ARC name> in Rayline Platform in <ms>`, with no reuse count. Request ids appear only here. ARC's prompt-token reuse appears only here and is never counted in `CACHED`, which is the provider's prompt cache.
+9. When the terminal is too narrow for every column, columns are dropped in this order until the rows fit: `TOK/S`, `TTFT`, `CACHED`, `IN`, `TOOL`. Rows never wrap; a cell too long for its column is cut with `…`.
+10. With no local process, the live view shows `Local process: not running` (item 3).
+11. `--json` prints the snapshot. Its fields are only ever added; none is renamed or removed. Each request row has:
+    - `router`: `local`, `cloud` or `null` (for a request no decision routed);
+    - `decision_ms`: how long the decision took, local or cloud (`null` when the core reports none);
+    - `decision_event`;
+    - and the fields in item 12.
+    The top-level `router` is `{"kind": "local" | "cloud", "model": <local.routing.decisions_model.id>, "preset": <local.routing.policy.preset>}`.
+12. Fields added in 0.5.7:
+    - row `harness`: `claude`, `codex`, `opencode`, `pi`, `omp`, `hermes`, `openclaw`, or `null`;
+    - row `thinking_level`: the level the decision picked, or `null`;
+    - row `decision_reason`: `prefer_local_threshold`, `utility_fallback`, `schedule`, or `null`;
+    - row `p_pass` and `min_p_pass`: numbers with `prefer_local_threshold`, else `null`;
+    - row `arc_encoded_tokens` and `arc_restored_tokens`: local decisions only, else `null`;
+    - row `cache_write_tokens`: provider cache writes, or `null` when the provider reports none. `prompt_cache_tokens` remains the cache reads;
+    - `totals.cache_read_tokens`;
+    - `router.preset`.
 
 ### 3.5 `rayline update`
 
@@ -639,6 +683,7 @@ One file: `~/.config/rayline/credentials.json`. `rayline auth login` writes `ses
 4. Removed from the `omp` environment: `CLAUDE_CONFIG_DIR`, `PI_PROFILE`, `OMP_PROFILE`.
 5. Removed from every harness command Rayline starts: `RAYLINE_ROUTER_API_KEY`.
 6. Removed in local mode: `RAYLINE_EXEC_AUTH_TOKEN`, and the env var each endpoint's `api_key_env` names, unless the harness's Rayline config sets that var to the local process's gateway token.
+7. In local mode (`rayline run <harness> --mode local`, or a `"mode": "local"` file), the gateway address a harness gets (`ANTHROPIC_BASE_URL` for Claude Code, the provider base URL in the other harnesses' Rayline config) is the harness's own path on the local process's gateway, `<gateway>/h/<harness>`. The gateway serves `/h/<harness>/<path>` as `/<path>` and records the harness for `rayline top` (section 3.4 item 12). `/h/` with any other name is refused with HTTP 404.
 
 ### 7.3 Internal: handoff between Rayline's own processes
 

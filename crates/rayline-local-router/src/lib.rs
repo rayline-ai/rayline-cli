@@ -28,6 +28,49 @@ pub const SESSION_HEADERS: [&str; 4] = [
     "x-conversation-id",
 ];
 
+/// The harnesses a local-mode launch points at their own gateway path,
+/// `/h/<harness>/...`, which names the harness in the request metrics.
+pub const HARNESS_PATHS: [&str; 7] = [
+    "claude", "codex", "opencode", "pi", "omp", "hermes", "openclaw",
+];
+
+/// What a gateway request path says about its harness.
+#[derive(Debug, PartialEq, Eq)]
+pub enum HarnessPath<'a> {
+    /// No `/h/` prefix.
+    None,
+    /// `/h/<harness><rest>`: the harness, and the path after its prefix
+    /// (`/v1/messages`, say).
+    Harness(&'static str, &'a str),
+    /// `/h/<name>` for a name not in [`HARNESS_PATHS`], or with nothing
+    /// after it.
+    Unknown,
+}
+
+/// The core config's name for the protocol a gateway request `path`
+/// (after any harness prefix) speaks, as Rayline writes it in each
+/// deployment's `protocol`.
+pub fn protocol_at(path: &str) -> Option<&'static str> {
+    match path {
+        "/v1/messages" => Some("anthropic.messages.v1"),
+        "/v1/chat/completions" => Some("openai.chat.v1"),
+        "/v1/responses" => Some("openai.responses.v1"),
+        _ => None,
+    }
+}
+
+/// Reads the harness prefix of a gateway request `path`.
+pub fn harness_path(path: &str) -> HarnessPath<'_> {
+    let Some(named) = path.strip_prefix("/h/") else {
+        return HarnessPath::None;
+    };
+    let (name, rest) = named.split_at(named.find('/').unwrap_or(named.len()));
+    match HARNESS_PATHS.iter().find(|harness| **harness == name) {
+        Some(harness) if !rest.is_empty() => HarnessPath::Harness(harness, rest),
+        _ => HarnessPath::Unknown,
+    }
+}
+
 type BoxBody = http_body_util::combinators::BoxBody<Bytes, std::io::Error>;
 
 fn full_body(s: impl Into<Bytes>) -> BoxBody {
@@ -143,6 +186,29 @@ fn is_loopback_authority(authority: &str, port: u16) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_harness_path_names_the_harness_and_keeps_the_rest() {
+        use super::{HarnessPath, harness_path};
+        assert_eq!(
+            harness_path("/h/claude/v1/messages"),
+            HarnessPath::Harness("claude", "/v1/messages")
+        );
+        assert_eq!(
+            harness_path("/h/openclaw/v1/chat/completions"),
+            HarnessPath::Harness("openclaw", "/v1/chat/completions")
+        );
+        assert_eq!(harness_path("/v1/messages"), HarnessPath::None);
+        assert_eq!(harness_path("/healthz"), HarnessPath::None);
+        for unknown in [
+            "/h/cursor/v1/messages",
+            "/h/claude",
+            "/h/",
+            "/h/CLAUDE/v1/messages",
+        ] {
+            assert_eq!(harness_path(unknown), HarnessPath::Unknown, "{unknown}");
+        }
+    }
+
     use super::*;
 
     type GuardHeaders = &'static [(&'static str, &'static str)];
