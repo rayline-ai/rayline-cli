@@ -1730,54 +1730,11 @@ fn reads_anthropic_messages(harness: &str) -> bool {
 }
 
 fn require_local_args(harness: &str, args: &[OsString]) -> io::Result<()> {
-    require_fresh_session(harness, args)?;
+    crate::fresh_session::require_fresh_session(harness, args)?;
     match crate::harness::Harness::from_command(harness) {
         Some(harness) => harness.require_hybrid_args(args),
         None => Ok(()),
     }
-}
-
-fn require_fresh_session(harness: &str, args: &[OsString]) -> io::Result<()> {
-    let codex_resume = harness == "codex"
-        && (args
-            .first()
-            .is_some_and(|arg| arg == "resume" || arg == "fork")
-            || (args.first().is_some_and(|arg| arg == "exec")
-                && args.get(1).is_some_and(|arg| arg == "resume")));
-    let resuming = codex_resume
-        || args.iter().take_while(|arg| *arg != "--").any(|arg| {
-            let text = arg.to_string_lossy();
-            let flag = text.split('=').next().unwrap_or("");
-            match harness {
-                "claude" => matches!(
-                    flag,
-                    "--resume"
-                        | "--continue"
-                        | "--fork-session"
-                        | "--resume-session-at"
-                        | "-r"
-                        | "-c"
-                ),
-                "pi" => matches!(
-                    flag,
-                    "--resume"
-                        | "--continue"
-                        | "--fork"
-                        | "--session"
-                        | "--session-id"
-                        | "-r"
-                        | "-c"
-                ),
-                "opencode" => matches!(flag, "--continue" | "--session" | "--fork" | "-c" | "-s"),
-                _ => false,
-            }
-        });
-    if resuming {
-        return Err(io::Error::other(
-            "local mode requires a fresh harness session; saved sessions do not contain the core's private-append ledger",
-        ));
-    }
-    Ok(())
 }
 
 /// The running local process's record, or `None` when none is running: no
@@ -3513,35 +3470,5 @@ mod tests {
         let error = running(&paths).unwrap_err().to_string();
         assert!(error.contains("supervisor.json"), "{error}");
         let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn historical_sessions_require_an_explicit_restore_contract() {
-        for (harness, arg) in [
-            ("claude", "--resume=saved"),
-            ("claude", "--continue"),
-            ("claude", "-r"),
-            ("codex", "resume"),
-            ("codex", "fork"),
-            ("pi", "--fork"),
-            ("pi", "--session=saved"),
-            ("opencode", "-c"),
-            ("opencode", "--continue"),
-            ("opencode", "-s"),
-            ("opencode", "--session=ses_1"),
-            ("opencode", "--fork"),
-        ] {
-            assert!(require_fresh_session(harness, &[OsString::from(arg)]).is_err());
-        }
-        assert!(
-            require_fresh_session(
-                "claude",
-                &[
-                    OsString::from("-p"),
-                    OsString::from("Explain resume support")
-                ]
-            )
-            .is_ok()
-        );
     }
 }

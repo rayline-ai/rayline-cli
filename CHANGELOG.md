@@ -25,6 +25,14 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 
 ### Fixed
 
+- **Local mode refuses every resumed harness session it can see.**
+  `rayline run codex --mode local exec <options> resume <id>` is now refused
+  like `exec resume <id>`, and omp (`-c`, `-r`, `--restore`, `--from-claude`,
+  `--from-codex`) and Hermes (`--resume`, `--continue`, `-r`, `-c`,
+  `sessions browse`) resumes are refused too, with `local mode requires a
+  fresh harness session`. OpenClaw sessions are still not checked: its
+  arguments can't show whether a session is new.
+
 - **A misspelt `tokenizer` repo no longer looks like an access problem.**
   Hugging Face answers 401 for a repo that does not exist, so `rayline local
   start` read like one. It now says Hugging Face has no public repo with that
