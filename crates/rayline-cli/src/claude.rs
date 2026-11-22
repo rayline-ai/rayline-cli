@@ -1656,7 +1656,10 @@ mod arc_default_tests {
         assert_eq!(fs::read_to_string(&reused).unwrap(), "new");
         let error = write_picker_settings(&home, 22, 4, "x", |_| Err(io::Error::other("probe")))
             .unwrap_err();
-        assert!(error.to_string().contains("-2.json"), "{error}");
+        // The directory lists the two files in no set order.
+        let probed = [&reused, &picker_settings_dir(&home).join("21-3.json")]
+            .map(|path| format!("failed to check the launch of {}: probe", path.display()));
+        assert!(probed.contains(&error.to_string()), "{error}");
         let _ = fs::remove_dir_all(&home);
     }
 
