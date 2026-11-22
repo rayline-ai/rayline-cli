@@ -23,7 +23,7 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   agents and `--model`, now run your ARC models too. A `--settings` you pass
   replaces the list with Claude Code's own. Rayline hands Claude Code the
   list in a file of its own for each launch,
-  `~/.rayline/harness/claude-code/model-picker/<pid>.json`, so a long list
+  `~/.rayline/harness/claude-code/model-picker/<pid>-<nanos>.json`, so a long list
   doesn't lengthen Claude Code's command line.
 
 ### Fixed

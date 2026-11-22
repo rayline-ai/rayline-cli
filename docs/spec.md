@@ -419,7 +419,7 @@ Rayline Platform (prod) is built in and has no entry. It serves every protocol a
 
 1. A model object in `cloud` has only `id`. Any other key, `v_value` included, is a load error, like any unknown key.
 2. Rayline checks the shape of a model object, not its id: load holds no list of ids and reads none. It doesn't replace an id with the key's Contributor or zero data retention id. The id goes to the API as written, and the API validates it when the model is called (for example 400 `value_required`, 400 `tier_value_immutable`, 403 `zdr_model_required`).
-3. A cloud-mode launch reads the key's model listing to set up the harness. The opencode, pi, omp, OpenClaw and Hermes configs list every model the listing has, with its name, limits and input types. Rayline doesn't check `cloud.model.id` or `cloud.smol_model.id` against the listing: an id the listing doesn't have is added to those configs by its id alone, with no limits (OpenClaw, which requires a name, gets the id as its name), and the harness uses its own defaults for it. Claude Code starts with `--settings` naming this launch's file `harness/claude-code/model-picker/<pid>.json` (section 8.2), which holds a `modelPicker` with `replaceBuiltInOptions`, so its `/model` shows its Default row and one row per model the listing has, `cloud.model.id` first, each labelled with its `display_name` and described by its id, and none of Claude Code's own models. A `cloud.model.id` or `cloud.smol_model.id` the listing doesn't have also gets a row, by its id alone, as in the other harnesses' configs. The `--settings` comes before the harness arguments: a `--settings` the user passes replaces it, and `/model` then shows Claude Code's own rows. Claude Code's `opus` alias (`ANTHROPIC_DEFAULT_OPUS_MODEL`, also its default) is `cloud.model.id`, `haiku` (`ANTHROPIC_DEFAULT_HAIKU_MODEL`) is `cloud.smol_model.id`, and `sonnet` (`ANTHROPIC_DEFAULT_SONNET_MODEL`) and `fable` (`ANTHROPIC_DEFAULT_FABLE_MODEL`) take the listing's other models in its order, or `cloud.model.id` when none is left. Codex's `/model` lists only Codex's own models.
+3. A cloud-mode launch reads the key's model listing to set up the harness. The opencode, pi, omp, OpenClaw and Hermes configs list every model the listing has, with its name, limits and input types. Rayline doesn't check `cloud.model.id` or `cloud.smol_model.id` against the listing: an id the listing doesn't have is added to those configs by its id alone, with no limits (OpenClaw, which requires a name, gets the id as its name), and the harness uses its own defaults for it. Claude Code starts with `--settings` naming this launch's file `harness/claude-code/model-picker/<pid>-<nanos>.json` (section 8.2), which holds a `modelPicker` with `replaceBuiltInOptions`, so its `/model` shows its Default row and one row per model the listing has, `cloud.model.id` first, each labelled with its `display_name` and described by its id, and none of Claude Code's own models. A `cloud.model.id` or `cloud.smol_model.id` the listing doesn't have also gets a row, by its id alone, as in the other harnesses' configs. The `--settings` comes before the harness arguments: a `--settings` the user passes replaces it, and `/model` then shows Claude Code's own rows. Claude Code's `opus` alias (`ANTHROPIC_DEFAULT_OPUS_MODEL`, also its default) is `cloud.model.id`, `haiku` (`ANTHROPIC_DEFAULT_HAIKU_MODEL`) is `cloud.smol_model.id`, and `sonnet` (`ANTHROPIC_DEFAULT_SONNET_MODEL`) and `fable` (`ANTHROPIC_DEFAULT_FABLE_MODEL`) take the listing's other models in its order, or `cloud.model.id` when none is left. Codex's `/model` lists only Codex's own models.
 4. Where each harness uses the two models:
 
    | Harness | `model` | `smol_model` |
@@ -747,12 +747,14 @@ Only these files:
                                 claude-code (only with --isolated)
   harness/claude-code/daemon-launches.json
                                 Claude Code daemons Rayline started
-  harness/claude-code/model-picker/<pid>.json
+  harness/claude-code/model-picker/<pid>-<nanos>.json
                                 owner-only, one per cloud `rayline run claude`:
                                 its /model rows (section 5.1 item 3), no key.
                                 <pid> is the launch's process, which Claude Code
-                                runs as (Linux, macOS) or under (Windows); each
-                                launch removes the files whose process has ended
+                                runs as (Linux, macOS) or under (Windows), and
+                                <nanos> its start time in nanoseconds since the
+                                Unix epoch; each launch removes the files whose
+                                process has ended
 ```
 
 Each mode has its own harness folder because each writes its own endpoint, key and model list there.

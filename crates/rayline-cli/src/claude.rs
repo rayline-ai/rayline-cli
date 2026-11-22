@@ -139,15 +139,19 @@ fn picker_settings_dir(home: &Path) -> PathBuf {
     isolated_cc_dir(home).join("model-picker")
 }
 
-/// Writes `settings` to `model-picker/<pid>.json`, owner-only, for the
-/// launch whose process is `pid` (Claude Code runs in Rayline's place on
-/// Linux and macOS and as its child on Windows, so the file is needed while
-/// that process runs). Files of launches whose process is gone
-/// (`is_alive`) are removed first. A file whose name is not `<pid>.json` is
-/// left alone. Every failure is an error naming the path.
+/// Writes `settings` to `model-picker/<pid>-<nanos>.json`, owner-only, for
+/// the launch whose process is `pid`, started at `nanos` since the Unix
+/// epoch (Claude Code runs in Rayline's place on Linux and macOS and as its
+/// child on Windows, so the file is needed while that process runs). Files
+/// of launches whose process is gone (`is_alive`) are removed first; the
+/// time in the name keeps a later launch that reuses an ended launch's pid
+/// from having its file removed with the ended one's. A file whose name is
+/// not `<pid>-<nanos>.json` is left alone. Every failure is an error naming
+/// the path.
 fn write_picker_settings(
     home: &Path,
     pid: u32,
+    nanos: u128,
     settings: &str,
     is_alive: impl Fn(u32) -> io::Result<bool>,
 ) -> io::Result<PathBuf> {
@@ -160,13 +164,16 @@ fn write_picker_settings(
     };
     crate::harness::create_private_dir(&dir).map_err(|error| failed("create", &dir, error))?;
     let entries = fs::read_dir(&dir).map_err(|error| failed("read", &dir, error))?;
+    let name = format!("{pid}-{nanos}.json");
     for entry in entries {
         let path = entry.map_err(|error| failed("read", &dir, error))?.path();
         let Some(other) = path
             .file_name()
             .and_then(|name| name.to_str())
             .and_then(|name| name.strip_suffix(".json"))
-            .and_then(|stem| stem.parse::<u32>().ok())
+            .and_then(|stem| stem.split_once('-'))
+            .filter(|(_, time)| time.parse::<u128>().is_ok())
+            .and_then(|(pid, _)| pid.parse::<u32>().ok())
         else {
             continue;
         };
@@ -181,10 +188,19 @@ fn write_picker_settings(
             }
         }
     }
-    let path = dir.join(format!("{pid}.json"));
+    let path = dir.join(name);
     crate::harness::write_private(&path, settings)
         .map_err(|error| failed("write", &path, error))?;
     Ok(path)
+}
+
+/// Nanoseconds since the Unix epoch, for a picker settings file's name
+/// ([`write_picker_settings`]); 0 when the clock is before the epoch.
+fn launch_nanos() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or_default()
 }
 
 /// The main model's context window for `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, when
@@ -354,6 +370,7 @@ async fn run_command_from_home(
     let picker_path = write_picker_settings(
         home,
         std::process::id(),
+        launch_nanos(),
         &picker_settings(&hosted_models),
         crate::claude_daemon::pid_is_alive,
     )
@@ -950,10 +967,16 @@ connection: close
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect();
-        let picker_path = picker_settings_dir(&home).join(format!("{}.json", std::process::id()));
+        assert_eq!(args[0], "--settings");
+        let picker_path = PathBuf::from(&args[1]);
         assert_eq!(
-            args[..2],
-            ["--settings".to_owned(), picker_path.display().to_string()]
+            picker_path.parent(),
+            Some(picker_settings_dir(&home).as_path())
+        );
+        let name = picker_path.file_name().unwrap().to_str().unwrap();
+        assert!(
+            name.starts_with(&format!("{}-", std::process::id())) && name.ends_with(".json"),
+            "{name}"
         );
         let picker = std::fs::read_to_string(&picker_path).unwrap();
         #[cfg(unix)]
@@ -1570,14 +1593,15 @@ mod arc_default_tests {
     fn each_launch_has_its_own_picker_file_and_ended_ones_are_removed() {
         let home = picker_home("prune");
         let alive = |pid: u32| Ok(pid != 11);
-        let first = write_picker_settings(&home, 10, "{\"a\":1}", alive).unwrap();
-        let ended = write_picker_settings(&home, 11, "{\"b\":1}", alive).unwrap();
+        let first = write_picker_settings(&home, 10, 1, "{\"a\":1}", alive).unwrap();
+        let ended = write_picker_settings(&home, 11, 2, "{\"b\":1}", alive).unwrap();
         let dir = picker_settings_dir(&home);
         fs::write(dir.join("notes.txt"), "x").unwrap();
-        fs::write(dir.join("x.json"), "x").unwrap();
-        let second = write_picker_settings(&home, 12, "{\"c\":1}", alive).unwrap();
-        assert_eq!(first, dir.join("10.json"));
-        assert_eq!(second, dir.join("12.json"));
+        fs::write(dir.join("11.json"), "x").unwrap();
+        fs::write(dir.join("11-x.json"), "x").unwrap();
+        let second = write_picker_settings(&home, 12, 3, "{\"c\":1}", alive).unwrap();
+        assert_eq!(first, dir.join("10-1.json"));
+        assert_eq!(second, dir.join("12-3.json"));
         assert_eq!(fs::read_to_string(&first).unwrap(), "{\"a\":1}");
         assert_eq!(fs::read_to_string(&second).unwrap(), "{\"c\":1}");
         assert!(!ended.exists());
@@ -1586,7 +1610,16 @@ mod arc_default_tests {
             .map(|entry| entry.unwrap().file_name().into_string().unwrap())
             .collect();
         names.sort();
-        assert_eq!(names, ["10.json", "12.json", "notes.txt", "x.json"]);
+        assert_eq!(
+            names,
+            [
+                "10-1.json",
+                "11-x.json",
+                "11.json",
+                "12-3.json",
+                "notes.txt"
+            ]
+        );
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
@@ -1597,17 +1630,33 @@ mod arc_default_tests {
         let _ = fs::remove_dir_all(&home);
     }
 
-    // A launch whose pid matches an earlier file replaces it, and a failed
-    // liveness check fails the launch naming the file.
+    // A launch that reuses an ended launch's pid has a file of its own, so
+    // pruning the ended one's file, even by a launch that found that pid
+    // gone just before the new launch took it, leaves the new one's. A
+    // failed liveness check fails the launch naming the file.
     #[test]
-    fn a_reused_pid_replaces_its_file_and_a_failed_check_names_the_file() {
+    fn a_reused_pid_has_its_own_file_and_a_failed_check_names_the_file() {
         let home = picker_home("reuse");
-        write_picker_settings(&home, 20, "old", |_| Ok(true)).unwrap();
-        let path = write_picker_settings(&home, 20, "new", |_| Ok(true)).unwrap();
-        assert_eq!(fs::read_to_string(&path).unwrap(), "new");
-        let error =
-            write_picker_settings(&home, 21, "x", |_| Err(io::Error::other("probe"))).unwrap_err();
-        assert!(error.to_string().contains("20.json"), "{error}");
+        let ended = write_picker_settings(&home, 20, 1, "old", |_| Ok(true)).unwrap();
+        // The first probe finds pid 20 gone, then a new launch takes it;
+        // pid 20 is running from then on.
+        let reused = std::cell::RefCell::new(None);
+        write_picker_settings(&home, 21, 3, "x", |pid| {
+            assert_eq!(pid, 20);
+            if reused.borrow().is_some() {
+                return Ok(true);
+            }
+            let path = write_picker_settings(&home, 20, 2, "new", |_| Ok(true))?;
+            *reused.borrow_mut() = Some(path);
+            Ok(false)
+        })
+        .unwrap();
+        let reused = reused.into_inner().unwrap();
+        assert!(!ended.exists());
+        assert_eq!(fs::read_to_string(&reused).unwrap(), "new");
+        let error = write_picker_settings(&home, 22, 4, "x", |_| Err(io::Error::other("probe")))
+            .unwrap_err();
+        assert!(error.to_string().contains("-2.json"), "{error}");
         let _ = fs::remove_dir_all(&home);
     }
 
@@ -1634,7 +1683,8 @@ mod arc_default_tests {
         let settings = picker_settings(&models);
         assert!(settings.len() > 8_191);
         let home = picker_home("many");
-        let path = write_picker_settings(&home, 30, &settings, |_| Ok(true)).unwrap();
+        let path =
+            write_picker_settings(&home, 30, launch_nanos(), &settings, |_| Ok(true)).unwrap();
         assert!(path.as_os_str().len() < 300, "{}", path.display());
         assert_eq!(fs::read_to_string(&path).unwrap(), settings);
         let _ = fs::remove_dir_all(&home);
