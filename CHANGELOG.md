@@ -32,6 +32,13 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   mode requires a fresh harness session`. So are Claude Code's
   `--from-pr` and `--teleport`, which resume a saved session too.
 
+- **Local mode refuses resumed omp and Hermes sessions.** omp (`-c`, `-r`,
+  `--restore`, `--session`, `--fork`, `--from-claude`, `--from-codex`) and
+  Hermes (`--resume`, `--continue`, `-r`, `-c`, `sessions browse`) resumes
+  are refused with `local mode requires a fresh harness session`. OpenClaw
+  sessions are still not checked: its arguments can't show whether a
+  session is new.
+
 - **A misspelt `tokenizer` repo no longer looks like an access problem.**
   Hugging Face answers 401 for a repo that does not exist, so `rayline local
   start` read like one. It now says Hugging Face has no public repo with that
