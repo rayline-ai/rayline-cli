@@ -102,27 +102,63 @@ const CODEX_VALUE_OPTIONS: &[&str] = &[
 ];
 const CODEX_IMAGE_OPTIONS: &[&str] = &["-i", "--image"];
 
+/// Codex 0.170's commands: `codex`'s, then `codex exec`'s.
+const CODEX_COMMANDS: &[&str] = &[
+    "agents",
+    "exec",
+    "e",
+    "review",
+    "login",
+    "logout",
+    "mcp",
+    "plugin",
+    "app-server",
+    "remote-control",
+    "app",
+    "completion",
+    "update",
+    "doctor",
+    "sandbox",
+    "debug",
+    "apply",
+    "a",
+    "resume",
+    "queue",
+    "archive",
+    "delete",
+    "migrate-rollouts",
+    "migrate-nfs-db",
+    "unarchive",
+    "fork",
+    "cloud",
+    "exec-server",
+    "features",
+    "help",
+];
+const CODEX_EXEC_COMMANDS: &[&str] = &["resume", "fork", "review", "help"];
+
 /// Whether Codex's command is `resume` or `fork`, or `exec` (or its alias
 /// `e`) with `resume` or `fork` as its command. Codex reads a command as the
 /// first or, after a prompt, the second argument that is neither an option
 /// nor an option's value, so `codex hello resume` resumes.
 fn codex_resumes(args: &[String]) -> bool {
-    let Some(command) = codex_command(args, 0) else {
+    let Some(command) = codex_command(args, 0, CODEX_COMMANDS) else {
         return false;
     };
     match args[command].as_str() {
         "resume" | "fork" => true,
-        "exec" | "e" => codex_command(args, command + 1)
+        "exec" | "e" => codex_command(args, command + 1, CODEX_EXEC_COMMANDS)
             .is_some_and(|sub| matches!(args[sub].as_str(), "resume" | "fork")),
         _ => false,
     }
 }
 
 /// Index of Codex's command among `args[start..]`: the first positional
-/// argument when it is `resume`, `fork`, `exec` or `e`, else the second.
-fn codex_command(args: &[String], start: usize) -> Option<usize> {
+/// argument when it is one of `commands`, else the second, which follows a
+/// prompt.
+fn codex_command(args: &[String], start: usize, commands: &[&str]) -> Option<usize> {
     let first = codex_positional(args, start)?;
-    if matches!(args[first].as_str(), "resume" | "fork" | "exec" | "e") {
+    if commands.contains(&args[first].as_str()) {
         return Some(first);
     }
     codex_positional(args, first + 1)
@@ -243,6 +279,9 @@ mod tests {
             ("codex", &["-m", "resume"]),
             ("codex", &["exec", "-c", "resume", "do it"]),
             ("codex", &["exec", "review"]),
+            ("codex", &["exec", "review", "resume"]),
+            ("codex", &["review", "fork"]),
+            ("codex", &["help", "resume"]),
             ("codex", &["hello", "world"]),
             ("codex", &["exec", "hello"]),
             ("codex", &["exec", "--", "resume"]),
