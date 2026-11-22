@@ -1,8 +1,7 @@
 //! Local mode's refusal of a harness command line that resumes or forks a
 //! saved session (spec section 3.2 item 9). Each harness's forms come from
-//! its own CLI: Claude Code, Codex 0.170, pi, OpenCode, omp 19.1 (whose
-//! parser also takes `--session` and `--fork`, which its help omits) and
-//! Hermes. Only the arguments before any `--` are read.
+//! its own CLI: Claude Code, Codex 0.170, pi and OpenCode. Only the
+//! arguments before any `--` are read.
 
 use std::ffi::OsString;
 use std::io;
@@ -40,21 +39,6 @@ pub(crate) fn require_fresh_session(harness: &str, args: &[OsString]) -> io::Res
             ],
         ),
         "opencode" => any_flag(&args, &["--continue", "--session", "--fork", "-c", "-s"]),
-        "omp" => any_flag(
-            &args,
-            &[
-                "--resume",
-                "--continue",
-                "--restore",
-                "--session",
-                "--fork",
-                "--from-claude",
-                "--from-codex",
-                "-r",
-                "-c",
-            ],
-        ),
-        "hermes" => hermes_resumes(&args),
         _ => false,
     };
     if resuming {
@@ -187,49 +171,6 @@ fn codex_positional(args: &[String], start: usize) -> Option<usize> {
     None
 }
 
-/// Hermes short options that take a value: in `-mX` or `-wm X` the rest of
-/// the argument, or the next one, is its value.
-const HERMES_SHORT_VALUE_OPTIONS: &[char] = &['z', 'q', 'm', 't', 's'];
-
-/// Whether Hermes' arguments resume a session: `--resume` or `--continue`,
-/// or any shorter prefix of them, which Hermes' parser accepts, with or
-/// without `=<value>`; `-r` or `-c`, alone, with an attached value or in a
-/// group of short options; or `sessions browse`, its session picker, with
-/// any profile option between the two.
-fn hermes_resumes(args: &[String]) -> bool {
-    let option = args.iter().any(|arg| {
-        if let Some(long) = arg.strip_prefix("--") {
-            let name = long.split('=').next().unwrap_or("");
-            !name.is_empty() && ("resume".starts_with(name) || "continue".starts_with(name))
-        } else if let Some(short) = arg.strip_prefix('-') {
-            short
-                .chars()
-                .take_while(|letter| !HERMES_SHORT_VALUE_OPTIONS.contains(letter))
-                .any(|letter| letter == 'r' || letter == 'c')
-        } else {
-            false
-        }
-    });
-    option
-        || without_hermes_profile(args)
-            .windows(2)
-            .any(|pair| pair == ["sessions", "browse"])
-}
-
-/// `args` without the first `--profile <name>`, `-p <name>` or
-/// `--profile=<name>`, which Hermes removes before parsing the rest.
-fn without_hermes_profile(args: &[String]) -> Vec<&str> {
-    let mut rest: Vec<&str> = args.iter().map(String::as_str).collect();
-    if let Some(index) = rest
-        .iter()
-        .position(|arg| matches!(*arg, "--profile" | "-p") || arg.starts_with("--profile="))
-    {
-        let len = if rest[index].contains('=') { 1 } else { 2 };
-        rest.drain(index..(index + len).min(rest.len()));
-    }
-    rest
-}
-
 #[cfg(test)]
 mod tests {
     use super::require_fresh_session;
@@ -263,33 +204,13 @@ mod tests {
             ("pi", &["--session=saved"]),
             ("opencode", &["-c"]),
             ("opencode", &["--session=ses_1"]),
-            ("omp", &["-c"]),
-            ("omp", &["--resume=abc"]),
-            ("omp", &["-r", "abc"]),
-            ("omp", &["--restore", "s.jsonl"]),
-            ("omp", &["--from-claude"]),
-            ("omp", &["--from-codex"]),
-            ("omp", &["--fork", "s.jsonl"]),
-            ("omp", &["--session=abc"]),
-            ("hermes", &["--resume", "s"]),
-            ("hermes", &["chat", "--continue"]),
-            ("hermes", &["--resu=s"]),
-            ("hermes", &["--cont"]),
-            ("hermes", &["-r", "s"]),
-            ("hermes", &["-rs"]),
-            ("hermes", &["chat", "-c"]),
-            ("hermes", &["-wc"]),
-            ("hermes", &["sessions", "browse"]),
-            ("hermes", &["sessions", "--profile", "work", "browse"]),
-            ("hermes", &["sessions", "-p", "work", "browse"]),
-            ("hermes", &["sessions", "--profile=work", "browse"]),
         ] {
             assert!(refused(harness, args), "{harness} {args:?}");
         }
     }
 
     #[test]
-    fn passes_fresh_sessions_and_unchecked_harnesses() {
+    fn passes_fresh_sessions() {
         for (harness, args) in [
             ("claude", &["-p", "Explain resume support"][..]),
             ("codex", &["exec", "resume the build"]),
@@ -304,14 +225,6 @@ mod tests {
             ("codex", &["exec", "hello"]),
             ("codex", &["exec", "--", "resume"]),
             ("codex", &["--", "resume"]),
-            ("omp", &["-p", "continue the refactor"]),
-            ("omp", &["--model=opus"]),
-            ("hermes", &["chat", "-q", "resume"]),
-            ("hermes", &["-mcodex"]),
-            ("hermes", &["sessions", "list"]),
-            ("hermes", &["--", "--resume"]),
-            ("openclaw", &["agent", "--session-id", "s", "-m", "hi"]),
-            ("openclaw", &["tui", "--session", "main"]),
         ] {
             assert!(!refused(harness, args), "{harness} {args:?}");
         }

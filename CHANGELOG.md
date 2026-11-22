@@ -25,13 +25,11 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 
 ### Fixed
 
-- **Local mode refuses every resumed harness session it can see.**
-  `rayline run codex --mode local exec <options> resume <id>` is now refused
-  like `exec resume <id>`, and omp (`-c`, `-r`, `--restore`, `--session`, `--fork`,
-  `--from-claude`, `--from-codex`) and Hermes (`--resume`, `--continue`, `-r`, `-c`,
-  `sessions browse`) resumes are refused too, with `local mode requires a
-  fresh harness session`. OpenClaw sessions are still not checked: its
-  arguments can't show whether a session is new.
+- **Local mode sees a Codex resume after options or a prompt.**
+  `rayline run codex --mode local exec <options> resume <id>`, and Codex
+  resumes or forks after a prompt (`exec <prompt> resume --last`), ran a
+  saved session. They are now refused like `exec resume <id>`, with `local
+  mode requires a fresh harness session`.
 
 - **A misspelt `tokenizer` repo no longer looks like an access problem.**
   Hugging Face answers 401 for a repo that does not exist, so `rayline local
