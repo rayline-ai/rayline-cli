@@ -207,10 +207,22 @@ the first command that reads it writes this default file and says so:
 
 | Harness | `model` | `smol_model` |
 |---|---|---|
-| Claude Code | `ANTHROPIC_MODEL` | `CLAUDE_CODE_SUBAGENT_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL` |
+| Claude Code | `ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_OPUS_MODEL` | `CLAUDE_CODE_SUBAGENT_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL` |
 | opencode | `model` | `small_model` |
 | oh-my-pi | roles `default`, `slow`, `plan` | role `smol` |
 | Codex, pi, Hermes Agent, OpenClaw | their model | not used |
+
+Every harness except Codex offers the models your key can use in its model
+picker. Claude Code's `/model` shows only those, each once, with `model` as
+the default; a `--settings` of your own replaces that list with Claude
+Code's own. Its `opus` alias is `model`, `haiku` is `smol_model`, and
+`sonnet` and `fable` are the key's other models, or `model` when there are
+none. Codex's `/model` lists only Codex's own models: use `-m <id>`.
+
+On Windows, Claude Code installed with npm (`claude.cmd`) can't start when
+your key lists many models, around 100 with short names: the picker list
+makes its command line longer than `cmd.exe` accepts. Claude Code's native installer
+(`claude.exe`) has no such limit.
 
 Rayline checks the whole file once, when it loads, and stops with an error
 that names the key it refuses. A settings file from an earlier release,
