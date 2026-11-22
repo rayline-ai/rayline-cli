@@ -619,14 +619,7 @@ pub(crate) fn config_dir(home: &Path, harness: Harness) -> PathBuf {
 }
 
 pub(crate) fn write_files(dir: &Path, files: &[ConfigFile]) -> io::Result<()> {
-    fs::create_dir_all(dir)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
-    }
-    #[cfg(windows)]
-    rayline_local_router::windows_state::restrict_to_owner(dir, true)?;
+    create_private_dir(dir)?;
     for file in files {
         let path = dir.join(file.name);
         let tmp = dir.join(format!(".{}.tmp-{}", file.name, std::process::id()));
@@ -642,6 +635,20 @@ pub(crate) fn write_files(dir: &Path, files: &[ConfigFile]) -> io::Result<()> {
         }
         fs::rename(&tmp, &path)?;
     }
+    Ok(())
+}
+
+/// Creates `dir` and its parents, and makes `dir` owner-only (mode 0700 on
+/// Unix, an owner-only DACL on Windows).
+pub(crate) fn create_private_dir(dir: &Path) -> io::Result<()> {
+    fs::create_dir_all(dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
+    }
+    #[cfg(windows)]
+    rayline_local_router::windows_state::restrict_to_owner(dir, true)?;
     Ok(())
 }
 

@@ -219,11 +219,6 @@ Code's own. Its `opus` alias is `model`, `haiku` is `smol_model`, and
 `sonnet` and `fable` are the key's other models, or `model` when there are
 none. Codex's `/model` lists only Codex's own models: use `-m <id>`.
 
-On Windows, Claude Code installed with npm (`claude.cmd`) can't start when
-your key lists many models, around 100 with short names: the picker list
-makes its command line longer than `cmd.exe` accepts. Claude Code's native installer
-(`claude.exe`) has no such limit.
-
 Rayline checks the whole file once, when it loads, and stops with an error
 that names the key it refuses. A settings file from an earlier release,
 which has no `mode`, is converted the first time a command reads it: Rayline

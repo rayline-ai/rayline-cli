@@ -133,6 +133,60 @@ fn picker_settings(hosted: &crate::harness::LaunchModels) -> String {
     .to_string()
 }
 
+/// `~/.rayline/harness/claude-code/model-picker/`: the picker settings of
+/// each cloud launch, one file per launch.
+fn picker_settings_dir(home: &Path) -> PathBuf {
+    isolated_cc_dir(home).join("model-picker")
+}
+
+/// Writes `settings` to `model-picker/<pid>.json`, owner-only, for the
+/// launch whose process is `pid` (Claude Code runs in Rayline's place on
+/// Linux and macOS and as its child on Windows, so the file is needed while
+/// that process runs). Files of launches whose process is gone
+/// (`is_alive`) are removed first. A file whose name is not `<pid>.json` is
+/// left alone. Every failure is an error naming the path.
+fn write_picker_settings(
+    home: &Path,
+    pid: u32,
+    settings: &str,
+    is_alive: impl Fn(u32) -> io::Result<bool>,
+) -> io::Result<PathBuf> {
+    let dir = picker_settings_dir(home);
+    let failed = |action: &str, path: &Path, error: io::Error| {
+        io::Error::new(
+            error.kind(),
+            format!("failed to {action} {}: {error}", path.display()),
+        )
+    };
+    crate::harness::create_private_dir(&dir).map_err(|error| failed("create", &dir, error))?;
+    let entries = fs::read_dir(&dir).map_err(|error| failed("read", &dir, error))?;
+    for entry in entries {
+        let path = entry.map_err(|error| failed("read", &dir, error))?.path();
+        let Some(other) = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(|name| name.strip_suffix(".json"))
+            .and_then(|stem| stem.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        if other == pid {
+            continue;
+        }
+        if !is_alive(other).map_err(|error| failed("check the launch of", &path, error))? {
+            match fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(failed("remove", &path, error)),
+            }
+        }
+    }
+    let path = dir.join(format!("{pid}.json"));
+    crate::harness::write_private(&path, settings)
+        .map_err(|error| failed("write", &path, error))?;
+    Ok(path)
+}
+
 /// The main model's context window for `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, when
 /// the router sizes the session (`routed`: it answered an auto-compact
 /// window, so Claude Code doesn't know the id and would assume 200K, capping
@@ -162,6 +216,7 @@ pub enum RunError {
     ConfigDir(io::Error),
     IsolatedProfile(io::Error),
     LaunchRecord(io::Error),
+    PickerSettings(io::Error),
     DaemonProbe(io::Error),
 }
 
@@ -181,6 +236,9 @@ impl std::fmt::Display for RunError {
             }
             Self::LaunchRecord(error) => {
                 write!(formatter, "Claude Code launch record: {error}")
+            }
+            Self::PickerSettings(error) => {
+                write!(formatter, "Claude Code model picker settings: {error}")
             }
             Self::DaemonProbe(error) => write!(formatter, "Claude Code daemon: {error}"),
         }
@@ -293,11 +351,16 @@ async fn run_command_from_home(
         }
     };
 
+    let picker_path = write_picker_settings(
+        home,
+        std::process::id(),
+        &picker_settings(&hosted_models),
+        crate::claude_daemon::pid_is_alive,
+    )
+    .map_err(RunError::PickerSettings)?;
     let mut command = claude_command(&claude_bin);
     // Before the user's arguments: a `--settings` of their own replaces it.
-    command
-        .arg("--settings")
-        .arg(picker_settings(&hosted_models));
+    command.arg("--settings").arg(&picker_path);
     command.args(&request.args);
     if isolated {
         apply_isolated_config_dir(&mut command, home).map_err(RunError::IsolatedProfile)?;
@@ -801,12 +864,28 @@ connection: close
         base
     }
 
-    /// The env of the child the real launcher builds against [`router_stub`]
-    /// answering `window`, and the stub's URL. With a stored key it starts no
-    /// process, so the command can be read directly. Every switch, a compact
-    /// window, an API key and the vendor switches are exported with values
-    /// the child must not get.
+    /// What the real launcher builds against [`router_stub`] answering
+    /// `window`, with the user's `args`.
+    struct Launched {
+        env: BTreeMap<String, Option<String>>,
+        router_url: String,
+        args: Vec<String>,
+        /// The `--settings` file's contents and, on Unix, its mode.
+        picker: String,
+        #[cfg(unix)]
+        picker_mode: u32,
+    }
+
+    /// The child the real launcher builds against [`router_stub`] answering
+    /// `window`. With a stored key it starts no process, so the command can
+    /// be read directly. Every switch, a compact window, an API key and the
+    /// vendor switches are exported with values the child must not get.
     async fn launched_env(window: Value) -> (BTreeMap<String, Option<String>>, String) {
+        let launched = launch(window, Vec::new()).await;
+        (launched.env, launched.router_url)
+    }
+
+    async fn launch(window: Value, args: Vec<OsString>) -> Launched {
         static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
         let _guard = ENV_LOCK.lock().await;
         let home =
@@ -821,7 +900,7 @@ connection: close
                 login_url: "http://127.0.0.1:9/cli-auth".to_owned(),
             },
             cloud: crate::harness::tests::cloud(None),
-            args: Vec::new(),
+            args,
             isolated: false,
         };
         let exported = [
@@ -867,6 +946,25 @@ connection: close
                 )
             })
             .collect();
+        let args: Vec<String> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        let picker_path = picker_settings_dir(&home).join(format!("{}.json", std::process::id()));
+        assert_eq!(
+            args[..2],
+            ["--settings".to_owned(), picker_path.display().to_string()]
+        );
+        let picker = std::fs::read_to_string(&picker_path).unwrap();
+        #[cfg(unix)]
+        let picker_mode = {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::metadata(&picker_path)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777
+        };
         for (key, value) in saved {
             // SAFETY: serialized by ENV_LOCK.
             match value {
@@ -875,7 +973,30 @@ connection: close
             }
         }
         let _ = std::fs::remove_dir_all(&home);
-        (env, router_url)
+        Launched {
+            env,
+            router_url,
+            args,
+            picker,
+            #[cfg(unix)]
+            picker_mode,
+        }
+    }
+
+    // The picker rows go to an owner-only file named by this process's pid,
+    // and its path is the first `--settings`, before the user's arguments,
+    // so a `--settings` of the user's own comes later and replaces it.
+    #[tokio::test]
+    async fn the_launcher_passes_the_picker_settings_by_file() {
+        let user = ["--settings", "mine.json", "-p", "hi"];
+        let launched = launch(Value::Null, user.iter().map(OsString::from).collect()).await;
+        assert_eq!(launched.args[2..], user);
+        assert_eq!(
+            launched.picker,
+            picker_settings(&crate::harness::tests::hosted_models())
+        );
+        #[cfg(unix)]
+        assert_eq!(launched.picker_mode, 0o600);
     }
 
     #[tokio::test]
@@ -1433,6 +1554,90 @@ mod arc_default_tests {
                 ("ANTHROPIC_DEFAULT_FABLE_MODEL", "a/one".to_owned()),
             ]
         );
+    }
+
+    fn picker_home(name: &str) -> PathBuf {
+        let home =
+            std::env::temp_dir().join(format!("rayline-cli-picker-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&home);
+        home
+    }
+
+    // Each launch has its own file, so concurrent launches don't overwrite
+    // each other's; a launch removes the files of launches that have ended
+    // and leaves those still running and any file it didn't name.
+    #[test]
+    fn each_launch_has_its_own_picker_file_and_ended_ones_are_removed() {
+        let home = picker_home("prune");
+        let alive = |pid: u32| Ok(pid != 11);
+        let first = write_picker_settings(&home, 10, "{\"a\":1}", alive).unwrap();
+        let ended = write_picker_settings(&home, 11, "{\"b\":1}", alive).unwrap();
+        let dir = picker_settings_dir(&home);
+        fs::write(dir.join("notes.txt"), "x").unwrap();
+        fs::write(dir.join("x.json"), "x").unwrap();
+        let second = write_picker_settings(&home, 12, "{\"c\":1}", alive).unwrap();
+        assert_eq!(first, dir.join("10.json"));
+        assert_eq!(second, dir.join("12.json"));
+        assert_eq!(fs::read_to_string(&first).unwrap(), "{\"a\":1}");
+        assert_eq!(fs::read_to_string(&second).unwrap(), "{\"c\":1}");
+        assert!(!ended.exists());
+        let mut names: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["10.json", "12.json", "notes.txt", "x.json"]);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode(&dir), 0o700);
+            assert_eq!(mode(&second), 0o600);
+        }
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    // A launch whose pid matches an earlier file replaces it, and a failed
+    // liveness check fails the launch naming the file.
+    #[test]
+    fn a_reused_pid_replaces_its_file_and_a_failed_check_names_the_file() {
+        let home = picker_home("reuse");
+        write_picker_settings(&home, 20, "old", |_| Ok(true)).unwrap();
+        let path = write_picker_settings(&home, 20, "new", |_| Ok(true)).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new");
+        let error =
+            write_picker_settings(&home, 21, "x", |_| Err(io::Error::other("probe"))).unwrap_err();
+        assert!(error.to_string().contains("20.json"), "{error}");
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    // Many listed models: the whole list is in the file and the argument is
+    // only its path, so the command line stays short however many models the
+    // key lists (cmd.exe limits it to 8,191 characters for npm's claude.cmd).
+    #[test]
+    fn the_picker_argument_stays_short_with_many_models() {
+        let mut body = crate::harness::tests::listing(None);
+        for index in 0..1_000 {
+            let id = format!("vendor/a-long-model-name-{index}");
+            body["data"]
+                .as_array_mut()
+                .unwrap()
+                .push(serde_json::json!({
+                    "id": id, "object": "model", "owned_by": "x", "display_name": id.to_uppercase(),
+                    "context_length": 32_000, "max_output_tokens": 4_096,
+                    "capabilities": {"vision": false, "tools": true, "reasoning": true}
+                }));
+        }
+        let models =
+            crate::harness::LaunchModels::from_listing(&body, &crate::harness::tests::cloud(None))
+                .unwrap();
+        let settings = picker_settings(&models);
+        assert!(settings.len() > 8_191);
+        let home = picker_home("many");
+        let path = write_picker_settings(&home, 30, &settings, |_| Ok(true)).unwrap();
+        assert!(path.as_os_str().len() < 300, "{}", path.display());
+        assert_eq!(fs::read_to_string(&path).unwrap(), settings);
+        let _ = fs::remove_dir_all(&home);
     }
 
     // A reused daemon must hold the alias models too, so its agents'
