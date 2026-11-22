@@ -1,6 +1,7 @@
 //! Local mode's refusal of a harness command line that resumes or forks a
 //! saved session (spec section 3.2 item 9). Each harness's forms come from
-//! its own CLI help: Claude Code, Codex 0.170, pi, OpenCode, omp 19.1 and
+//! its own CLI: Claude Code, Codex 0.170, pi, OpenCode, omp 19.1 (whose
+//! parser also takes `--session` and `--fork`, which its help omits) and
 //! Hermes. Only the arguments before any `--` are read.
 
 use std::ffi::OsString;
@@ -45,6 +46,8 @@ pub(crate) fn require_fresh_session(harness: &str, args: &[OsString]) -> io::Res
                 "--resume",
                 "--continue",
                 "--restore",
+                "--session",
+                "--fork",
                 "--from-claude",
                 "--from-codex",
                 "-r",
@@ -100,8 +103,9 @@ const CODEX_VALUE_OPTIONS: &[&str] = &[
 const CODEX_IMAGE_OPTIONS: &[&str] = &["-i", "--image"];
 
 /// Whether Codex's command is `resume` or `fork`, or `exec` (or its alias
-/// `e`) with `resume` or `fork` as its command. A command is the first
-/// argument that is neither an option nor an option's value.
+/// `e`) with `resume` or `fork` as its command. Codex reads a command as the
+/// first or, after a prompt, the second argument that is neither an option
+/// nor an option's value, so `codex hello resume` resumes.
 fn codex_resumes(args: &[String]) -> bool {
     let Some(command) = codex_command(args, 0) else {
         return false;
@@ -114,8 +118,18 @@ fn codex_resumes(args: &[String]) -> bool {
     }
 }
 
-/// Index of the first positional argument at or after `start`.
+/// Index of Codex's command among `args[start..]`: the first positional
+/// argument when it is `resume`, `fork`, `exec` or `e`, else the second.
 fn codex_command(args: &[String], start: usize) -> Option<usize> {
+    let first = codex_positional(args, start)?;
+    if matches!(args[first].as_str(), "resume" | "fork" | "exec" | "e") {
+        return Some(first);
+    }
+    codex_positional(args, first + 1)
+}
+
+/// Index of the first positional argument at or after `start`.
+fn codex_positional(args: &[String], start: usize) -> Option<usize> {
     let mut index = start;
     while let Some(arg) = args.get(index) {
         if !arg.starts_with('-') || arg == "-" {
@@ -190,6 +204,10 @@ mod tests {
             ("codex", &["e", "--model=x", "resume", "--last"]),
             ("codex", &["-mx", "exec", "-i", "a.png", "--json", "resume"]),
             ("codex", &["exec", "-ia.png", "resume"]),
+            ("codex", &["hello", "resume", "--last"]),
+            ("codex", &["exec", "hello", "resume", "--last"]),
+            ("codex", &["hello", "exec", "fork", "id"]),
+            ("codex", &["hello", "-m", "x", "fork"]),
             ("pi", &["--fork"]),
             ("pi", &["--session=saved"]),
             ("opencode", &["-c"]),
@@ -200,6 +218,8 @@ mod tests {
             ("omp", &["--restore", "s.jsonl"]),
             ("omp", &["--from-claude"]),
             ("omp", &["--from-codex"]),
+            ("omp", &["--fork", "s.jsonl"]),
+            ("omp", &["--session=abc"]),
             ("hermes", &["--resume", "s"]),
             ("hermes", &["chat", "--continue"]),
             ("hermes", &["--resu=s"]),
@@ -223,6 +243,8 @@ mod tests {
             ("codex", &["-m", "resume"]),
             ("codex", &["exec", "-c", "resume", "do it"]),
             ("codex", &["exec", "review"]),
+            ("codex", &["hello", "world"]),
+            ("codex", &["exec", "hello"]),
             ("codex", &["exec", "--", "resume"]),
             ("codex", &["--", "resume"]),
             ("omp", &["-p", "continue the refactor"]),

@@ -27,8 +27,8 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 
 - **Local mode refuses every resumed harness session it can see.**
   `rayline run codex --mode local exec <options> resume <id>` is now refused
-  like `exec resume <id>`, and omp (`-c`, `-r`, `--restore`, `--from-claude`,
-  `--from-codex`) and Hermes (`--resume`, `--continue`, `-r`, `-c`,
+  like `exec resume <id>`, and omp (`-c`, `-r`, `--restore`, `--session`, `--fork`,
+  `--from-claude`, `--from-codex`) and Hermes (`--resume`, `--continue`, `-r`, `-c`,
   `sessions browse`) resumes are refused too, with `local mode requires a
   fresh harness session`. OpenClaw sessions are still not checked: its
   arguments can't show whether a session is new.
