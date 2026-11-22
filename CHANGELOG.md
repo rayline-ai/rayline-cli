@@ -25,7 +25,7 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 
 ### Fixed
 
-- **Local mode sees a Codex resume after options or a prompt.**
+- **Local mode refuses more resumed Codex and Claude Code sessions.**
   `rayline run codex --mode local exec <options> resume <id>`, and Codex
   resumes or forks after a prompt (`exec <prompt> resume --last`), ran a
   saved session. They are now refused like `exec resume <id>`, with `local
