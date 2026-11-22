@@ -114,7 +114,7 @@ Harness-specific options and subcommands are **kept for review** (section 9).
 
 1. One local process per machine, with its state in `~/.rayline/local/`.
 2. `start` while it is running is an error that names the running process and its config file.
-3. A local-mode run whose config file differs from the one the running process was started from, or whose `--env` differs, or whose `local.routing.router` (and, for `local`, ARC release: its repo, commit, directory and manifest sha256) differs, is an error. It never silently uses the running process's config.
+3. A local-mode run whose config file differs from the one the running process was started from, or whose `--env` differs, or whose `local.routing.router` (and, for `local`, ARC release: its repo, commit, directory and manifest sha256) differs, or whose `local.routing.decisions_model.id` differs (harnesses declare `local/<id>` from it), is an error. It never silently uses the running process's config.
 4. On macOS, `rayline local` and local-mode runs require macOS 13 or later.
 5. Starting the local process downloads the tokenizer of each `local.inference.models` entry that names one (section 5.3) into the Hugging Face cache (section 8.2). When Hugging Face doesn't answer within 20 seconds or a file fails to download, it uses the last complete copy in the cache and says that it is the cached copy. With no complete cached copy, start fails with an error that names the config file, the `models` entry and the tokenizer.
 6. The token counter reads the tokenizer repo's files in the layouts Hugging Face models publish:

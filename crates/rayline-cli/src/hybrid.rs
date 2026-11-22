@@ -208,6 +208,24 @@ impl Supervisor {
                 self.pid
             )));
         }
+        // Harnesses declare `local/<decisions_model.id>`: it names the running
+        // process's decisions model only when the two match.
+        let decisions_model = settings
+            .routing
+            .as_ref()
+            .map(|routing| routing.decisions_model.id.as_str());
+        if self.decisions_model.as_deref() != decisions_model {
+            let started = self.decisions_model.as_deref().map_or_else(
+                || "a decisions model it didn't record (an earlier Rayline started it)".to_owned(),
+                |id| format!("decisions model `{id}`"),
+            );
+            let this_run = decisions_model
+                .map_or_else(|| "none".to_owned(), |id| format!("decisions model `{id}`"));
+            return Err(io::Error::other(format!(
+                "the local process (pid {}) was started with {started}, and this run has {this_run}; stop it with `rayline local stop` first",
+                self.pid
+            )));
+        }
         Ok(())
     }
 }
@@ -3293,18 +3311,38 @@ mod tests {
     fn a_run_on_another_config_or_env_is_refused() {
         let dir = temp_dir("serves");
         let started = local_settings(&dir, "a.json", None);
-        let supervisor = Supervisor {
+        let mut supervisor = Supervisor {
             endpoints: Default::default(),
             pid: 7,
             config: canonical_config(&started).unwrap(),
             env: None,
             router: Some(RouterSource::of(&started)),
-            decisions_model: None,
+            decisions_model: Some("arc-swift-1.0".to_owned()),
             classifier_model: None,
             routing_defaults: false,
         };
         supervisor.check_serves(&started).unwrap();
         assert_eq!(supervisor.router, Some(RouterSource::Cloud));
+
+        // Harnesses would declare another decisions model than the one it runs.
+        let mut sage = started.clone();
+        if let Some(routing) = sage.routing.as_mut() {
+            routing.decisions_model.id = "arc-sage-1.0".to_owned();
+        }
+        assert_eq!(
+            supervisor.check_serves(&sage).unwrap_err().to_string(),
+            "the local process (pid 7) was started with decisions model `arc-swift-1.0`, and \
+             this run has decisions model `arc-sage-1.0`; stop it with `rayline local stop` first"
+        );
+        supervisor.decisions_model = None;
+        assert!(
+            supervisor
+                .check_serves(&started)
+                .unwrap_err()
+                .to_string()
+                .contains("a decisions model it didn't record")
+        );
+        supervisor.decisions_model = Some("arc-swift-1.0".to_owned());
 
         // A record from a Rayline that didn't record decisions serves no run.
         let earlier: Supervisor =
