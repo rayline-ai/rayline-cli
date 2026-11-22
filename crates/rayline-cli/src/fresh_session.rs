@@ -1,6 +1,6 @@
 //! Local mode's refusal of a harness command line that resumes or forks a
 //! saved session (spec section 3.2 item 9). Each harness's forms come from
-//! its own CLI: Claude Code, Codex 0.170, pi and OpenCode. Only the
+//! its own CLI: Claude Code 2.1.330, Codex 0.170, pi and OpenCode. Only the
 //! arguments before any `--` are read.
 
 use std::ffi::OsString;
@@ -21,6 +21,8 @@ pub(crate) fn require_fresh_session(harness: &str, args: &[OsString]) -> io::Res
                 "--continue",
                 "--fork-session",
                 "--resume-session-at",
+                "--from-pr",
+                "--teleport",
                 "-r",
                 "-c",
             ],
@@ -187,6 +189,9 @@ mod tests {
             ("claude", &["--resume=saved"][..]),
             ("claude", &["--continue"]),
             ("claude", &["-r"]),
+            ("claude", &["--from-pr", "42"]),
+            ("claude", &["--from-pr"]),
+            ("claude", &["--teleport=abc"]),
             ("codex", &["resume"]),
             ("codex", &["fork", "--last"]),
             ("codex", &["exec", "resume", "id"]),

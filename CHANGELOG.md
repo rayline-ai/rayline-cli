@@ -29,7 +29,8 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   `rayline run codex --mode local exec <options> resume <id>`, and Codex
   resumes or forks after a prompt (`exec <prompt> resume --last`), ran a
   saved session. They are now refused like `exec resume <id>`, with `local
-  mode requires a fresh harness session`.
+  mode requires a fresh harness session`. So are Claude Code's
+  `--from-pr` and `--teleport`, which resume a saved session too.
 
 - **A misspelt `tokenizer` repo no longer looks like an access problem.**
   Hugging Face answers 401 for a repo that does not exist, so `rayline local
