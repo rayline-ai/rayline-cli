@@ -5,6 +5,17 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 
 ## Unreleased
 
+### Changed
+
+- **In local mode, harnesses show the ARC model that decides (breaking).**
+  Every harness's declared model is now `local/` followed by
+  `local.routing.decisions_model.id`, such as `local/arc-sage-1.0`, instead
+  of `rayline-auto`, and Claude Code's model picker shows it. As before, ARC
+  decides which model runs. `rayline-auto` is gone: a harness config or
+  script that names it must use the new id. A run whose
+  `decisions_model.id` differs from the running local process's is refused
+  until you run `rayline local stop`. Cloud mode is unchanged.
+
 ### Fixed
 
 - **A misspelt `tokenizer` repo no longer looks like an access problem.**

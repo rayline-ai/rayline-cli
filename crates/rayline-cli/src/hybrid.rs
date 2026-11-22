@@ -208,6 +208,24 @@ impl Supervisor {
                 self.pid
             )));
         }
+        // Harnesses declare `local/<decisions_model.id>`: it names the running
+        // process's decisions model only when the two match.
+        let decisions_model = settings
+            .routing
+            .as_ref()
+            .map(|routing| routing.decisions_model.id.as_str());
+        if self.decisions_model.as_deref() != decisions_model {
+            let started = self.decisions_model.as_deref().map_or_else(
+                || "a decisions model it didn't record (an earlier Rayline started it)".to_owned(),
+                |id| format!("decisions model `{id}`"),
+            );
+            let this_run = decisions_model
+                .map_or_else(|| "none".to_owned(), |id| format!("decisions model `{id}`"));
+            return Err(io::Error::other(format!(
+                "the local process (pid {}) was started with {started}, and this run has {this_run}; stop it with `rayline local stop` first",
+                self.pid
+            )));
+        }
         Ok(())
     }
 }
@@ -605,13 +623,22 @@ async fn run_harness(
     health(&client, &paths, &state).await?;
     let token = fs::read_to_string(paths.token())?;
     let withheld = endpoint_key_envs(settings);
+    let declared = settings
+        .routing
+        .as_ref()
+        .ok_or_else(|| io::Error::other("local mode needs `local.routing`"))?
+        .declared_model();
+    let declared = declared.as_str();
     let mut command = harness_command(
         &home,
         harness,
         args,
-        url(&state)?,
-        &token,
-        &harness_capabilities(model_capabilities(&state)?),
+        Gateway {
+            url: url(&state)?,
+            token: &token,
+            declared,
+            capabilities: &harness_capabilities(model_capabilities(&state)?),
+        },
         &withheld,
     )?;
     for name in withheld {
@@ -633,8 +660,8 @@ async fn run_harness(
     // does: signals reach it directly and its exit is Rayline's.
     #[cfg(unix)]
     if harness == "claude" && crate::claude::print_mode_flag(args).is_some() {
-        // `--model rayline-auto` names the model here.
-        crate::claude_print::relay_stderr(&mut command, &[crate::VIRTUAL_ROUTER_MODEL]);
+        // `--model <declared>` names the model here.
+        crate::claude_print::relay_stderr(&mut command, &[declared]);
         return Ok(crate::exec_or_status(&mut command, "claude"));
     }
     let status = command.status()?;
@@ -1559,17 +1586,32 @@ fn withheld_command(program: &Path, withheld: &[&str]) -> Command {
     command
 }
 
+/// What a local-mode launch points its harness at.
+#[derive(Clone, Copy)]
+struct Gateway<'a> {
+    /// The local process's gateway URL.
+    url: &'a str,
+    token: &'a str,
+    /// The model every harness declares: [`crate::config::Routing::declared_model`].
+    declared: &'a str,
+    capabilities: &'a ModelCapabilities,
+}
+
 /// `withheld` names each endpoint's key variable. [`run_harness`] removes
-/// them from the launch, except one the harness sets to `token`.
+/// them from the launch, except one the harness sets to `gateway.token`.
 fn harness_command(
     home: &Path,
     name: &str,
     args: &[OsString],
-    endpoint: &str,
-    token: &str,
-    capabilities: &ModelCapabilities,
+    gateway: Gateway<'_>,
     withheld: &[&str],
 ) -> io::Result<Command> {
+    let Gateway {
+        url: endpoint,
+        token,
+        declared,
+        capabilities,
+    } = gateway;
     // Each harness has its own gateway path, which names it in `top`.
     let endpoint = &format!("{endpoint}/h/{name}");
     let program = crate::harness::launch_program(name, std::env::var_os("PATH"));
@@ -1585,7 +1627,7 @@ fn harness_command(
                     "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
                     capabilities.max_output_tokens.to_string(),
                 )
-                // `rayline-auto` is not in Claude Code's model catalog, so it
+                // The declared model is not in Claude Code's catalog, so it
                 // assumes a 200k window and auto-compacts long before the
                 // gateway's. State the window the gateway advertises, as
                 // `model_context_window` already does for codex.
@@ -1593,7 +1635,7 @@ fn harness_command(
                     crate::claude::MAX_CONTEXT_TOKENS_ENV,
                     capabilities.context_window.to_string(),
                 )
-                .args(["--model", "rayline-auto"]);
+                .args(["--model", declared]);
             // Claude Code 2.1.321+ asks the API to judge auto mode's actions
             // inside each turn (`safeguards`, answered in `safeguard_results`).
             // A turn the local model serves carries no verdict, so every
@@ -1609,7 +1651,7 @@ fn harness_command(
             command.env("RAYLINE_HYBRID_GATEWAY_TOKEN", token);
             for setting in [
                 "model_provider=\"rayline-local\"".to_owned(),
-                "model=\"rayline-auto\"".to_owned(),
+                format!("model=\"{declared}\""),
                 "model_providers.rayline-local.name=\"Rayline local\"".to_owned(),
                 format!("model_providers.rayline-local.base_url=\"{endpoint}/v1\""),
                 "model_providers.rayline-local.wire_api=\"responses\"".to_owned(),
@@ -1638,7 +1680,7 @@ fn harness_command(
                 config_dir: &config_dir,
                 capabilities: Some(capabilities),
                 harness_major_version: major_version,
-                models: crate::harness::LaunchModels::hybrid(capabilities),
+                models: crate::harness::LaunchModels::hybrid(declared, capabilities),
             };
             let plan = harness.plan(&ctx).map_err(io::Error::other)?;
             crate::harness::write_files(&config_dir, &plan.files)?;
@@ -2609,9 +2651,12 @@ mod tests {
                     &home,
                     harness.name(),
                     &[],
-                    "http://127.0.0.1:1",
-                    "local-token",
-                    &capabilities,
+                    Gateway {
+                        url: "http://127.0.0.1:1",
+                        token: "local-token",
+                        declared: "local/arc-sage-1.0",
+                        capabilities: &capabilities,
+                    },
                     &[],
                 )
                 .unwrap();
@@ -2684,12 +2729,15 @@ mod tests {
             &home,
             "opencode",
             &[],
-            "http://127.0.0.1:1",
-            "local-token",
-            &ModelCapabilities {
-                context_window: 16384,
-                max_output_tokens: 8192,
-                input_modalities: vec!["text".into()],
+            Gateway {
+                url: "http://127.0.0.1:1",
+                token: "local-token",
+                declared: "local/arc-sage-1.0",
+                capabilities: &ModelCapabilities {
+                    context_window: 16384,
+                    max_output_tokens: 8192,
+                    input_modalities: vec!["text".into()],
+                },
             },
             &endpoint_key_envs(&settings),
         );
@@ -2721,12 +2769,15 @@ mod tests {
                 Path::new("/unused"),
                 name,
                 &[],
-                "http://127.0.0.1:20815",
-                "local-token",
-                &ModelCapabilities {
-                    context_window: 16384,
-                    max_output_tokens: 8192,
-                    input_modalities: vec!["text".into()],
+                Gateway {
+                    url: "http://127.0.0.1:20815",
+                    token: "local-token",
+                    declared: "local/arc-sage-1.0",
+                    capabilities: &ModelCapabilities {
+                        context_window: 16384,
+                        max_output_tokens: 8192,
+                        input_modalities: vec!["text".into()],
+                    },
                 },
                 &[],
             )
@@ -2767,9 +2818,12 @@ mod tests {
                 &home,
                 name,
                 &[],
-                "http://127.0.0.1:20815",
-                "local-token",
-                &capabilities,
+                Gateway {
+                    url: "http://127.0.0.1:20815",
+                    token: "local-token",
+                    declared: "local/arc-sage-1.0",
+                    capabilities: &capabilities,
+                },
                 &[],
             )
             .unwrap();
@@ -2780,7 +2834,7 @@ mod tests {
             (&pi["contextWindow"], &pi["maxTokens"], &pi["input"]),
             (&json!(1_000_000), &json!(4096), &json!(["text"]))
         );
-        let opencode = &json("harness/opencode/opencode.json")["provider"]["rayline"]["models"]["rayline-auto"];
+        let opencode = &json("harness/opencode/opencode.json")["provider"]["rayline"]["models"]["local/arc-sage-1.0"];
         assert_eq!(
             opencode["limit"],
             json!({"context": 1_000_000, "output": 4096})
@@ -2812,6 +2866,28 @@ mod tests {
         }
         let hermes = read("harness/hermes/config.yaml");
         assert!(hermes.contains("context_length: 1000000"), "{hermes}");
+        // Every harness's default is the declared model.
+        assert_eq!(
+            json("harness/pi/settings.json")["defaultModel"],
+            "local/arc-sage-1.0"
+        );
+        assert_eq!(
+            json("harness/opencode/opencode.json")["model"],
+            "rayline/local/arc-sage-1.0"
+        );
+        let omp_roles = read("harness/omp/config.yml");
+        assert!(
+            omp_roles.contains("default: \"rayline/local/arc-sage-1.0\""),
+            "{omp_roles}"
+        );
+        assert!(
+            hermes.contains("default: \"local/arc-sage-1.0\""),
+            "{hermes}"
+        );
+        assert_eq!(
+            openclaw["agents"]["defaults"]["model"]["primary"],
+            "rayline/local/arc-sage-1.0"
+        );
         assert!(
             hermes.contains("provider: \"custom:rayline-resp\""),
             "{hermes}"
@@ -2822,9 +2898,12 @@ mod tests {
             &home,
             "claude",
             &[],
-            "http://127.0.0.1:20815",
-            "local-token",
-            &capabilities,
+            Gateway {
+                url: "http://127.0.0.1:20815",
+                token: "local-token",
+                declared: "local/arc-sage-1.0",
+                capabilities: &capabilities,
+            },
             &[],
         )
         .unwrap();
@@ -2834,13 +2913,20 @@ mod tests {
                 .any(|(key, value)| key == "CLAUDE_CODE_MAX_OUTPUT_TOKENS"
                     && value == Some(std::ffi::OsStr::new("4096")))
         );
-        // `rayline-auto` is not in Claude Code's catalog, so the window it
+        // `local/arc-sage-1.0` is not in Claude Code's catalog, so the window it
         // may budget against is stated rather than assumed (200k).
         assert!(
             claude
                 .get_envs()
                 .any(|(key, value)| key == "CLAUDE_CODE_MAX_CONTEXT_TOKENS"
                     && value == Some(std::ffi::OsStr::new("1000000")))
+        );
+        let claude_args: Vec<_> = claude.get_args().collect();
+        assert!(
+            claude_args
+                .windows(2)
+                .any(|pair| pair == ["--model", "local/arc-sage-1.0"]),
+            "{claude_args:?}"
         );
         // Auto mode's checks come from Claude Code's own classifier requests,
         // not from the API inside a turn the local model may serve, so the
@@ -2873,13 +2959,20 @@ mod tests {
             &home,
             "codex",
             &[],
-            "http://127.0.0.1:20815",
-            "local-token",
-            &capabilities,
+            Gateway {
+                url: "http://127.0.0.1:20815",
+                token: "local-token",
+                declared: "local/arc-sage-1.0",
+                capabilities: &capabilities,
+            },
             &[],
         )
         .unwrap();
         let args: Vec<_> = codex.get_args().map(|arg| arg.to_string_lossy()).collect();
+        assert!(
+            args.iter().any(|arg| arg == "model=\"local/arc-sage-1.0\""),
+            "{args:?}"
+        );
         assert!(
             args.iter().any(|arg| arg == "model_context_window=1000000"),
             "{args:?}"
@@ -3218,18 +3311,38 @@ mod tests {
     fn a_run_on_another_config_or_env_is_refused() {
         let dir = temp_dir("serves");
         let started = local_settings(&dir, "a.json", None);
-        let supervisor = Supervisor {
+        let mut supervisor = Supervisor {
             endpoints: Default::default(),
             pid: 7,
             config: canonical_config(&started).unwrap(),
             env: None,
             router: Some(RouterSource::of(&started)),
-            decisions_model: None,
+            decisions_model: Some("arc-swift-1.0".to_owned()),
             classifier_model: None,
             routing_defaults: false,
         };
         supervisor.check_serves(&started).unwrap();
         assert_eq!(supervisor.router, Some(RouterSource::Cloud));
+
+        // Harnesses would declare another decisions model than the one it runs.
+        let mut sage = started.clone();
+        if let Some(routing) = sage.routing.as_mut() {
+            routing.decisions_model.id = "arc-sage-1.0".to_owned();
+        }
+        assert_eq!(
+            supervisor.check_serves(&sage).unwrap_err().to_string(),
+            "the local process (pid 7) was started with decisions model `arc-swift-1.0`, and \
+             this run has decisions model `arc-sage-1.0`; stop it with `rayline local stop` first"
+        );
+        supervisor.decisions_model = None;
+        assert!(
+            supervisor
+                .check_serves(&started)
+                .unwrap_err()
+                .to_string()
+                .contains("a decisions model it didn't record")
+        );
+        supervisor.decisions_model = Some("arc-swift-1.0".to_owned());
 
         // A record from a Rayline that didn't record decisions serves no run.
         let earlier: Supervisor =

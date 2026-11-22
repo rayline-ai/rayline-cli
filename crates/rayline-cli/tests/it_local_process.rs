@@ -310,7 +310,7 @@ async fn all_protocols_preserve_body_and_identity_then_stop_owned_core() {
     assert_eq!(initial["totals"]["active_requests"], 0);
     assert_eq!(initial["totals"]["completed_requests"], 0);
     assert!(initial["recent"].as_array().unwrap().is_empty());
-    let body = "{ \"model\":\"rayline-auto\", \"thinking\":{\"type\":\"adaptive\"},\"messages\":[],\"input\":[],\"private\":\"unaltered\" }";
+    let body = "{ \"model\":\"local/arc-sage-1.0\", \"thinking\":{\"type\":\"adaptive\"},\"messages\":[],\"input\":[],\"private\":\"unaltered\" }";
     for path in ["/v1/messages", "/v1/chat/completions", "/v1/responses"] {
         let response = client
             .post(format!("{url}{path}"))
@@ -543,7 +543,7 @@ async fn client_cancellation_reaches_core_and_core_crash_stops_gateway() {
     let mut stream = client
         .post(format!("{url}/v1/messages"))
         .bearer_auth(&token)
-        .json(&json!({"model": "rayline-auto", "stream": true}))
+        .json(&json!({"model": "local/arc-sage-1.0", "stream": true}))
         .send()
         .await
         .unwrap();
@@ -677,7 +677,7 @@ async fn cancellation_before_headers_reaches_core() {
     let mut socket = tokio::net::TcpStream::connect(("127.0.0.1", endpoint.port().unwrap()))
         .await
         .unwrap();
-    let body = r#"{"model":"rayline-auto","fixture_pending":true}"#;
+    let body = r#"{"model":"local/arc-sage-1.0","fixture_pending":true}"#;
     socket.write_all(format!("POST /v1/messages HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nAuthorization: Bearer {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}", endpoint.port().unwrap(), token, body.len(), body).as_bytes()).await.unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     while !runtime.dir.join("events.jsonl").exists() {
@@ -956,7 +956,7 @@ async fn auto_mode_classifier_goes_to_haiku_on_the_cloud_router_and_other_turns_
     assert_eq!(body, expected);
 
     // A turn with tools is an ordinary turn: the core gets it unchanged.
-    let turn = "{\"model\":\"rayline-auto\",\"tools\":[{\"name\":\"Bash\"}],\"messages\":[]}";
+    let turn = "{\"model\":\"local/arc-sage-1.0\",\"tools\":[{\"name\":\"Bash\"}],\"messages\":[]}";
     let response = client
         .post(format!("{url}/v1/messages"))
         .bearer_auth(&token)

@@ -648,7 +648,7 @@ mod tests {
 
         let local = RenderContext {
             capabilities: Some(&capabilities),
-            models: super::super::LaunchModels::hybrid(&capabilities),
+            models: super::super::LaunchModels::hybrid("local/arc-sage-1.0", &capabilities),
             ..cloud
         };
         write_files(&dir, &super::plan(&local).unwrap().files).unwrap();
