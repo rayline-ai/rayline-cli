@@ -94,7 +94,8 @@ fn role_model_env_switches(
 /// router serves: `opus` (also Claude Code's default) is `cloud.model.id`,
 /// and `sonnet` and `fable` take the other models the router lists for the
 /// key, in its order, or `cloud.model.id` when none is left. `haiku` is
-/// `cloud.smol_model.id` ([`role_model_env_switches`]).
+/// `cloud.smol_model.id` ([`role_model_env_switches`]). A reused Claude Code
+/// daemon must hold the same.
 fn alias_env(hosted: &crate::harness::LaunchModels) -> [(&'static str, String); 3] {
     let mut others = hosted
         .offered
@@ -243,12 +244,7 @@ async fn run_command_from_home(
     // config dir. Inspect the matching config dir for a daemon conflict.
     let mut isolated = request.isolated;
     let mut inspect_dir = claude_config_dir(home, isolated).map_err(RunError::ConfigDir)?;
-    let mut launch_switches = launch_env_switches();
-    launch_switches.extend(role_model_env_switches(&hosted_models));
-    launch_switches.push((
-        MAX_CONTEXT_TOKENS_ENV,
-        max_context_tokens(&hosted_models, auto_compact_window.is_some()),
-    ));
+    let launch_switches = cloud_launch_switches(&hosted_models, auto_compact_window.is_some());
     let daemon_request = RequestSpec {
         env_name: &env_name,
         env_flag: hosted.env.as_deref(),
@@ -309,7 +305,6 @@ async fn run_command_from_home(
     command.env("ANTHROPIC_BASE_URL", &router_url);
     command.env("ANTHROPIC_AUTH_TOKEN", &key);
     command.env("ANTHROPIC_MODEL", &model);
-    command.envs(alias_env(&hosted_models));
     set_auto_compact_window_env(&mut command, auto_compact_window.as_deref());
     command.env(RAYLINE_ENV_NAME_ENV, &env_name);
     remove_claude_env(&mut command);
@@ -323,6 +318,25 @@ async fn run_command_from_home(
     })
     .map_err(RunError::LaunchRecord)?;
     Ok(command)
+}
+
+/// The env a cloud launch sets or removes and a reused Claude Code daemon
+/// must hold: the refusal-recovery switches, the role and alias models and
+/// `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (`routed`: the router answered an
+/// auto-compact window).
+fn cloud_launch_switches(
+    hosted: &crate::harness::LaunchModels,
+    routed: bool,
+) -> Vec<(&'static str, Option<String>)> {
+    let mut switches = launch_env_switches();
+    switches.extend(role_model_env_switches(hosted));
+    switches.extend(
+        alias_env(hosted)
+            .into_iter()
+            .map(|(name, value)| (name, Some(value))),
+    );
+    switches.push((MAX_CONTEXT_TOKENS_ENV, max_context_tokens(hosted, routed)));
+    switches
 }
 
 /// The refusal-recovery switches, both `1`: the child runs with them and a
@@ -1419,6 +1433,20 @@ mod arc_default_tests {
                 ("ANTHROPIC_DEFAULT_FABLE_MODEL", "a/one".to_owned()),
             ]
         );
+    }
+
+    // A reused daemon must hold the alias models too, so its agents'
+    // `opus`, `sonnet` and `fable` run the same models as this launch's.
+    #[test]
+    fn a_reused_daemon_must_hold_the_alias_models() {
+        let models = crate::harness::tests::hosted_models();
+        let switches = cloud_launch_switches(&models, false);
+        for (name, value) in alias_env(&models) {
+            assert!(
+                switches.contains(&(name, Some(value.clone()))),
+                "{name}={value} in {switches:?}"
+            );
+        }
     }
 
     /// `(subagent model, force, haiku model)` for a key's data mode (`None`:
