@@ -88,7 +88,7 @@ rayline run <HARNESS> [--mode <cloud|local>] [--config <file>] [HARNESS ARGS]...
    - `pi`: `-r`, `-c`, `--resume`, `--continue`, `--fork`, `--session`, `--session-id`;
    - `opencode`: `-c`, `-s`, `--continue`, `--session`, `--fork`;
    - `omp`: `-r`, `-c`, `--resume`, `--continue`, `--restore`, `--session`, `--fork`, `--from-claude`, `--from-codex`;
-   - `hermes`: `--resume` and `--continue` and any shorter prefix of them (Hermes accepts one), `-r` and `-c` alone, with an attached value or among grouped short options (`-wc`), and `sessions browse`.
+   - `hermes`: `--resume` and `--continue` and any shorter prefix of them (Hermes accepts one), `-r` and `-c` alone, with an attached value or among grouped short options (`-wc`), and `sessions browse`, also with Hermes' profile option (`--profile <name>`, `-p <name>`) between the two words.
 
    The error is `local mode requires a fresh harness session; saved sessions do not contain the core's private-append ledger`. omp's `autoResume` setting resumes without any argument, so a run with it on is not refused. OpenClaw's arguments are not checked: `openclaw agent` without a session option continues the agent's `main` session, so its arguments can't show whether a session is fresh.
 10. Local mode refuses OpenClaw container mode, before anything starts: `rayline run openclaw` when `OPENCLAW_CONTAINER` is set to a non-empty value, or when any harness argument is `--container` or `--container=<value>`.

@@ -194,7 +194,8 @@ const HERMES_SHORT_VALUE_OPTIONS: &[char] = &['z', 'q', 'm', 't', 's'];
 /// Whether Hermes' arguments resume a session: `--resume` or `--continue`,
 /// or any shorter prefix of them, which Hermes' parser accepts, with or
 /// without `=<value>`; `-r` or `-c`, alone, with an attached value or in a
-/// group of short options; or `sessions browse`, its session picker.
+/// group of short options; or `sessions browse`, its session picker, with
+/// any profile option between the two.
 fn hermes_resumes(args: &[String]) -> bool {
     let option = args.iter().any(|arg| {
         if let Some(long) = arg.strip_prefix("--") {
@@ -210,9 +211,23 @@ fn hermes_resumes(args: &[String]) -> bool {
         }
     });
     option
-        || args
+        || without_hermes_profile(args)
             .windows(2)
-            .any(|pair| pair[0] == "sessions" && pair[1] == "browse")
+            .any(|pair| pair == ["sessions", "browse"])
+}
+
+/// `args` without the first `--profile <name>`, `-p <name>` or
+/// `--profile=<name>`, which Hermes removes before parsing the rest.
+fn without_hermes_profile(args: &[String]) -> Vec<&str> {
+    let mut rest: Vec<&str> = args.iter().map(String::as_str).collect();
+    if let Some(index) = rest
+        .iter()
+        .position(|arg| matches!(*arg, "--profile" | "-p") || arg.starts_with("--profile="))
+    {
+        let len = if rest[index].contains('=') { 1 } else { 2 };
+        rest.drain(index..(index + len).min(rest.len()));
+    }
+    rest
 }
 
 #[cfg(test)]
@@ -265,6 +280,9 @@ mod tests {
             ("hermes", &["chat", "-c"]),
             ("hermes", &["-wc"]),
             ("hermes", &["sessions", "browse"]),
+            ("hermes", &["sessions", "--profile", "work", "browse"]),
+            ("hermes", &["sessions", "-p", "work", "browse"]),
+            ("hermes", &["sessions", "--profile=work", "browse"]),
         ] {
             assert!(refused(harness, args), "{harness} {args:?}");
         }
