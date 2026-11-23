@@ -3,7 +3,7 @@
 User-facing changes in each Rayline release. Install commands and signed
 assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock/releases).
 
-## Unreleased
+## 0.5.8 (2026-11-23)
 
 ### Changed
 
@@ -39,6 +39,18 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   Hugging Face answers 401 for a repo that does not exist, so `rayline local
   start` read like one. It now says Hugging Face has no public repo with that
   id, that it may not exist or may be private, and to check the spelling.
+
+### Security
+
+- **`url` 2.5.9.** It fixes RUSTSEC-2026-0592, a stack overflow in
+  `Url::origin()` on nested `blob:` URLs.
+
+### Rollback
+
+To go back to 0.5.7: run `rayline local stop`, then `rayline update
+--version 0.5.7`. A local process 0.5.8 started serves harnesses that declare
+`local/<decisions_model.id>`, and 0.5.7 declares `rayline-auto`, so stop it
+first. Plain `rayline update` would install 0.5.8 again.
 
 ## 0.5.7 (2026-11-19)
 
