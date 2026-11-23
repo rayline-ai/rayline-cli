@@ -163,7 +163,11 @@ fn codex_positional(args: &[String], start: usize) -> Option<usize> {
             continue;
         }
         if CODEX_IMAGE_OPTIONS.contains(&arg.as_str()) {
-            while args.get(index).is_some_and(|value| !value.starts_with('-')) {
+            // Codex reads `-` as an image path, not an option.
+            while args
+                .get(index)
+                .is_some_and(|value| value == "-" || !value.starts_with('-'))
+            {
                 index += 1;
             }
         } else if CODEX_VALUE_OPTIONS.contains(&arg.as_str()) {
@@ -201,6 +205,10 @@ mod tests {
             ("codex", &["e", "--model=x", "resume", "--last"]),
             ("codex", &["-mx", "exec", "-i", "a.png", "--json", "resume"]),
             ("codex", &["exec", "-ia.png", "resume"]),
+            (
+                "codex",
+                &["exec", "hello", "-i", "-", "--json", "resume", "--last"],
+            ),
             ("codex", &["hello", "resume", "--last"]),
             ("codex", &["exec", "hello", "resume", "--last"]),
             ("codex", &["hello", "exec", "fork", "id"]),
@@ -220,6 +228,8 @@ mod tests {
             ("claude", &["-p", "Explain resume support"][..]),
             ("codex", &["exec", "resume the build"]),
             ("codex", &["exec", "-i", "a.png", "resume"]),
+            ("codex", &["exec", "-i", "-", "resume"]),
+            ("codex", &["-i", "-", "resume"]),
             ("codex", &["-m", "resume"]),
             ("codex", &["exec", "-c", "resume", "do it"]),
             ("codex", &["exec", "review"]),
