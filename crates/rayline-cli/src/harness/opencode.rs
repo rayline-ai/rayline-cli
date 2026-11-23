@@ -3,9 +3,8 @@
 //! opencode's config substitution; the key is written as a literal `apiKey`.
 //!
 //! opencode sends its session id as `x-session-affinity` on its own, which
-//! the gateway keys the episode on. Against the hosted router, `opencode -c` /
-//! `--session` keeps that episode; a local-mode `rayline run opencode` refuses them,
-//! since a saved session lacks the execution core's private history.
+//! the gateway keys the episode on. `opencode -c` / `--session` keeps that
+//! episode.
 //!
 //! OpenCode 2 runs its agent in a shared background service (port 49374) that
 //! the CLI attaches to. The service was started with its own environment, so

@@ -3,6 +3,29 @@
 User-facing changes in each Rayline release. Install commands and signed
 assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock/releases).
 
+## Unreleased
+
+### Changed
+
+- **Local mode resumes and forks harness sessions.** `rayline run <harness>
+  --mode local` no longer refuses a harness's resume or fork options, such
+  as `claude --resume`, `codex exec resume`, `pi --continue` and
+  `opencode --session`. A session the running local process didn't serve,
+  such as one saved before it started, continues as a new session with its
+  text and tool history intact, on the same model or a different one. The
+  reasoning its earlier turns carried (Claude thinking, encrypted OpenAI
+  reasoning) is not sent back to the model, because the local process can't
+  tell which model produced it.
+
+### Fixed
+
+- **Codex runs on your own Responses servers in local mode.** A server
+  that serves function tools only refused every Codex turn ("tools of type
+  'namespace' are not supported"). The local process now sends Codex's
+  grouped sub-agent tools to your servers as plain functions named
+  `<group>__<name>`, and Codex gets each call back under the group and name
+  it declared. Turns on Rayline Platform are unchanged.
+
 ## 0.5.8 (2026-11-23)
 
 ### Changed
