@@ -1,22 +1,52 @@
 # Local mode
 
 In local mode a coding harness talks to a Rayline process on your machine
-instead of to Rayline Platform. For every request, ARC picks the model, and the
-local process sends the request to one of your own inference servers listed in
-`settings.json`, or to Rayline Platform for any other model.
-
-Local mode controls where inference runs; `local.routing.router` controls
-where routing decisions are made: `cloud`, in Rayline Platform through the
-Rayline Routes API, or `local`, on your machine.
-
-| Setup | `mode` | `local.routing.router` | ARC decides | Inference runs |
-|---|---|---|---|---|
-| Cloud mode | `cloud` | – | in Rayline Platform | on Rayline Platform |
-| Local mode, cloud ARC | `local` | `cloud` | in Rayline Platform | on your servers or Rayline Platform |
-| Local mode, local ARC | `local` | `local` | on your machine | on your servers or Rayline Platform |
+instead of to Rayline Platform. Local mode lets you use local models (on your
+hardware) and your own servers alongside Rayline Platform.
+For every request, ARC picks the model, and the local process sends the
+request to one of your endpoints listed in `settings.json`, or to Rayline
+Platform for any other model.
 
 Cloud mode, the default, needs none of this. See
 [Getting started](getting-started.md).
+
+## Terms
+
+- **Local mode** / **cloud mode**: whether a Rayline process runs on your
+  machine.
+- **Local ARC** / **cloud ARC**: where the routing decision is made.
+  `local.routing.router` sets it: `local`, on this machine, or `cloud`, in
+  Rayline Platform through the Rayline Routes API.
+- **Local models**: models served on this machine. **Your own servers**:
+  models you host elsewhere. **Your endpoints**: the two together, plus any
+  other provider you list.
+
+Local models need local mode, but local mode doesn't need local models: for
+example, local ARC with Rayline Platform only. Local ARC and local models are
+independent: you can use either one without the other.
+
+## Setups
+
+| Setup | `mode` | `local.routing.router` | Rayline process | ARC decides |
+|---|---|---|---|---|
+| Cloud mode | `cloud` | – | none | in Rayline Platform |
+| Local mode, cloud ARC | `local` | `cloud` | on this machine | in Rayline Platform |
+| Local mode, local ARC | `local` | `local` | on this machine | on this machine |
+
+## Where inference can run
+
+In local mode, ARC chooses where each turn runs.
+
+| Setup | Rayline Platform | Local models (this machine) | Your own servers or other providers |
+|---|---|---|---|
+| Cloud mode | yes | no | no |
+| Local mode, cloud ARC | yes | yes | yes |
+| Local mode, local ARC | yes | yes | yes |
+
+Local models and your own servers are both entries in
+`local.inference.endpoints`. Any server that speaks the tool's protocol works,
+on this machine or elsewhere. With none listed, every turn runs on Rayline
+Platform.
 
 ## What you need
 
@@ -25,9 +55,9 @@ Cloud mode, the default, needs none of this. See
   or a file you pass with `--config`.
 - On macOS, macOS 13 or later.
 
-Your own inference servers are optional. With none listed, every model ARC
-picks goes to Rayline Platform. Rayline doesn't start, download or stop your
-servers, and `rayline local stop` leaves them running.
+Your endpoints are optional. With none listed, every model ARC picks goes to
+Rayline Platform. Rayline doesn't start, download or stop your endpoints, and
+`rayline local stop` leaves them running.
 
 ARC makes every routing decision. See
 [ARC pricing](https://docs.rayline.ai/arc/pricing) for how sessions are billed.
@@ -35,7 +65,7 @@ ARC makes every routing decision. See
 ## Configure
 
 Set `mode` to `local`, and add a `local` section. `local.routing` says how a
-model is picked. `local.inference` lists your own inference servers
+model is picked. `local.inference` lists your endpoints
 (`endpoints`) and the models they serve (`models`); it is optional.
 
 ```json
@@ -97,7 +127,8 @@ speaks.
 
 ### `local.inference.endpoints`
 
-These are your own inference servers, keyed by an id you choose.
+These are your endpoints, keyed by an id you choose: local models, your own
+servers, and any other provider that speaks the harness's protocol.
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
@@ -273,7 +304,7 @@ so a local-mode `rayline run pi` refuses it.
 |---|---|
 | `rayline local start [--config <file>] [--router <cloud\|local>]` | Starts the local process from the `local` section of the default config file, or of `<file>`, whatever `mode` says. The config must have `local.routing`, except with `--router`. `--router` overrides `local.routing.router`. |
 | `rayline local status [--json]` | Shows whether the local process is running, its address, and the config file and environment it was started from. `--json` prints it as JSON (see [Local decisions for your own Pi](#local-decisions-for-your-own-pi)). |
-| `rayline local stop` | Stops the local process. Your inference servers keep running. |
+| `rayline local stop` | Stops the local process. Your endpoints keep running. |
 | `rayline run <HARNESS> [--mode <cloud\|local>] [--config <file>]` | Runs the harness in the mode `--mode` names, else `RAYLINE_MODE`, else the config's `mode`. In local mode it starts the local process if it isn't running. `--config <file>` uses `<file>` instead of `~/.config/rayline/settings.json`, never merged with it. |
 
 - `--mode` and `--config` combine.

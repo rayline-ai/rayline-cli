@@ -111,7 +111,7 @@ Harness-specific options and subcommands are **kept for review** (section 9).
 |---|---|
 | `rayline local start [--config <file>] [--router <cloud\|local>]` | Start the local process from the `local` section of the default config file, or of `<file>`, whatever `mode` says. The config must have `local.routing`, except with `--router` (item 11). While it waits for the process, stderr shows `Starting the local process (ARC encoder and execution core)...` with `router` `local`, else `Starting the local process...`, and the ready line ends `(started in <s> s)`. |
 | `rayline local status [--json]` | Show whether the local process is running, its address, the config file and the environment it was started from. `--json` prints it as one JSON object (item 12). |
-| `rayline local stop` | Stop the local process. External inference servers keep running. |
+| `rayline local stop` | Stop the local process. Your endpoints keep running. |
 
 1. One local process per machine, with its state in `~/.rayline/local/`.
 2. `start` while it is running is an error that names the running process and its config file.
@@ -439,7 +439,7 @@ Rayline Platform (prod) is built in and has no entry. It serves every protocol a
 
 `local.inference` is optional. Without it, local mode runs every model ARC picks on Rayline Platform.
 
-Your own inference servers, keyed by id.
+Your endpoints, keyed by id: local models (on this machine), your own servers (hosted elsewhere), and any other provider that speaks the harness's protocol.
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|

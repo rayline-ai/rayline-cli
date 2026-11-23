@@ -33,7 +33,7 @@ The default profiles are committed in `scripts/acceptance/profiles/`:
 | `local-cloud-arc-sage` | `local` | `router` `cloud`, `decisions_model` `arc-sage-1.0` |
 | `local-router-local` | `local` | `router` `local`, `decisions_model` `arc-swift-1.0` |
 
-The local profiles list no inference servers, so every model ARC picks runs on Rayline Platform. To cover your own servers, copy a profile, add your `local.inference.endpoints` and `local.inference.models` (`docs/spec.md` section 5), and pass it in `PROFILES`. A profile's name is its file name without `.json`. The script never writes a profile or `~/.config/rayline/settings.json`.
+The local profiles list no endpoints, so every model ARC picks runs on Rayline Platform. To cover your endpoints, copy a profile, add your `local.inference.endpoints` and `local.inference.models` (`docs/spec.md` section 5), and pass it in `PROFILES`. A profile's name is its file name without `.json`. The script never writes a profile or `~/.config/rayline/settings.json`.
 
 ## Run
 
