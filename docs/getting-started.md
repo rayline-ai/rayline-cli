@@ -220,8 +220,10 @@ keeps the original as `settings.json.bak` and says so.
 
 ## Local mode
 
-Local mode routes each request through a Rayline process on your machine, so
-ARC can send it to your own inference servers. See [Local mode](local-mode.md).
+Local mode routes each request through a Rayline process on your machine.
+Local mode lets you use local models (on your
+hardware) and your own servers alongside Rayline Platform. See
+[where inference can run](local-mode.md#where-inference-can-run).
 
 ## Watch requests
 
