@@ -174,7 +174,7 @@ fn parse_daemon_lock(config_dir: &Path) -> Option<DaemonLock> {
     })
 }
 
-fn pid_is_alive(pid: u32) -> io::Result<bool> {
+pub(crate) fn pid_is_alive(pid: u32) -> io::Result<bool> {
     #[cfg(unix)]
     {
         // SAFETY: kill(pid, 0) performs an existence/permission probe only; it
