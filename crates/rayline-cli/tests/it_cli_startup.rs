@@ -289,6 +289,17 @@ fn local_mode_refuses_harness_args_before_starting_the_local_process() {
             "local mode requires a fresh harness session",
         ),
         (
+            &[
+                "run",
+                "codex",
+                "exec",
+                "--skip-git-repo-check",
+                "resume",
+                "id",
+            ],
+            "local mode requires a fresh harness session",
+        ),
+        (
             &["run", "openclaw", "--", "--container", "c"],
             "OpenClaw container mode cannot use the hybrid gateway configuration",
         ),

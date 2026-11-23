@@ -83,8 +83,8 @@ rayline run <HARNESS> [--mode <cloud|local>] [--config <file>] [HARNESS ARGS]...
 7. Each harness keeps today's behaviour in both modes, apart from what this spec removes.
 8. Local mode refuses these kept options and commands (section 9) before anything starts: `rayline run claude --isolated`, `rayline run codex app` and `rayline run codex configure`. A lone `--help`, `-h`, `--version` or `-v` (item 5) runs the harness first, so `rayline run claude --mode local --isolated --help` prints Claude Code's help. `app` and `configure` are Rayline commands only as the word right after `rayline run codex`. After Rayline's options they are codex arguments, so `rayline run codex --mode local app` passes `app` to codex.
 9. For `claude`, `codex`, `pi` and `opencode`, local mode refuses a command line that resumes or forks a saved session, before anything starts. It looks at the harness arguments before any `--`, in both the `--flag` and `--flag=value` forms, and refuses these:
-   - `claude`: `-r`, `-c`, `--resume`, `--continue`, `--fork-session`, `--resume-session-at`;
-   - `codex`: `resume` or `fork` as the first argument, or `exec resume` as the first two;
+   - `claude`: `-r`, `-c`, `--resume`, `--continue`, `--fork-session`, `--resume-session-at`, `--from-pr`, `--teleport`;
+   - `codex`: `resume` or `fork` as the command, or `exec` (or its alias `e`) with `resume` or `fork` as its command. As Codex reads it, the command is the first argument that is neither an option nor an option's value, or the second when the first is a prompt rather than one of Codex's commands, so `codex exec --skip-git-repo-check resume <id>` and `codex exec hello resume --last` are refused;
    - `pi`: `-r`, `-c`, `--resume`, `--continue`, `--fork`, `--session`, `--session-id`;
    - `opencode`: `-c`, `-s`, `--continue`, `--session`, `--fork`.
 
