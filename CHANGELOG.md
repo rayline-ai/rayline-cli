@@ -17,6 +17,15 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   reasoning) is not sent back to the model, because the local process can't
   tell which model produced it.
 
+### Fixed
+
+- **Codex runs on your own Responses servers in local mode.** A server
+  that serves function tools only refused every Codex turn ("tools of type
+  'namespace' are not supported"). The local process now sends Codex's
+  grouped sub-agent tools to your servers as plain functions named
+  `<group>__<name>`, and Codex gets each call back under the group and name
+  it declared. Turns on Rayline Platform are unchanged.
+
 ## 0.5.8 (2026-11-23)
 
 ### Changed
