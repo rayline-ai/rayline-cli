@@ -1730,7 +1730,6 @@ fn reads_anthropic_messages(harness: &str) -> bool {
 }
 
 fn require_local_args(harness: &str, args: &[OsString]) -> io::Result<()> {
-    crate::fresh_session::require_fresh_session(harness, args)?;
     match crate::harness::Harness::from_command(harness) {
         Some(harness) => harness.require_hybrid_args(args),
         None => Ok(()),

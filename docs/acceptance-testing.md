@@ -85,7 +85,7 @@ The answer never appears in the prompt: the sum and the MCP value change every r
 
 ARC picks the model of every turn; the provider models are ARC's choice and are not pinned. Each local cell line ends with `(executed <models>)`, the `executed_model` values the local process logged in `~/.rayline/local/runtime.log` during the turn.
 
-Local mode requires a fresh harness session: `rayline run` refuses the session flags of `claude`, `codex`, `opencode` and `pi` before the harness starts, so their `multi` cells are `SKIP` in local mode, with the CLI's message as the reason. The `tool` case still covers reasoning carried into a later request in local mode: the request after the tool result holds the first request's reasoning. With `local-router-local`, `rayline run` refuses `codex`, `hermes` and `openclaw` before the harness starts, since local ARC decisions read only Anthropic Messages turns, so their cells are `SKIP` with the CLI's message.
+In local mode, `multi` resumes the harness session as in cloud mode. A session the running local process didn't serve, such as one saved before the process started, continues as a new one: its history is sent with its text and tool calls, without its signed or encrypted reasoning. The `tool` case covers reasoning carried into a later request: the request after the tool result holds the first request's reasoning. With `local-router-local`, `rayline run` refuses `codex`, `hermes` and `openclaw` before the harness starts, since local ARC decisions read only Anthropic Messages turns, so their cells are `SKIP` with the CLI's message.
 
 ## Results
 

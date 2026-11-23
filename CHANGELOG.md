@@ -7,6 +7,29 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 
 ### Changed
 
+- **Local mode resumes and forks harness sessions.** `rayline run <harness>
+  --mode local` no longer refuses a harness's resume or fork options, such
+  as `claude --resume`, `codex exec resume`, `pi --continue` and
+  `opencode --session`. A session the running local process didn't serve,
+  such as one saved before it started, continues as a new session with its
+  text and tool history intact, on the same model or a different one. The
+  reasoning its earlier turns carried (Claude thinking, encrypted OpenAI
+  reasoning) is not sent back to the model, because the local process can't
+  tell which model produced it.
+
+### Fixed
+
+- **Codex runs on your own Responses servers in local mode.** A server
+  that serves function tools only refused every Codex turn ("tools of type
+  'namespace' are not supported"). The local process now sends Codex's
+  grouped sub-agent tools to your servers as plain functions named
+  `<group>__<name>`, and Codex gets each call back under the group and name
+  it declared. Turns on Rayline Platform are unchanged.
+
+## 0.5.8 (2026-11-23)
+
+### Changed
+
 - **In local mode, harnesses show the ARC model that decides (breaking).**
   Every harness's declared model is now `local/` followed by
   `local.routing.decisions_model.id`, such as `local/arc-sage-1.0`, instead
@@ -21,7 +44,10 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   as the default, instead of Claude models Rayline Platform doesn't serve.
   Claude Code's `opus`, `sonnet`, `fable` and `haiku` aliases, in skills,
   agents and `--model`, now run your ARC models too. A `--settings` you pass
-  replaces the list with Claude Code's own.
+  replaces the list with Claude Code's own. Rayline hands Claude Code the
+  list in a file of its own for each launch,
+  `~/.rayline/harness/claude-code/model-picker/<pid>-<nanos>.json`, so a long list
+  doesn't lengthen Claude Code's command line.
 
 ### Fixed
 
@@ -36,6 +62,18 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   Hugging Face answers 401 for a repo that does not exist, so `rayline local
   start` read like one. It now says Hugging Face has no public repo with that
   id, that it may not exist or may be private, and to check the spelling.
+
+### Security
+
+- **`url` 2.5.9.** It fixes RUSTSEC-2026-0592, a stack overflow in
+  `Url::origin()` on nested `blob:` URLs.
+
+### Rollback
+
+To go back to 0.5.7: run `rayline local stop`, then `rayline update
+--version 0.5.7`. A local process 0.5.8 started serves harnesses that declare
+`local/<decisions_model.id>`, and 0.5.7 declares `rayline-auto`, so stop it
+first. Plain `rayline update` would install 0.5.8 again.
 
 ## 0.5.7 (2026-11-19)
 

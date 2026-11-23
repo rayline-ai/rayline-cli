@@ -25,9 +25,8 @@
 # HUP, while a local process it started may be running. If `rayline local
 # start` fails, it stops nothing: a process it didn't start is left alone.
 # A cell a harness cannot run (no per-run MCP config) or that `rayline run`
-# refuses by design (a resumed session in local mode, a harness local ARC
-# decisions don't read) is reported as SKIP with the reason and does not count
-# as a failure.
+# refuses by design (a harness local ARC decisions don't read) is reported as
+# SKIP with the reason and does not count as a failure.
 # Exit: 0 when no cell failed, 1 when one did, 2 on a usage or config error.
 # See docs/acceptance-testing.md.
 set -uo pipefail
@@ -255,12 +254,11 @@ report_skip() {
 }
 
 # fail_or_skip <cause>: a failed turn is a SKIP when `rayline run` itself
-# refused it by design before the harness started: local mode refuses a
-# resumed session for some harnesses, and local ARC decisions refuse a harness
-# they don't read. Anything else is a FAIL.
+# refused it by design before the harness started: local ARC decisions refuse a
+# harness they don't read. Anything else is a FAIL.
 fail_or_skip() {
   local refusal
-  if refusal=$(grep -m 1 -E 'local mode requires a fresh harness session|local ARC decisions read only' <<<"$out"); then
+  if refusal=$(grep -m 1 -E 'local ARC decisions read only' <<<"$out"); then
     report_skip "$refusal"
   else
     report_fail "$1"
@@ -278,8 +276,7 @@ run_cell() {
   executed=
   cell_flags=()
   # OpenClaw continues its one persistent agent session unless told which to
-  # use; a session per cell keeps cells independent (the local process refuses
-  # a session with history it did not record).
+  # use; a session per cell keeps cells independent.
   [ "$harness" = openclaw ] && cell_flags=(--session-id "acceptance-$RUN_TOKEN-$RANDOM")
   a=$((RANDOM % 90 + 10))
   b=$((RANDOM % 90 + 10))

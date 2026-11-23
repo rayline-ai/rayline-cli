@@ -187,7 +187,7 @@ Homebrew installs update through brew.
 pub(crate) const LOCAL_PROCESS: &str = "__local-process";
 
 /// The first argument that runs the relay for Claude Code's stderr in a
-/// `rayline run claude -p` launch (section 3.2 item 14), followed by the model
+/// `rayline run claude -p` launch (section 3.2 item 13), followed by the model
 /// ids whose notices it drops. It is in no help text.
 #[cfg(unix)]
 pub(crate) const CLAUDE_STDERR: &str = "__claude-stderr";

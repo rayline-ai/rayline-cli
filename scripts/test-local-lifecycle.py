@@ -194,7 +194,9 @@ print('qualified Pi profile loaded')
             # run refuses it before launching anything.
             refused = run("codex", "--", "exec", "hello", success=False)
             assert "openai_responses" in refused and ".protocols" in refused, refused
-            run("pi", "--", "--resume", success=False)
+            # A resumed session reaches the harness: the core continues one it
+            # holds no state for as a new session.
+            assert "qualified Pi profile loaded" in run("pi", "--", "--resume")
             # Capture the actual spawned args: an agent must use the config in
             # this process, never an already-running OpenClaw Gateway.
             openclaw = harness_dir / "openclaw"
