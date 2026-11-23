@@ -3,7 +3,7 @@
 User-facing changes in each Rayline release. Install commands and signed
 assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock/releases).
 
-## Unreleased
+## 0.5.9 (2026-11-23)
 
 ### Changed
 
@@ -25,6 +25,12 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   grouped sub-agent tools to your servers as plain functions named
   `<group>__<name>`, and Codex gets each call back under the group and name
   it declared. Turns on Rayline Platform are unchanged.
+
+### Rollback
+
+To go back to 0.5.8: run `rayline local stop`, then `rayline update
+--version 0.5.8`. 0.5.8 refuses resume and fork options in local mode again.
+Plain `rayline update` would install 0.5.9 again.
 
 ## 0.5.8 (2026-11-23)
 
