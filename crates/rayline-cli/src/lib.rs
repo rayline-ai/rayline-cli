@@ -16,7 +16,6 @@ pub mod codex_app;
 pub mod config;
 pub(crate) mod credentials;
 pub(crate) mod detach;
-pub(crate) mod fresh_session;
 pub mod harness;
 pub mod hybrid;
 pub(crate) mod hybrid_profile;

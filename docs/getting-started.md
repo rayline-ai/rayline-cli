@@ -105,17 +105,11 @@ rayline run codex -- exec "summarize this repo"
 - Local mode refuses `rayline run claude --isolated`,
   `rayline run codex app` and `rayline run codex configure`. The error says
   the option isn't available in local mode.
-- Local mode also refuses to resume or fork a saved session, before anything
-  starts. It checks the harness arguments before any `--`:
-  - `claude`: `-r`, `-c`, `--resume`, `--continue`, `--fork-session`,
-    `--resume-session-at`;
-  - `codex`: `resume` or `fork` as the first argument, or `exec resume` as the
-    first two;
-  - `pi`: `-r`, `-c`, `--resume`, `--continue`, `--fork`, `--session`,
-    `--session-id`;
-  - `opencode`: `-c`, `-s`, `--continue`, `--session`, `--fork`.
-
-  Other harnesses' arguments are passed on unchecked.
+- Local mode resumes and forks saved sessions with the harness's own
+  options. A session the running local process didn't serve, such as one
+  saved before it started, continues as a new session: its text and tool
+  history are kept, and the reasoning its earlier turns carried is not sent
+  back to the model.
 - Local mode refuses OpenClaw container mode: `rayline run openclaw` with
   `OPENCLAW_CONTAINER` set to a non-empty value, or with a `--container` or
   `--container=<value>` argument.
