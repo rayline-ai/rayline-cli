@@ -312,6 +312,35 @@ so a local-mode `rayline run pi` refuses it.
   is an error. To use another file, run `rayline local stop`, then start again
   with that file.
 
+### Known issue: starting over SSH on Windows
+
+On Windows, `ssh <host> rayline local start` prints the ready line, then
+doesn't return until the local process stops. A local-mode `rayline run`
+over SSH that starts the local process does the same. The Windows OpenSSH
+server keeps the session open while any process started in it runs. In an
+interactive SSH shell the prompt comes back as usual; only closing the
+session waits. `start /b` doesn't help: the session still waits, or, when it
+ends first, the start is stopped with it. A fix is planned
+([#318](https://github.com/rayline-ai/rayline-cli/issues/318)).
+
+Until then, start the local process outside the SSH session, through WMI,
+then check it:
+
+```bash
+ssh <host> "powershell -NoProfile -Command \"Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine = \$env:USERPROFILE + '\.rayline\bin\rayline.exe local start'}\""
+ssh <host> rayline local status
+```
+
+- The first command returns once the start is under way. `ReturnValue` `0`
+  means it started; `9` means `rayline.exe` isn't at that path.
+- The start's output isn't shown. When `rayline local status` still says
+  `Local process: not running` after a minute, run `rayline local start` in
+  an interactive SSH session to see the error.
+- The process gets your saved user environment variables, not the SSH
+  session's. Save the variables your endpoints' `api_key_env` name with
+  `setx` first.
+- `rayline local stop` over SSH works as usual.
+
 ### Models
 
 The model local mode declares to each harness is `local/` followed by

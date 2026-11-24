@@ -3,6 +3,16 @@
 User-facing changes in each Rayline release. Install commands and signed
 assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock/releases).
 
+## Unreleased
+
+### Docs
+
+- **Known issue: `rayline local start` over SSH on Windows doesn't
+  return.** The local-mode docs describe the hang and a workaround: start
+  the local process through WMI (`Invoke-CimMethod ... Win32_Process`), so
+  the SSH session can close. A fix is planned
+  ([#318](https://github.com/rayline-ai/rayline-cli/issues/318)).
+
 ## 0.5.10 (2026-11-24)
 
 ### Changed (breaking)
