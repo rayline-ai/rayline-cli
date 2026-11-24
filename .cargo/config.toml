@@ -1,0 +1,4 @@
+# Windows binaries link the C runtime statically, so `rayline.exe` starts on a
+# Windows without the Visual C++ redistributable. CI checks its imports.
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]
