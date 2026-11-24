@@ -497,7 +497,8 @@ pub(crate) fn local_process_running() -> bool {
 
 /// Runs `act` when no local process of `home` runs or starts: none has
 /// state, or the runtime lock is free (taken without waiting, held while
-/// `act` runs) and none is running. Otherwise `act` doesn't run.
+/// `act` runs) and its state says none is running. State it can't read
+/// may be a running process's, so `act` doesn't run then either.
 pub(crate) fn while_no_local_process(home: &Path, act: impl FnOnce()) {
     let paths = Paths {
         dir: state_dir(home),
@@ -507,7 +508,7 @@ pub(crate) fn while_no_local_process(home: &Path, act: impl FnOnce()) {
         return;
     }
     if let Ok(Some(_lock)) = lock_file(&paths.lock(), false)
-        && !running_in(&paths.dir)
+        && matches!(running(&paths), Ok(None))
     {
         act();
     }
@@ -2429,6 +2430,30 @@ mod tests {
         .unwrap();
         while_no_local_process(&home, || ran.set(ran.get() + 1));
         assert_eq!(ran.get(), 2);
+        // A live process's record it can't read, such as an earlier
+        // release's with `routing_defaults`.
+        fs::write(
+            paths.supervisor(),
+            json!({"pid": std::process::id(), "config": "/c.json", "routing_defaults": true})
+                .to_string(),
+        )
+        .unwrap();
+        while_no_local_process(&home, || ran.set(ran.get() + 1));
+        assert_eq!(ran.get(), 2);
+        // A record of a process that has exited.
+        #[cfg(unix)]
+        {
+            let mut child = Command::new("true").spawn().unwrap();
+            child.wait().unwrap();
+            fs::write(
+                paths.supervisor(),
+                json!({"pid": child.id(), "config": "/c.json", "routing_defaults": true})
+                    .to_string(),
+            )
+            .unwrap();
+            while_no_local_process(&home, || ran.set(ran.get() + 1));
+            assert_eq!(ran.get(), 3);
+        }
         let _ = fs::remove_dir_all(&home);
     }
 
