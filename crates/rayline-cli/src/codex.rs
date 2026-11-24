@@ -71,14 +71,22 @@ pub(crate) fn profile_path(home: &Path) -> io::Result<PathBuf> {
 }
 
 /// Write the `rayline` profile for `provider` into the user's Codex home,
-/// owner-only since it holds the router key. Returns its path.
+/// owner-only since it holds the router key. Returns its path. The profile is
+/// written beside it and renamed into place, so a Codex starting meanwhile
+/// reads the old profile or the new one, never a missing or partial one (a
+/// missing profile would run on the user's own provider).
 fn write_profile(home: &Path, provider: &Provider) -> io::Result<PathBuf> {
     let path = profile_path(home)?;
     let profile = profile_toml(provider, cfg!(windows), &path.with_file_name("config.toml"))?;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    crate::harness::write_private(&path, &profile)?;
+    let tmp = path.with_file_name(format!(".{PROFILE}.config.toml.tmp-{}", std::process::id()));
+    crate::harness::write_private(&tmp, &profile)?;
+    if let Err(error) = std::fs::rename(&tmp, &path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(error);
+    }
     Ok(path)
 }
 
@@ -272,7 +280,22 @@ pub(crate) mod tests {
         });
         assert_eq!(path, default_home.join("rayline.config.toml"));
         let written = std::fs::read_to_string(&path).unwrap();
-        assert_eq!(written, provider_config_toml(&provider("arc-swift")));
+        assert_eq!(
+            written,
+            super::profile_toml(
+                &provider("arc-swift"),
+                cfg!(windows),
+                &default_home.join("config.toml")
+            )
+            .unwrap()
+        );
+        // Only the profile and the user's config are there: no temp file.
+        let mut names: Vec<_> = std::fs::read_dir(&default_home)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["config.toml", "rayline.config.toml"]);
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
