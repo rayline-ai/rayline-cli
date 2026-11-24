@@ -588,7 +588,14 @@ async fn client_leaving_a_stalled_stream_reaches_core_and_closes_the_row() {
         .unwrap();
     assert!(stream.chunk().await.unwrap().is_some());
     let active = top_snapshot(&client, &url, &token).await;
+    assert_eq!(active["totals"]["active_requests"], 1);
+    assert_eq!(active["active"].as_array().unwrap().len(), 1);
+    assert!(active["recent"].as_array().unwrap().is_empty());
     let request_id = active["active"][0]["request_id"].clone();
+    assert!(
+        !runtime.dir.join("cancelled").exists(),
+        "the core request ended before the client left"
+    );
     drop(stream);
     let deadline = Instant::now() + Duration::from_secs(5);
     while !runtime.dir.join("cancelled").exists() {

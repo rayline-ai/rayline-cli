@@ -153,7 +153,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.end_headers()
-            if json.loads(body).get("fixture_stall"):
+            if self.path == "/v1/messages" and json.loads(body).get("fixture_stall"):
                 # One event, then silence: only the gateway closing this
                 # connection (its client left) ends the wait.
                 self.wfile.write(b"data: " + b"x" * 64 + b"\n\n")
