@@ -14,8 +14,10 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   (or `~/.codex`) with `codex --profile rayline`, and writes that profile,
   `rayline.config.toml`, on every launch. Plain `codex -p rayline` then works
   without Rayline. Resuming a Rayline session with plain `codex` fails with a
-  model error; use `rayline run codex resume`. You can delete
-  `~/.rayline/harness/codex/`; your `~/.codex` is not changed.
+  model error; use `rayline run codex resume`. Your `~/.codex` is not
+  changed. Rayline no longer uses `~/.rayline/harness/codex/`, which still
+  holds the sessions of your earlier `rayline run codex` runs: delete it when
+  you no longer need them.
 - **`rayline run codex configure` is removed.** One cloud `rayline run codex`
   writes the same `rayline` profile, and keeps it current.
   `rayline run codex configure` now passes `configure` to Codex.
