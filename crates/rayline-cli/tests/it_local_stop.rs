@@ -59,29 +59,33 @@ impl Drop for Home {
     }
 }
 
-/// A long-lived child, in its own session when `detached`, as `rayline local
-/// start` starts the local process.
-fn sleeper(detached: bool) -> Child {
-    let mut command = Command::new("sleep");
-    command.arg("60").stdin(Stdio::null());
-    if detached {
-        // SAFETY: setsid is async-signal-safe and touches no Rust state.
-        unsafe {
-            command.pre_exec(|| {
-                if libc::setsid() == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
+/// A long-lived child in its own session, as `rayline local start` starts
+/// the local process. Its command line names the local process's entry
+/// point and `ready` as its ready file, as the local process's does, when
+/// `ready` is given.
+fn sleeper(home: &Home, ready: Option<PathBuf>) -> Child {
+    let mut command = Command::new("sh");
+    // `; :` keeps the shell from replacing itself with `sleep`, which would
+    // drop the arguments below from the command line.
+    command.args(["-c", "sleep 60; :", "__local-process", "--ready-file"]);
+    command.arg(ready.unwrap_or_else(|| home.0.join("elsewhere").join("ready.json")));
+    command.arg("--router-url").stdin(Stdio::null());
+    // SAFETY: setsid is async-signal-safe and touches no Rust state.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
     }
-    command.spawn().expect("start sleep")
+    command.spawn().expect("start sh")
 }
 
 #[test]
 fn stop_ends_a_local_process_that_never_became_ready() {
     let home = Home::new();
-    let mut process = sleeper(true);
+    let mut process = sleeper(&home, Some(home.state().join("ready.json")));
     home.record(process.id());
     let output = home.stop();
     assert!(
@@ -104,8 +108,8 @@ fn stop_ends_a_local_process_that_never_became_ready() {
 #[test]
 fn stop_leaves_alone_a_reused_pid_that_is_not_a_local_process() {
     let home = Home::new();
-    // Not a session leader: not a process `rayline local start` started.
-    let mut process = sleeper(false);
+    // Another home's local process, as a process that reused the pid.
+    let mut process = sleeper(&home, None);
     home.record(process.id());
     let output = home.stop();
     let alive = process.try_wait().expect("wait").is_none();

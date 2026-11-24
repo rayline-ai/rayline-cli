@@ -414,7 +414,7 @@ pub(crate) async fn stop() -> ExitCode {
             if !paths.ready().exists() {
                 // A start whose launcher was killed before the process was
                 // ready leaves only `supervisor.json`: stop it by its pid.
-                if !stop_unready(pid).await? {
+                if !stop_unready(pid, &paths).await? {
                     clear_state(&paths)?;
                     println!("Local process: not running");
                     return Ok(());
@@ -940,16 +940,17 @@ async fn launch(
         }
     }
     .await;
-    if let Err(error) = startup {
+    // An interrupt that arrived after the readiness loop's last check still
+    // stops the process: the caller must not go on to use it.
+    if startup.is_err() || interrupt.caught() {
         progress.clear();
         stop_spawned(&mut child).await?;
         clear_state(paths)?;
         if interrupt.caught() {
             interrupt.finish();
         }
-        return Err(error);
     }
-    Ok(())
+    startup
 }
 
 /// The snapshot of `repo`'s tokenizer and chat template, fetched from Hugging
@@ -1849,20 +1850,31 @@ async fn stop_spawned(child: &mut Child) -> io::Result<()> {
 }
 
 /// Stop the local process `pid` that has no ready file yet, as a failed
-/// start stops the one it spawned. `false` when `pid` is not a local process
-/// (the recorded one exited and its pid was reused): nothing is signalled.
-async fn stop_unready(pid: i32) -> io::Result<bool> {
-    // The local process leads its own session (`spawn_detached`).
-    // SAFETY: getsid takes a plain pid and touches no memory.
+/// start stops the one it spawned. `false` when `pid` is not the local
+/// process of `paths` (the recorded one exited and its pid was reused):
+/// nothing is signalled.
+async fn stop_unready(pid: i32, paths: &Paths) -> io::Result<bool> {
     #[cfg(unix)]
-    if unsafe { libc::getsid(pid) } != pid {
+    if !runs_local_process(pid, &paths.ready()) {
         return Ok(false);
     }
     // On Windows only a local process has the stop event named for its pid.
-    match request_supervisor_stop(pid) {
-        Ok(()) => {}
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
-        Err(error) => return Err(error),
+    // It creates the event as it starts, just after `supervisor.json` is
+    // written, so a live `pid` without one gets a moment to create it.
+    #[cfg(windows)]
+    let _ = paths;
+    let event_by = Instant::now() + Duration::from_secs(2);
+    loop {
+        match request_supervisor_stop(pid) {
+            Ok(()) => break,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                if cfg!(unix) || Instant::now() >= event_by || !process_exists(pid)? {
+                    return Ok(false);
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            Err(error) => return Err(error),
+        }
     }
     let deadline = Instant::now() + Duration::from_secs(7);
     while process_exists(pid)? {
@@ -2041,6 +2053,24 @@ fn process_is_zombie(pid: i32) -> bool {
         .and_then(|output| output.status.success().then_some(output.stdout))
         .map(|stdout| String::from_utf8_lossy(&stdout).contains('Z'))
         .unwrap_or(false)
+}
+
+/// Whether `pid` runs `rayline local start`'s local process for the ready
+/// file `ready`, by its command line.
+#[cfg(unix)]
+fn runs_local_process(pid: i32, ready: &Path) -> bool {
+    Command::new("ps")
+        .args(["-ww", "-o", "command=", "-p", &pid.to_string()])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .is_some_and(|output| {
+            let command = String::from_utf8_lossy(&output.stdout);
+            command.contains(&format!(" {} ", crate::cli::LOCAL_PROCESS))
+                && command.contains(&format!(" --ready-file {} ", ready.display()))
+        })
 }
 
 #[cfg(unix)]
