@@ -2056,30 +2056,102 @@ fn process_is_zombie(pid: i32) -> bool {
 }
 
 /// Whether `pid` runs `rayline local start`'s local process for the ready
-/// file `ready`, by its command line.
-/// `ps` joins the arguments with spaces; `launch` passes `--router-url`
-/// right after the ready file, which marks where its path ends. A command
-/// line that can't be read is an error, so the record of a process that may
-/// still run is kept.
+/// file `ready`: its arguments, read exactly, name the local process's entry
+/// point and `--ready-file <ready>`, followed by `--router-url` as `launch`
+/// passes them. Arguments that can't be read are an error while `pid`
+/// exists, so the record of a process that may still run is kept.
 #[cfg(unix)]
 fn runs_local_process(pid: i32, ready: &Path) -> io::Result<bool> {
-    let output = Command::new("ps")
-        .args(["-ww", "-o", "command=", "-p", &pid.to_string()])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()?;
-    if !output.status.success() {
-        // `ps` fails for a pid that has exited.
-        if process_exists(pid)? {
-            return Err(io::Error::other(format!("ps -p {pid}: {}", output.status)));
+    let args = match process_args(pid) {
+        Ok(args) => args,
+        Err(error) => {
+            return if process_exists(pid)? {
+                Err(error)
+            } else {
+                Ok(false)
+            };
         }
-        return Ok(false);
+    };
+    let ready = ready.as_os_str();
+    Ok(args.iter().any(|arg| arg == crate::cli::LOCAL_PROCESS)
+        && args.windows(3).any(|window| {
+            window[0] == "--ready-file" && window[1] == ready && window[2] == "--router-url"
+        }))
+}
+
+/// The arguments `pid` was started with, byte for byte.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn process_args(pid: i32) -> io::Result<Vec<OsString>> {
+    use std::os::unix::ffi::OsStrExt;
+    let bytes = fs::read(format!("/proc/{pid}/cmdline"))?;
+    let bytes = bytes.strip_suffix(&[0]).unwrap_or(&bytes);
+    Ok(bytes
+        .split(|byte| *byte == 0)
+        .map(|arg| std::ffi::OsStr::from_bytes(arg).to_os_string())
+        .collect())
+}
+
+/// The arguments `pid` was started with, byte for byte: `KERN_PROCARGS2`
+/// gives argc, the executable path, padding, then the arguments, each
+/// NUL-terminated.
+#[cfg(target_os = "macos")]
+fn process_args(pid: i32) -> io::Result<Vec<OsString>> {
+    use std::os::unix::ffi::OsStrExt;
+    let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
+    let mut size: libc::size_t = 0;
+    // SAFETY: `mib` holds 3 valid names; a null buffer asks only for the
+    // size, written to `size`.
+    if unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            3,
+            std::ptr::null_mut(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    } != 0
+    {
+        return Err(io::Error::last_os_error());
     }
-    let command = String::from_utf8_lossy(&output.stdout);
-    Ok(
-        command.contains(&format!(" {} ", crate::cli::LOCAL_PROCESS))
-            && command.contains(&format!(" --ready-file {} --router-url ", ready.display())),
-    )
+    let mut buffer = vec![0_u8; size];
+    // SAFETY: `buffer` holds `size` writable bytes; sysctl writes at most
+    // that many and stores the count in `size`.
+    if unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            3,
+            buffer.as_mut_ptr().cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    } != 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    buffer.truncate(size);
+    let invalid = || io::Error::from(io::ErrorKind::InvalidData);
+    let (argc, rest) = buffer.split_first_chunk::<4>().ok_or_else(invalid)?;
+    let argc = usize::try_from(i32::from_ne_bytes(*argc)).map_err(|_| invalid())?;
+    let path_end = rest
+        .iter()
+        .position(|byte| *byte == 0)
+        .ok_or_else(invalid)?;
+    let args_start = rest[path_end..]
+        .iter()
+        .position(|byte| *byte != 0)
+        .map(|offset| path_end + offset)
+        .ok_or_else(invalid)?;
+    let args: Vec<OsString> = rest[args_start..]
+        .split(|byte| *byte == 0)
+        .take(argc)
+        .map(|arg| std::ffi::OsStr::from_bytes(arg).to_os_string())
+        .collect();
+    if args.len() != argc {
+        return Err(invalid());
+    }
+    Ok(args)
 }
 
 #[cfg(unix)]

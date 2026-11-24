@@ -17,8 +17,10 @@ impl Home {
             .duration_since(UNIX_EPOCH)
             .expect("clock")
             .as_nanos();
-        let path =
-            std::env::temp_dir().join(format!("rayline-stop-{}-{stamp}", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "rayline-stop-\u{e9}-{}-{stamp}",
+            std::process::id()
+        ));
         fs::create_dir_all(&path).expect("temporary home");
         Self(path)
     }
