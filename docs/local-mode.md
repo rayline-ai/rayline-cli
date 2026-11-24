@@ -316,30 +316,23 @@ so a local-mode `rayline run pi` refuses it.
 
 On Windows, `ssh <host> rayline local start` prints the ready line, then
 doesn't return until the local process stops. A local-mode `rayline run`
-over SSH that starts the local process does the same. The Windows OpenSSH
-server keeps the session open while any process started in it runs. In an
-interactive SSH shell the prompt comes back as usual; only closing the
-session waits. `start /b` doesn't help: the session still waits, or, when it
-ends first, the start is stopped with it. A fix is planned
+over SSH that starts the local process does the same once the harness exits.
+It happens when the SSH session has no terminal, as when you pass the command
+to `ssh`. `start /b` doesn't help: the session still waits, or, when it ends
+first, the start is stopped with it. A fix is planned
 ([#318](https://github.com/rayline-ai/rayline-cli/issues/318)).
 
-Until then, start the local process outside the SSH session, through WMI,
-then check it:
+Until then, give the session a terminal with `-tt`:
 
 ```bash
-ssh <host> "powershell -NoProfile -Command \"Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine = \$env:USERPROFILE + '\.rayline\bin\rayline.exe local start'}\""
-ssh <host> rayline local status
+ssh -tt <host> rayline local start
 ```
 
-- The first command returns once the start is under way. `ReturnValue` `0`
-  means it started; `9` means `rayline.exe` isn't at that path.
-- The start's output isn't shown. When `rayline local status` still says
-  `Local process: not running` after a minute, run `rayline local start` in
-  an interactive SSH session to see the error.
-- The process gets your saved user environment variables, not the SSH
-  session's. Save the variables your endpoints' `api_key_env` name with
-  `setx` first.
-- `rayline local stop` over SSH works as usual.
+The command returns once the local process is ready, and the process keeps
+running after the session closes. `-tt` forces a terminal even when `ssh`'s
+own input isn't one, as in a script or CI, and the output then carries
+terminal control sequences. An interactive SSH session isn't affected:
+`exit` closes it while the local process keeps running.
 
 ### Models
 
