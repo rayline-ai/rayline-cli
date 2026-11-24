@@ -29,6 +29,12 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   first. `rayline local stop` also stops a local process whose start was
   killed before it was ready.
 
+- **The local process keeps running when it can't accept a connection.**
+  Running out of file descriptors, or a client abandoning a connection
+  before it was accepted, stopped the local process and every harness
+  using it, and stopped a prompt counter's server for good. The local
+  process's servers now log the error, wait briefly and accept again.
+
 ## 0.5.9 (2026-11-23)
 
 ### Changed
