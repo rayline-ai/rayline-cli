@@ -83,11 +83,6 @@ struct Supervisor {
     /// started with one.
     #[serde(default)]
     classifier_model: Option<String>,
-    /// Started from the `--router` defaults (no `local.routing` in its
-    /// config): a `rayline run --mode local` without `local.routing` runs on
-    /// it.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    routing_defaults: bool,
     /// The `local.inference.endpoints` key of each local deployment, by
     /// deployment id, as its config said at start: `rayline top` names
     /// where a request ran by it.
@@ -527,26 +522,6 @@ fn running_in(dir: &Path) -> bool {
     )
 }
 
-/// The router of the running local process when it was started from the
-/// `--router` defaults, for a `rayline run --mode local` to load them. Reads its
-/// state without creating anything; state it can't read is none.
-pub(crate) fn running_from_routing_defaults() -> Option<crate::config::Router> {
-    let home = crate::home().ok()?;
-    match running(&Paths {
-        dir: state_dir(&home),
-    }) {
-        Ok(Some(Supervisor {
-            routing_defaults: true,
-            router: Some(router),
-            ..
-        })) => Some(match router {
-            RouterSource::Cloud => crate::config::Router::Cloud,
-            RouterSource::Local { .. } => crate::config::Router::Local,
-        }),
-        _ => None,
-    }
-}
-
 /// The `local.inference.endpoints` key of each local deployment of the
 /// running local process, as its config said when it started. `None` while
 /// no local process runs.
@@ -557,23 +532,6 @@ pub(crate) fn running_endpoints(
         dir: state_dir(home),
     })?
     .map(|supervisor| supervisor.endpoints))
-}
-
-/// Refuses a run's launch from the `--router` defaults: they serve a
-/// run only on the process started from them, which has stopped since the
-/// run loaded them.
-fn may_launch(settings: &Settings) -> io::Result<()> {
-    if settings
-        .routing
-        .as_ref()
-        .is_some_and(|routing| routing.defaults)
-    {
-        return Err(io::Error::other(format!(
-            "{}: `local.routing` is required in local mode",
-            settings.file.display()
-        )));
-    }
-    Ok(())
 }
 
 /// The home directory and the local process's state directory, created
@@ -625,7 +583,6 @@ async fn run_harness(
             }
             // Progress goes to stderr: the harness owns stdout.
             None => {
-                may_launch(settings)?;
                 launch(&home, &paths, settings, &|line| eprintln!("{line}")).await?;
             }
         }
@@ -880,10 +837,6 @@ async fn launch(
                 .routing
                 .as_ref()
                 .and_then(|routing| routing.classifier_model.clone()),
-            routing_defaults: settings
-                .routing
-                .as_ref()
-                .is_some_and(|routing| routing.defaults),
             endpoints: crate::hybrid_profile::endpoint_keys(settings),
         };
         write_private_json(
@@ -2838,7 +2791,6 @@ mod tests {
             env: None,
             harness_protocol: None,
             router: None,
-            routing_defaults: None,
         })
         .unwrap();
         let withheld = [
@@ -3212,7 +3164,6 @@ mod tests {
             env,
             harness_protocol: None,
             router: None,
-            routing_defaults: None,
         })
         .unwrap()
     }
@@ -3235,7 +3186,6 @@ mod tests {
             }),
             decisions_model: Some("arc-swift-1.0".to_owned()),
             classifier_model: None,
-            routing_defaults: false,
         };
         let state = json!({"listen_url": "http://127.0.0.1:5000",
                            "routes_url": "http://127.0.0.1:5001/v1/routes"});
@@ -3276,7 +3226,6 @@ mod tests {
             router: Some(RouterSource::Cloud),
             decisions_model: None,
             classifier_model: None,
-            routing_defaults: false,
         };
         let error = running.check_runs("claude").unwrap_err().to_string();
         assert!(error.contains("earlier Rayline"), "{error}");
@@ -3323,49 +3272,6 @@ mod tests {
         assert!(
             error.contains(r#""classifier_model": "<model id>""#),
             "{error}"
-        );
-    }
-
-    #[test]
-    fn a_run_never_starts_a_process_from_the_router_defaults() {
-        let dir = temp_dir("defaults-gone");
-        let mut settings = local_settings(&dir, "a.json", None);
-        may_launch(&settings).unwrap();
-        if let Some(routing) = settings.routing.as_mut() {
-            routing.defaults = true;
-        }
-        let error = may_launch(&settings).unwrap_err().to_string();
-        assert!(
-            error.ends_with("`local.routing` is required in local mode"),
-            "{error}"
-        );
-    }
-
-    #[test]
-    fn a_process_started_from_the_router_defaults_says_so_in_its_record() {
-        let mut record = Supervisor {
-            endpoints: Default::default(),
-            pid: 1,
-            config: PathBuf::from("/c.json"),
-            env: None,
-            router: Some(RouterSource::Cloud),
-            decisions_model: Some("d".to_owned()),
-            classifier_model: None,
-            routing_defaults: false,
-        };
-        // Other records are written as before.
-        let written = serde_json::to_value(&record).unwrap();
-        assert!(written.get("routing_defaults").is_none(), "{written}");
-        assert_eq!(
-            serde_json::from_value::<Supervisor>(written).unwrap(),
-            record
-        );
-        record.routing_defaults = true;
-        let written = serde_json::to_value(&record).unwrap();
-        assert_eq!(written["routing_defaults"], true);
-        assert_eq!(
-            serde_json::from_value::<Supervisor>(written).unwrap(),
-            record
         );
     }
 
@@ -3449,7 +3355,6 @@ mod tests {
             router: Some(RouterSource::of(&started)),
             decisions_model: Some("arc-swift-1.0".to_owned()),
             classifier_model: None,
-            routing_defaults: false,
         };
         supervisor.check_serves(&started).unwrap();
         assert_eq!(supervisor.router, Some(RouterSource::Cloud));
@@ -3621,7 +3526,6 @@ mod tests {
                 router: Some(RouterSource::Cloud),
                 decisions_model: None,
                 classifier_model: None,
-                routing_defaults: false,
             })
         );
         let error = record(u64::from(u32::MAX)).unwrap_err().to_string();
@@ -3633,15 +3537,20 @@ mod tests {
             assert_eq!(record(u64::from(child.id())).unwrap(), None);
         }
 
-        // A live process's record with an unknown field is an error.
-        fs::write(
-            paths.supervisor(),
-            json!({"pid": std::process::id(), "config": "/c.json", "env": null, "port": 9})
-                .to_string(),
-        )
-        .unwrap();
-        let error = running(&paths).unwrap_err().to_string();
-        assert!(error.contains("supervisor.json"), "{error}");
+        // A live process's record with an unknown field is an error, such as
+        // `routing_defaults` from a release that started from defaults.
+        for (field, value) in [("port", json!(9)), ("routing_defaults", json!(true))] {
+            let mut record = json!({"pid": std::process::id(), "config": "/c.json",
+                                    "env": null, "router": {"mode": "cloud"}});
+            record[field] = value;
+            fs::write(paths.supervisor(), record.to_string()).unwrap();
+            let error = running(&paths).unwrap_err().to_string();
+            assert!(error.contains("supervisor.json"), "{error}");
+            assert!(
+                error.contains(&format!("unknown field `{field}`")),
+                "{error}"
+            );
+        }
         let _ = fs::remove_dir_all(&dir);
     }
 }

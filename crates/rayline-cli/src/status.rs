@@ -1560,7 +1560,6 @@ mod tests {
                 env,
                 harness_protocol: None,
                 router: None,
-                routing_defaults: None,
             },
         )
         .map(|settings| hosted_environment(&settings))

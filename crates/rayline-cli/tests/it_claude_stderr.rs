@@ -1,5 +1,5 @@
 //! The relay a `rayline run claude -p` launch puts Claude Code's stderr
-//! through (docs/spec.md section 3.2 item 13), run as the installed binary.
+//! through (docs/spec.md section 3.2 item 15), run as the installed binary.
 #![cfg(unix)]
 
 use std::io::{Read, Write};

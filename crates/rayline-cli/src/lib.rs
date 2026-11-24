@@ -147,14 +147,6 @@ pub async fn run_argv(original_argv: &[OsString]) -> ExitCode {
             cli::Command::Local(cli::Local::Start { router, .. }) => *router,
             _ => None,
         },
-        // A local-mode run whose config has no `local.routing` uses the
-        // `--router` defaults the running local process started from; the
-        // process still serves only its own config file.
-        routing_defaults: if matches!(&command, cli::Command::Run(_)) {
-            hybrid::running_from_routing_defaults()
-        } else {
-            None
-        },
     }) {
         Ok(settings) => settings,
         Err(error) => {

@@ -205,8 +205,6 @@ pub struct Routing {
     pub policy: Policy,
     pub router: Router,
     pub arc_release: Option<ArcRelease>,
-    /// The file has no `local.routing`: this is the `--router` defaults.
-    pub defaults: bool,
 }
 
 impl Routing {
@@ -343,16 +341,8 @@ pub struct LoadOptions<'a> {
     /// `rayline local start --router`: `local.routing.router`, over the
     /// file's and the env's.
     pub router: Option<Router>,
-    /// A local-mode `rayline run` while a local process started from the
-    /// `--router` defaults runs: that process's router, whose defaults a
-    /// file without `local.routing` uses.
-    pub routing_defaults: Option<Router>,
 }
 
-/// `rayline local start --router` with no `local.routing` in the file: the
-/// routing it starts with.
-pub const DEFAULT_DECISIONS_MODEL: &str = "arc-swift-1.0";
-pub const DEFAULT_POLICY_PRESET: &str = "arc-policy.prefer-local.v1";
 /// Where local mode is documented.
 const LOCAL_MODE_DOCS: &str = "https://docs.rayline.ai/rayline-cli/local-mode";
 
@@ -555,22 +545,6 @@ fn load_from(
         models,
         routing,
     } = raw.local.unwrap_or_default();
-    // `--router` without `local.routing` starts from its defaults, which
-    // env overrides refine like a file's; the flag itself wins over both. A
-    // run on a local process started that way uses them too.
-    let routing = match (routing, options.router.or(options.routing_defaults)) {
-        (None, Some(router)) if uses_local => Some(RawRouting {
-            decisions_model: Some(RawModel {
-                id: Some(DEFAULT_DECISIONS_MODEL.to_owned()),
-                v_value: None,
-            }),
-            preset: Some(DEFAULT_POLICY_PRESET.to_owned()),
-            router: Some(router),
-            defaults: true,
-            ..RawRouting::default()
-        }),
-        (routing, _) => routing,
-    };
     let routing = match routing {
         Some(routing) if !uses_local => {
             doc.check_router_local(&routing)?;
@@ -908,7 +882,7 @@ struct RawLocal {
     routing: Option<RawRouting>,
 }
 
-/// `local.routing` as written, or the `--router` defaults.
+/// `local.routing` as written.
 #[derive(Default)]
 struct RawRouting {
     decisions_model: Option<RawModel>,
@@ -917,7 +891,6 @@ struct RawRouting {
     overrides: Option<Map<String, Value>>,
     router: Option<Router>,
     arc_release: Option<ArcRelease>,
-    defaults: bool,
 }
 
 /// The `id` override of a model object, and its `v_value` override where it
@@ -1505,7 +1478,6 @@ impl<'a> Doc<'a> {
             },
             router,
             arc_release: routing.arc_release,
-            defaults: routing.defaults,
         })
     }
 
@@ -1951,7 +1923,6 @@ pub(crate) mod tests {
             env: None,
             harness_protocol: None,
             router: None,
-            routing_defaults: None,
         }
     }
 
@@ -2242,7 +2213,6 @@ pub(crate) mod tests {
             routing.policy.overrides.clone().map(Value::Object),
             Some(example()["local"]["routing"]["policy"]["overrides"].clone())
         );
-        assert!(!routing.defaults);
         assert_eq!(
             settings.environments["dev"].login_url.as_str(),
             "https://platform.dev.example.com/cli-auth"
@@ -3445,117 +3415,68 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn decisions_local_starts_without_a_routing_section() {
+    fn router_flag_needs_a_routing_section() {
         let with = |router| LoadOptions {
             router: Some(router),
             ..opts(START)
         };
-        // A new user's default file: the local decisions defaults.
+        // A new user's default file has no `local`.
         let empty = temp_home();
-        let routing = load(&empty, with(Router::Local))
-            .expect("no file")
-            .routing
-            .expect("routing");
-        assert_eq!(routing.router, Router::Local);
-        assert_eq!(routing.decisions_model.id, DEFAULT_DECISIONS_MODEL);
-        assert_eq!(routing.decisions_model.v_value, None);
-        assert_eq!(routing.policy.preset, DEFAULT_POLICY_PRESET);
-        assert_eq!(routing.classifier_model, None);
-        assert!(routing.defaults);
-        // A local-mode run on a process started from them loads the same
-        // routing.
-        let run_on_it = LoadOptions {
-            routing_defaults: Some(Router::Local),
-            ..opts(run(Some(Mode::Local)))
-        };
-        assert_eq!(
-            load(&empty, run_on_it).expect("run").routing,
-            Some(routing.clone())
-        );
-        // Claude Code's snippet: this routing, with `classifier_model`.
-        let snippet: Value =
-            serde_json::from_str(&routing.with_classifier_model()).expect("snippet is JSON");
-        assert_eq!(
-            snippet,
-            json!({"mode": "local", "local": {"routing": {"router": "local",
-                "decisions_model": {"id": DEFAULT_DECISIONS_MODEL},
-                "policy": {"preset": DEFAULT_POLICY_PRESET}, "classifier_model": "<model id>"}}})
-        );
-        // `cloud` has the same defaults, with its own router.
-        let cloud = load(&empty, with(Router::Cloud))
-            .expect("no local.routing")
-            .routing
-            .expect("routing");
-        assert_eq!(
-            cloud,
-            Routing {
-                router: Router::Cloud,
-                ..routing.clone()
-            }
-        );
-        // A run on a process started from the cloud defaults loads them.
-        let run_on_cloud = LoadOptions {
-            routing_defaults: Some(Router::Cloud),
-            ..opts(run(Some(Mode::Local)))
-        };
-        assert_eq!(
-            load(&empty, run_on_cloud).expect("run").routing,
-            Some(cloud.clone())
-        );
-        // So does a `--config` file in local mode with no `local.routing`.
+        let no_local = format!("is required in local mode. See {LOCAL_MODE_DOCS}");
+        for router in [Router::Local, Router::Cloud] {
+            assert_eq!(
+                key_error(load(&empty, with(router))),
+                ("local".to_owned(), no_local.clone())
+            );
+        }
+        // A `local` without `routing`, and an override of a key it lacks.
         let file = empty.join("x.json");
         fs::write(&file, r#"{"mode": "local", "local": {}}"#).expect("write");
-        let run_file_on_cloud = LoadOptions {
-            routing_defaults: Some(Router::Cloud),
-            ..opts(run_file(&file))
+        let start_file = LoadOptions {
+            router: Some(Router::Local),
+            ..opts(start_file(&file))
         };
         assert_eq!(
-            load(&empty, run_file_on_cloud).expect("run").routing,
-            Some(cloud)
+            key_error(load(&empty, start_file)),
+            (
+                "local.routing".to_owned(),
+                "is required in local mode".to_owned()
+            )
         );
-        // Over a file's `local.routing`, only `router` changes.
+        assert_eq!(
+            env_error(load_env(
+                &empty,
+                start_file,
+                &[("RAYLINE_LOCAL_ROUTING_CLASSIFIER_MODEL", "c")],
+            )),
+            (
+                "RAYLINE_LOCAL_ROUTING_CLASSIFIER_MODEL",
+                "is set, but the config file has no `local.routing`".to_owned()
+            )
+        );
+        // Over a file's `local.routing`, only `router` changes, and the flag
+        // wins over `RAYLINE_LOCAL_ROUTING_ROUTER`.
         let home = temp_home();
         write_default(&home, &example());
         let file = load(&home, opts(START))
             .expect("file")
             .routing
             .expect("routing");
-        let flagged = load(&home, with(Router::Local))
-            .expect("flagged")
-            .routing
-            .expect("routing");
-        assert_eq!(flagged.router, Router::Local);
-        assert_eq!(flagged.decisions_model, file.decisions_model);
-        assert_eq!(flagged.policy, file.policy);
-        assert_eq!(flagged.classifier_model, file.classifier_model);
-        assert!(!flagged.defaults);
-        // A file's `local.routing` wins over the defaults a run would use.
-        assert_eq!(load(&home, run_on_it).expect("run").routing, Some(file));
-
-        // Commands that use no `local.routing` don't read its overrides, so
-        // a process started this way can be checked and stopped.
-        load_env(
-            &empty,
-            opts(Command::Other),
-            &[("RAYLINE_LOCAL_ROUTING_CLASSIFIER_MODEL", "")],
-        )
-        .expect("status and stop load");
-        // Env overrides refine the defaults; the flag still wins over
-        // `RAYLINE_LOCAL_ROUTING_ROUTER`.
-        let routing = load_env(
-            &empty,
+        let flagged = load_env(
+            &home,
             with(Router::Local),
-            &[
-                ("RAYLINE_LOCAL_ROUTING_ROUTER", "cloud"),
-                ("RAYLINE_LOCAL_ROUTING_CLASSIFIER_MODEL", "c"),
-            ],
+            &[("RAYLINE_LOCAL_ROUTING_ROUTER", "cloud")],
         )
-        .expect("env")
+        .expect("flagged")
         .routing
         .expect("routing");
-        assert_eq!(routing.router, Router::Local);
-        assert_eq!(routing.classifier_model.as_deref(), Some("c"));
-        assert_eq!(routing.decisions_model.id, DEFAULT_DECISIONS_MODEL);
+        assert_eq!(
+            flagged,
+            Routing {
+                router: Router::Local,
+                ..file
+            }
+        );
     }
 
     #[test]
