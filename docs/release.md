@@ -35,7 +35,11 @@ The release workflow uploads:
   the licenses of the llama.cpp and CUDA code it bundles (those platforms'
   archives carry both; Intel macOS and Windows ship without them);
 - `SHA256SUMS` covering every uploaded binary, archive, license and provenance
-  file, and `SHA256SUMS.minisig`, its minisign signature;
+  file, and `SHA256SUMS.minisig`, its minisign signature, whose trusted
+  comment names the release's full version (`version:<version>`, the
+  `cli/v<version>/` path segment); `rayline update` and the ARC encoder check
+  reject a `SHA256SUMS` signed for another version, so an older release can't
+  be served under a newer one's path;
 - `latest.txt`, the release's version pointer, and `latest.txt.minisig`, its
   minisign signature.
 
@@ -92,10 +96,10 @@ pointer or its signature will no longer match.
 > *authentic*, not *fresh*. An attacker who can serve content may replay an
 > older, validly-signed `latest.txt` to freeze users on a stale head, or pin
 > them to an old (still validly-signed) version above their installed one.
-> Without `--version` or `--force`, the client refuses to roll *below* the
-> installed version (`target > current`). `--version` installs any other
-> version and `--force` installs regardless, so either can install an older
-> version. Full anti-rollback needs freshness — a signed timestamp + expiry or a
+> Without `--version`, the client refuses to roll *below* the installed
+> version, with or without `--force` (`--force` only reinstalls the same
+> version). `--version` installs any other version, so it can install an
+> older one. Full anti-rollback needs freshness — a signed timestamp + expiry or a
 > highest-seen-version floor — which is tracked as a follow-up, not delivered by
 > pointer signing alone.
 

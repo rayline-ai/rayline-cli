@@ -3,6 +3,23 @@
 User-facing changes in each Rayline release. Install commands and signed
 assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock/releases).
 
+## Unreleased
+
+### Security
+
+- **Updates and the ARC encoder check reject another release's signed
+  checksums.** A release's `SHA256SUMS` signature now names its version,
+  and `rayline update` and the encoder check in `~/.rayline/arc/<version>/`
+  require it to match the version they fetch. A release host could
+  otherwise serve an older, validly signed release under a newer version.
+  `rayline update --version` still installs releases before 0.5.10, which
+  are signed without the version.
+- **`rayline update --force` no longer installs an older channel release.**
+  Without `--version`, it reinstalls the latest only when that is the
+  running version; when the running version is newer, it prints the same
+  "Already up to date" message as without `--force`. Use
+  `rayline update --version <version>` to install an older release.
+
 ## 0.5.9 (2026-11-23)
 
 ### Changed
