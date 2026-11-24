@@ -575,6 +575,33 @@ async fn client_cancellation_reaches_core_and_core_crash_stops_gateway() {
 }
 
 #[tokio::test]
+async fn client_leaving_a_stalled_stream_reaches_core_and_closes_the_row() {
+    let mut runtime = Runtime::start(1);
+    let (url, token) = runtime.ready().await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let mut stream = client
+        .post(format!("{url}/v1/messages"))
+        .bearer_auth(&token)
+        .json(&json!({"model": "local/arc-sage-1.0", "stream": true, "fixture_stall": true}))
+        .send()
+        .await
+        .unwrap();
+    assert!(stream.chunk().await.unwrap().is_some());
+    let active = top_snapshot(&client, &url, &token).await;
+    let request_id = active["active"][0]["request_id"].clone();
+    drop(stream);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !runtime.dir.join("cancelled").exists() {
+        assert!(
+            Instant::now() < deadline,
+            "core did not observe a client leaving a stalled stream"
+        );
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+    assert_cancelled_snapshot(&client, &url, &token, &request_id).await;
+}
+
+#[tokio::test]
 async fn incompatible_core_never_becomes_ready_and_is_reaped() {
     let mut runtime = Runtime::start(99);
     assert!(!runtime.exited().await.success());

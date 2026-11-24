@@ -153,6 +153,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.end_headers()
+            if json.loads(body).get("fixture_stall"):
+                # One event, then silence: only the gateway closing this
+                # connection (its client left) ends the wait.
+                self.wfile.write(b"data: " + b"x" * 64 + b"\n\n")
+                self.wfile.flush()
+                self.connection.settimeout(30)
+                try:
+                    gone = self.connection.recv(1) == b""
+                except (ConnectionResetError, ConnectionAbortedError):
+                    gone = True
+                except TimeoutError:
+                    gone = False
+                if gone:
+                    pathlib.Path(config["cancelled"]).write_text("upstream observed disconnect while stalled")
+                return
             try:
                 for _ in range(2000):
                     self.wfile.write(b"data: " + b"x" * 8192 + b"\n\n")
