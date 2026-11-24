@@ -1,5 +1,3 @@
-* @chilang @madamowski
-
 /.github/ @chilang @madamowski
 /.github/workflows/release*.yml @chilang @madamowski
 /Cargo.lock @chilang @madamowski
