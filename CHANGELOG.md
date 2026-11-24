@@ -77,6 +77,10 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   before it was accepted, stopped the local process and every harness
   using it, and stopped a prompt counter's server for good. The local
   process's servers now log the error, wait briefly and accept again.
+- **`rayline` starts on Windows without the Visual C++ runtime.** On a
+  Windows without the Visual C++ redistributable (a fresh Windows Server,
+  for one), `rayline.exe` exited at once with no output. It now links the C
+  runtime statically, like the ARC encoder.
 
 ### Docs
 

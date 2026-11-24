@@ -229,7 +229,8 @@ On Windows:
 
 - It needs Windows 10 version 1903 or later, or Windows Server 2022, on
   x86_64, with an NVIDIA GPU of compute capability 7.5, 8.x, 9.0 or 12.0 and
-  NVIDIA driver 576 or later. No CUDA toolkit or Visual C++ runtime.
+  NVIDIA driver 576 or later. No CUDA toolkit or Visual C++ runtime: the
+  encoder, like `rayline.exe`, links the C runtime statically.
 - It is the encoder plus the cuBLAS DLLs it loads, `cublas64_12.dll` and
   `cublasLt64_12.dll`, about 1 GB together.
 - Windows on Arm and other GPUs aren't supported.
