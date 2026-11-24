@@ -3,7 +3,7 @@
 User-facing changes in each Rayline release. Install commands and signed
 assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock/releases).
 
-## Unreleased
+## 0.5.10 (2026-11-24)
 
 ### Security
 
@@ -28,12 +28,17 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   in the background. The interrupt now stops it and removes its state
   first. `rayline local stop` also stops a local process whose start was
   killed before it was ready.
-
 - **The local process keeps running when it can't accept a connection.**
   Running out of file descriptors, or a client abandoning a connection
   before it was accepted, stopped the local process and every harness
   using it, and stopped a prompt counter's server for good. The local
   process's servers now log the error, wait briefly and accept again.
+
+### Rollback
+
+To go back to 0.5.9: run `rayline local stop`, then `rayline update
+--version 0.5.9`. 0.5.9 doesn't check the version in a release's signature.
+Plain `rayline update` would install 0.5.10 again.
 
 ## 0.5.9 (2026-11-23)
 

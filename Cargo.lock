@@ -1464,7 +1464,7 @@ dependencies = [
 
 [[package]]
 name = "rayline-arc-decide"
-version = "0.5.9"
+version = "0.5.10"
 dependencies = [
  "rayline-arc-input",
  "serde",
@@ -1474,7 +1474,7 @@ dependencies = [
 
 [[package]]
 name = "rayline-arc-input"
-version = "0.5.9"
+version = "0.5.10"
 dependencies = [
  "fancy-regex",
  "serde_json",
@@ -1483,7 +1483,7 @@ dependencies = [
 
 [[package]]
 name = "rayline-arc-routes"
-version = "0.5.9"
+version = "0.5.10"
 dependencies = [
  "bytes",
  "futures",
@@ -1503,7 +1503,7 @@ dependencies = [
 
 [[package]]
 name = "rayline-cli"
-version = "0.5.9"
+version = "0.5.10"
 dependencies = [
  "base64 0.22.1",
  "boon",
@@ -1535,7 +1535,7 @@ dependencies = [
 
 [[package]]
 name = "rayline-daemon"
-version = "0.5.9"
+version = "0.5.10"
 dependencies = [
  "anyhow",
  "bytes",
@@ -1562,7 +1562,7 @@ dependencies = [
 
 [[package]]
 name = "rayline-hf"
-version = "0.5.9"
+version = "0.5.10"
 dependencies = [
  "anyhow",
  "reqwest",
@@ -1574,7 +1574,7 @@ dependencies = [
 
 [[package]]
 name = "rayline-local-router"
-version = "0.5.9"
+version = "0.5.10"
 dependencies = [
  "bytes",
  "http-body-util",
@@ -1587,7 +1587,7 @@ dependencies = [
 
 [[package]]
 name = "rayline-metrics"
-version = "0.5.9"
+version = "0.5.10"
 dependencies = [
  "serde",
  "serde_json",
@@ -1595,7 +1595,7 @@ dependencies = [
 
 [[package]]
 name = "rayline-tokencount"
-version = "0.5.9"
+version = "0.5.10"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
