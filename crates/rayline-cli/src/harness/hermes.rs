@@ -1188,7 +1188,8 @@ providers:
         /// exact command, with Rayline CLI's home, for both Windows shells.
         #[test]
         fn a_failed_repair_prints_the_command_with_the_home() {
-            let home = temp_dir("hermes-repair-fails").join("it's");
+            let base = temp_dir("hermes-repair-fails");
+            let home = base.join("it's");
             std::fs::create_dir_all(&home).unwrap();
             let output = (1..=20)
                 .map(|n| format!("line {n}"))
@@ -1335,7 +1336,8 @@ providers:
         /// nothing, and is tried again on the next launch.
         #[test]
         fn a_failed_extra_install_is_an_error_naming_the_home() {
-            let home = temp_dir("hermes-cloud-fails").join("it's");
+            let base = temp_dir("hermes-cloud-fails");
+            let home = base.join("it's");
             std::fs::create_dir_all(&home).unwrap();
             let shown = home.display().to_string();
             let output = (1..=20)

@@ -1473,9 +1473,7 @@ mod tests {
 
     #[test]
     fn a_missing_install_path_passes_through_and_other_resolve_failures_name_it() {
-        let root = std::env::temp_dir().join(format!("rayline-resolve-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root).unwrap();
+        let root = crate::test_dir::TestDir::new("rayline-resolve");
         let missing = root.join("missing").join("rayline");
         assert_eq!(resolve_install_path(missing.clone()).unwrap(), missing);
         // A regular file used as a directory (unix) or a name the file system
@@ -1494,14 +1492,11 @@ mod tests {
             error.starts_with(&format!("failed to resolve {}: ", unusable.display())),
             "{error}"
         );
-        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
     fn a_failing_brew_prefix_is_an_error_naming_it() {
-        let root = std::env::temp_dir().join(format!("rayline-brew-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root).unwrap();
+        let root = crate::test_dir::TestDir::new("rayline-brew");
         let missing = root.join("no-such-brew");
         let error = brew_prefix(&missing).unwrap_err().to_string();
         assert!(
@@ -1539,7 +1534,6 @@ mod tests {
                 PathBuf::from("/opt/homebrew")
             );
         }
-        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -1554,7 +1548,7 @@ mod tests {
 
     #[test]
     fn cleanup_removes_only_committed_windows_backups() -> TestResult {
-        let root = temp_update_dir()?;
+        let root = crate::test_dir::TestDir::new("rayline-update-test");
         let retired = [
             ".rayline.exe.old-123-456",
             ".rayline.exe.old-123-abcdef",
@@ -1598,7 +1592,7 @@ mod tests {
         }
         assert_eq!(fs::read_dir(&root)?.count(), retained.len() + 1);
         assert!(directory.is_dir());
-        fs::remove_dir_all(root)?;
+        root.remove()?;
         Ok(())
     }
 
@@ -1607,7 +1601,7 @@ mod tests {
     fn windows_cleanup_retries_locked_retired_backup() -> TestResult {
         use std::os::windows::fs::OpenOptionsExt;
 
-        let root = temp_update_dir()?;
+        let root = crate::test_dir::TestDir::new("rayline-update-test");
         let backup = root.join(".rayline.exe.old-123-456");
         fs::write(&backup, b"old executable")?;
         let locked = fs::OpenOptions::new()
@@ -1619,7 +1613,7 @@ mod tests {
         drop(locked);
         cleanup_retired_backups(&root.join("rayline.exe"))?;
         assert!(!backup.exists());
-        fs::remove_dir_all(root)?;
+        root.remove()?;
         Ok(())
     }
 
@@ -1638,7 +1632,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_swap_waits_for_another_process_to_release_the_file() -> TestResult {
-        let root = temp_update_dir()?;
+        let root = crate::test_dir::TestDir::new("rayline-update-test");
         let installed = root.join("rayline.exe");
         let staged = root.join("staged.exe");
         fs::write(&installed, b"original")?;
@@ -1652,14 +1646,14 @@ mod tests {
         release.join().expect("release thread");
         assert_eq!(fs::read(&installed)?, b"new");
         assert!(!staged.exists());
-        fs::remove_dir_all(root)?;
+        root.remove()?;
         Ok(())
     }
 
     #[cfg(windows)]
     #[test]
     fn windows_fresh_install_waits_for_another_process_to_release_the_file() -> TestResult {
-        let root = temp_update_dir()?;
+        let root = crate::test_dir::TestDir::new("rayline-update-test");
         let installed = root.join("rayline.exe");
         let staged = root.join("staged.exe");
         fs::write(&staged, b"new")?;
@@ -1672,14 +1666,14 @@ mod tests {
         release.join().expect("release thread");
         assert_eq!(fs::read(&installed)?, b"new");
         assert!(!staged.exists());
-        fs::remove_dir_all(root)?;
+        root.remove()?;
         Ok(())
     }
 
     #[cfg(windows)]
     #[test]
     fn windows_swap_held_past_the_wait_is_an_in_use_error_and_changes_nothing() -> TestResult {
-        let root = temp_update_dir()?;
+        let root = crate::test_dir::TestDir::new("rayline-update-test");
         let installed = root.join("rayline.exe");
         let staged = root.join("staged.exe");
         fs::write(&installed, b"original")?;
@@ -1699,14 +1693,14 @@ mod tests {
         assert!(message.contains("(os error 32)"), "{message}");
         assert_eq!(fs::read(&installed)?, b"original");
         assert_eq!(fs::read(&staged)?, b"new");
-        fs::remove_dir_all(root)?;
+        root.remove()?;
         Ok(())
     }
 
     #[cfg(windows)]
     #[test]
     fn windows_swap_defers_cleanup_and_preserves_failed_swap() -> TestResult {
-        let root = temp_update_dir()?;
+        let root = crate::test_dir::TestDir::new("rayline-update-test");
         let installed = root.join("rayline.exe");
         let staged = root.join("staged.exe");
         fs::write(&installed, b"original")?;
@@ -1718,7 +1712,7 @@ mod tests {
         cleanup_retired_backups(&installed)?;
         assert_eq!(fs::read(&installed)?, b"new");
         assert_eq!(fs::read_dir(&root)?.count(), 1);
-        fs::remove_dir_all(root)?;
+        root.remove()?;
         Ok(())
     }
 
@@ -1727,7 +1721,7 @@ mod tests {
     fn windows_retirement_failure_preserves_committed_install_and_backup() -> TestResult {
         use std::os::windows::fs::OpenOptionsExt;
 
-        let root = temp_update_dir()?;
+        let root = crate::test_dir::TestDir::new("rayline-update-test");
         let installed = root.join("rayline.exe");
         let backup = staged_install_path(&installed)?;
         fs::write(&installed, b"committed")?;
@@ -1741,13 +1735,13 @@ mod tests {
         assert_eq!(fs::read(&installed)?, b"committed");
         drop(locked);
         assert_eq!(fs::read(&backup)?, b"previous");
-        fs::remove_dir_all(root)?;
+        root.remove()?;
         Ok(())
     }
 
     #[test]
     fn core_license_installs_as_verified_nonexecutable_data() -> TestResult {
-        let root = temp_update_dir()?;
+        let root = crate::test_dir::TestDir::new("rayline-update-test");
         let source = root.join("rayline-core-LICENSE");
         let destination = root.join("installed/rayline-core-LICENSE");
         let content = b"Pinned license fixture\n";
@@ -1767,13 +1761,13 @@ mod tests {
         fs::write(&source, b"tampered license")?;
         assert!(verify_checksum(&sums, "rayline-core-LICENSE", &source).is_err());
         assert_eq!(fs::read(&destination)?, content);
-        fs::remove_dir_all(root)?;
+        root.remove()?;
         Ok(())
     }
 
     #[test]
     fn a_failed_staging_leaves_no_staged_file() -> TestResult {
-        let root = temp_update_dir()?;
+        let root = crate::test_dir::TestDir::new("rayline-update-test");
         let installed = root.join("rayline");
         fs::write(&installed, b"installed")?;
         // A missing source fails before the staged file exists; a directory
@@ -1796,7 +1790,7 @@ mod tests {
             );
             assert_eq!(fs::read(&installed)?, b"installed");
         }
-        fs::remove_dir_all(root)?;
+        root.remove()?;
         Ok(())
     }
 
@@ -2167,8 +2161,10 @@ mod tests {
 
     /// An install directory holding only `rayline`, and a request that
     /// replaces it from `server`.
-    fn install_from(server: &FakeReleaseServer) -> TestResult<(PathBuf, UpdateRequest)> {
-        let install = temp_update_dir()?;
+    fn install_from(
+        server: &FakeReleaseServer,
+    ) -> TestResult<(crate::test_dir::TestDir, UpdateRequest)> {
+        let install = crate::test_dir::TestDir::new("rayline-update-test");
         let installed = exe(&install, crate::CLI_BIN);
         fs::write(&installed, b"installed")?;
         let request = UpdateRequest {
@@ -2222,7 +2218,7 @@ mod tests {
                 [pointer.to_owned(), format!("{pointer}.minisig")]
             );
             assert_eq!(fs::read(exe(&install, crate::CLI_BIN))?, b"installed");
-            fs::remove_dir_all(install)?;
+            install.remove()?;
         }
         Ok(())
     }
@@ -2292,7 +2288,7 @@ mod tests {
             "{:?}",
             server.requests()
         );
-        fs::remove_dir_all(install)?;
+        install.remove()?;
         Ok(())
     }
 
@@ -2390,7 +2386,7 @@ mod tests {
         assert!(error.contains("is signed for version 98.0.0"), "{error}");
         assert_eq!(fs::read(exe(&install, crate::CLI_BIN))?, b"installed");
         assert!(!exe(&install, "rayline-core").exists());
-        fs::remove_dir_all(install)?;
+        install.remove()?;
         Ok(())
     }
 
@@ -2417,7 +2413,7 @@ mod tests {
         .await?;
         assert_eq!(result.exit_code, 0, "{}", result.message);
         assert_eq!(fs::read(exe(&install, crate::CLI_BIN))?, LAUNCHER);
-        fs::remove_dir_all(install)?;
+        install.remove()?;
         Ok(())
     }
 
@@ -2461,7 +2457,7 @@ mod tests {
             ["/cli/latest.txt", "/cli/latest.txt.minisig"]
         );
         assert_eq!(fs::read(exe(&install, crate::CLI_BIN))?, b"installed");
-        fs::remove_dir_all(install)?;
+        install.remove()?;
         Ok(())
     }
 
@@ -2501,7 +2497,7 @@ mod tests {
     async fn the_encoder_is_fetched_into_its_version_directory() -> TestResult {
         for platform in ["linux_x86_64", ENCODER_DLL_PLATFORM] {
             let (server, sums) = encoder_release(platform);
-            let root = temp_update_dir()?;
+            let root = crate::test_dir::TestDir::new("rayline-update-test");
             let dir = root.join("arc").join(TEST_RELEASE);
             let target = version(TEST_RELEASE);
             let lens = std::cell::RefCell::new(Vec::new());
@@ -2539,7 +2535,7 @@ mod tests {
                 .map(|entry| entry.map(|entry| entry.file_name()))
                 .collect::<io::Result<Vec<_>>>()?;
             assert_eq!(left, vec![std::ffi::OsString::from(TEST_RELEASE)]);
-            fs::remove_dir_all(root)?;
+            root.remove()?;
         }
         Ok(())
     }
@@ -2548,7 +2544,7 @@ mod tests {
     fn a_fetched_encoder_is_used_only_when_every_listed_file_matches() -> TestResult {
         let platform = ENCODER_DLL_PLATFORM;
         let (_, sums) = encoder_release(platform);
-        let dir = temp_update_dir()?;
+        let dir = crate::test_dir::TestDir::new("rayline-update-test");
         let sha_of = |path: &Path| sha256_file(path).unwrap_or_default();
         let matches = |path: &Path, sha: &str| sha_of(path) == sha;
         assert_eq!(fetched_files(&dir, &sums, platform, &matches), None);
@@ -2581,7 +2577,7 @@ mod tests {
             ),
             None
         );
-        fs::remove_dir_all(dir)?;
+        dir.remove()?;
         Ok(())
     }
 
@@ -2589,7 +2585,7 @@ mod tests {
     async fn update_refreshes_the_encoder_only_when_one_was_fetched() -> TestResult {
         let server = FakeReleaseServer::start(release_files("release-SHA256SUMS"));
         let (install, request) = install_from(&server)?;
-        let home = temp_update_dir()?;
+        let home = crate::test_dir::TestDir::new("rayline-update-test");
         let old = arc_dir(&home).join("0.5.3");
         fs::create_dir_all(&old)?;
         fs::write(old.join(encoder_file_name()), b"old encoder")?;
@@ -2644,8 +2640,8 @@ mod tests {
         assert!(!old.exists());
         assert!(new.exists());
         assert!(staging.exists());
-        fs::remove_dir_all(home)?;
-        fs::remove_dir_all(install)?;
+        install.remove()?;
+        home.remove()?;
         Ok(())
     }
 
@@ -2661,13 +2657,13 @@ mod tests {
             stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1000000\r\n\r\npartial")?;
             Ok(())
         });
-        let dir = temp_update_dir()?;
+        let dir = crate::test_dir::TestDir::new("rayline-update-test");
         let path = dir.join("encoder");
         let result = download_to(&format!("http://{address}/encoder"), &path).await;
         assert!(matches!(result, Err(UpdateError::Network(_))), "{result:?}");
         assert!(!path.exists(), "a truncated download was promoted");
         serve.join().expect("server thread")?;
-        fs::remove_dir_all(dir)?;
+        dir.remove()?;
         Ok(())
     }
 
@@ -2678,7 +2674,7 @@ mod tests {
         // in memory would never write it, and the server would report so.
         const FIRST: usize = 64 * 1024;
         let body: Vec<u8> = (0..4 * 1024 * 1024).map(|i: u32| (i % 251) as u8).collect();
-        let dir = temp_update_dir()?;
+        let dir = crate::test_dir::TestDir::new("rayline-update-test");
         let path = dir.join("big");
         let part = path.with_extension("part");
         let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
@@ -2717,7 +2713,7 @@ mod tests {
         );
         assert_eq!(fs::read(&path)?, body);
         assert!(!part.exists());
-        fs::remove_dir_all(dir)?;
+        dir.remove()?;
         Ok(())
     }
 
@@ -2739,7 +2735,7 @@ mod tests {
         assert!(message.contains("rayline-core-"), "{message}");
         assert_eq!(fs::read_dir(&install)?.count(), 1);
         assert_eq!(fs::read(exe(&install, crate::CLI_BIN))?, b"installed");
-        fs::remove_dir_all(install)?;
+        install.remove()?;
         Ok(())
     }
 
@@ -2769,7 +2765,7 @@ mod tests {
         );
         assert_eq!(fs::read_dir(&install)?.count(), 1);
         assert_eq!(fs::read(exe(&install, crate::CLI_BIN))?, b"installed");
-        fs::remove_dir_all(install)?;
+        install.remove()?;
         Ok(())
     }
 
@@ -2791,7 +2787,7 @@ mod tests {
         );
         assert_eq!(fs::read_dir(&install)?.count(), 1);
         assert_eq!(fs::read(exe(&install, crate::CLI_BIN))?, b"installed");
-        fs::remove_dir_all(install)?;
+        install.remove()?;
         Ok(())
     }
 

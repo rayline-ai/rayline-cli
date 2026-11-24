@@ -1773,9 +1773,6 @@ pub(crate) mod tests {
     use super::*;
     use serde_json::json;
     use std::collections::HashMap;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    static NEXT_HOME: AtomicU64 = AtomicU64::new(0);
 
     const GLM: &str = "z-ai/glm-5.3-flash";
     /// Key paths in [`example`], their names joined by spaces.
@@ -1783,15 +1780,8 @@ pub(crate) mod tests {
     const MD: &str = "local inference models";
     const RT: &str = "local routing";
 
-    fn temp_home() -> PathBuf {
-        let home = std::env::temp_dir().join(format!(
-            "rayline-config-test-{}-{}",
-            std::process::id(),
-            NEXT_HOME.fetch_add(1, Ordering::Relaxed)
-        ));
-        let _ = fs::remove_dir_all(&home);
-        fs::create_dir_all(&home).expect("create temp home");
-        home
+    fn temp_home() -> crate::test_dir::TestDir {
+        crate::test_dir::TestDir::new("rayline-config-test")
     }
 
     /// Local mode with cloud ARC, with every optional key and an internal

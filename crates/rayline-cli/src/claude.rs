@@ -905,9 +905,7 @@ connection: close
     async fn launch(window: Value, args: Vec<OsString>) -> Launched {
         static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
         let _guard = ENV_LOCK.lock().await;
-        let home =
-            std::env::temp_dir().join(format!("rayline-cli-refusal-launch-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&home);
+        let home = crate::test_dir::TestDir::new("rayline-cli-refusal-launch");
         crate::credentials::save_test_router_key(&home, Some("stub"), "rlk-test");
         let router_url = router_stub(window).await;
         let request = RunRequest {
@@ -995,7 +993,6 @@ connection: close
                 None => unsafe { std::env::remove_var(key) },
             }
         }
-        let _ = std::fs::remove_dir_all(&home);
         Launched {
             env,
             router_url,
@@ -1204,7 +1201,7 @@ mod claude_command_tests {
             home.join(".rayline/harness/claude-code/daemon-launches.json")
                 .is_file()
         );
-        fs::remove_dir_all(home).unwrap();
+        home.remove().unwrap();
     }
 
     /// A router key in the launcher's environment must not reach Claude Code,
@@ -1306,12 +1303,8 @@ mod claude_json_without_auth_tests {
 mod isolated_seed_tests {
     use super::*;
 
-    fn temp_dir(tag: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("rayline-claude-seed-{tag}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        dir
+    fn temp_dir(tag: &str) -> crate::test_dir::TestDir {
+        crate::test_dir::TestDir::new(&format!("rayline-claude-seed-{tag}"))
     }
 
     fn mentions(error: &io::Error, path: &Path) -> bool {
@@ -1325,7 +1318,6 @@ mod isolated_seed_tests {
         seed_isolated_claude_json(&dir.join("absent.json"), &dest).unwrap();
         let value: Value = serde_json::from_str(&fs::read_to_string(&dest).unwrap()).unwrap();
         assert_eq!(value, serde_json::json!({"hasCompletedOnboarding": true}));
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1346,7 +1338,6 @@ mod isolated_seed_tests {
         assert!(mentions(&error, &invalid), "{error}");
 
         assert!(fs::symlink_metadata(&dest).is_err());
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1355,7 +1346,6 @@ mod isolated_seed_tests {
         let dest = dir.join("no-such-dir").join(".claude.json");
         let error = seed_isolated_claude_json(&dir.join("absent.json"), &dest).unwrap_err();
         assert!(mentions(&error, &dest), "{error}");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1370,7 +1360,6 @@ mod isolated_seed_tests {
         fs::write(&taken, "mine").unwrap();
         link_shared_entry(&source, &taken).unwrap();
         assert_eq!(fs::read_to_string(&taken).unwrap(), "mine");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1382,7 +1371,6 @@ mod isolated_seed_tests {
         let error = link_shared_entry(&source, &link).unwrap_err();
         assert!(mentions(&error, &source), "{error}");
         assert!(mentions(&error, &link), "{error}");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[cfg(windows)]
@@ -1431,7 +1419,6 @@ mod isolated_seed_tests {
         let isolated_dir = parent.join("isolated");
         let error = ensure_isolated_overlay(&shared_root, &isolated_dir).unwrap_err();
         assert!(mentions(&error, &isolated_dir), "{error}");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1443,7 +1430,6 @@ mod isolated_seed_tests {
         let error = ensure_isolated_overlay(&shared_root, &dir.join("isolated")).unwrap_err();
         let first_shared_dir = shared_root.join(ISOLATED_SHARED_DIRS[0]);
         assert!(mentions(&error, &first_shared_dir), "{error}");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1462,7 +1448,6 @@ mod isolated_seed_tests {
         let error = copy_private_file(&source, &failed_dest).unwrap_err();
         assert!(mentions(&error, &source), "{error}");
         assert!(mentions(&error, &failed_dest), "{error}");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     /// A chmod that fails is an error with the path, not a file left with
@@ -1474,7 +1459,6 @@ mod isolated_seed_tests {
         let missing = dir.join("settings.json");
         let error = set_user_private_permissions(&missing).unwrap_err();
         assert!(mentions(&error, &missing), "{error}");
-        let _ = fs::remove_dir_all(&dir);
     }
 }
 
@@ -1579,11 +1563,8 @@ mod arc_default_tests {
         );
     }
 
-    fn picker_home(name: &str) -> PathBuf {
-        let home =
-            std::env::temp_dir().join(format!("rayline-cli-picker-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&home);
-        home
+    fn picker_home(name: &str) -> crate::test_dir::TestDir {
+        crate::test_dir::TestDir::new(&format!("rayline-cli-picker-{name}"))
     }
 
     // Each launch has its own file, so concurrent launches don't overwrite
@@ -1627,7 +1608,6 @@ mod arc_default_tests {
             assert_eq!(mode(&dir), 0o700);
             assert_eq!(mode(&second), 0o600);
         }
-        let _ = fs::remove_dir_all(&home);
     }
 
     // A launch that reuses an ended launch's pid has a file of its own, so
@@ -1660,7 +1640,6 @@ mod arc_default_tests {
         let probed = [&reused, &picker_settings_dir(&home).join("21-3.json")]
             .map(|path| format!("failed to check the launch of {}: probe", path.display()));
         assert!(probed.contains(&error.to_string()), "{error}");
-        let _ = fs::remove_dir_all(&home);
     }
 
     // Many listed models: the whole list is in the file and the argument is
@@ -1690,7 +1669,6 @@ mod arc_default_tests {
             write_picker_settings(&home, 30, launch_nanos(), &settings, |_| Ok(true)).unwrap();
         assert!(path.as_os_str().len() < 300, "{}", path.display());
         assert_eq!(fs::read_to_string(&path).unwrap(), settings);
-        let _ = fs::remove_dir_all(&home);
     }
 
     // A reused daemon must hold the alias models too, so its agents'

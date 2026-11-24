@@ -348,6 +348,15 @@ mod tests {
 
     #[test]
     fn restricted_directory_and_new_children_are_owner_only() {
+        // Removed if the test fails before its own checked removal.
+        struct RemoveOnDrop(Option<std::path::PathBuf>);
+        impl Drop for RemoveOnDrop {
+            fn drop(&mut self) {
+                if let Some(dir) = &self.0 {
+                    let _ = std::fs::remove_dir_all(dir);
+                }
+            }
+        }
         let dir = std::env::temp_dir().join(format!(
             "rayline-windows-state-{}-{}",
             std::process::id(),
@@ -357,6 +366,7 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir(&dir).unwrap();
+        let mut remove = RemoveOnDrop(Some(dir.clone()));
         // The temp folder grants more than the user; a fresh child inherits it.
         assert!(!is_owner_only(&dir).unwrap());
         restrict_to_owner(&dir, true).unwrap();
@@ -367,7 +377,9 @@ mod tests {
         assert!(!is_owner_only(&file).unwrap());
         restrict_to_owner(&file, false).unwrap();
         assert!(is_owner_only(&file).unwrap());
+        // The owner can still delete what it restricted.
         std::fs::remove_dir_all(&dir).unwrap();
+        remove.0 = None;
     }
 
     #[test]

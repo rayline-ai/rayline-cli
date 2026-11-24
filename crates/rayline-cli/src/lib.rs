@@ -23,6 +23,8 @@ pub(crate) mod hybrid_tokenizer;
 pub(crate) mod interrupt;
 pub(crate) mod start_progress;
 pub mod status;
+#[cfg(test)]
+mod test_dir;
 mod top;
 mod top_view;
 pub mod update;

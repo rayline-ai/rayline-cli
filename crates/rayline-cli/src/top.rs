@@ -549,15 +549,9 @@ fn utc_offset_s(unix_ms: u64) -> i64 {
 mod tests {
     use super::*;
     use std::fs;
-    use std::path::PathBuf;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
-    fn unique_test_dir(name: &str) -> PathBuf {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!("{name}-{}-{nanos}", std::process::id()))
+    fn unique_test_dir(name: &str) -> crate::test_dir::TestDir {
+        crate::test_dir::TestDir::new(name)
     }
 
     const JSON: TopRequest = TopRequest { json: true };
@@ -787,7 +781,7 @@ mod tests {
             );
             assert!(!error.contains("private-token"));
         }
-        fs::remove_dir_all(home).unwrap();
+        home.remove().unwrap();
     }
 
     #[tokio::test]
@@ -858,7 +852,7 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("readiness"), "{error}");
-        fs::remove_dir_all(home).unwrap();
+        home.remove().unwrap();
     }
 
     #[tokio::test]
@@ -904,7 +898,6 @@ mod tests {
             assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{body}");
             assert!(!error.to_string().contains("secret-body-marker"));
             server.abort();
-            fs::remove_dir_all(&home).ok();
         }
     }
 

@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 const ROUTER_KEY: &str = "rlk-test-key";
 
 struct Runtime {
-    dir: PathBuf,
+    dir: Dir,
     child: Child,
 }
 impl Drop for Runtime {
@@ -19,8 +19,22 @@ impl Drop for Runtime {
         if self.child.try_wait().ok().flatten().is_none() {
             let _ = request_stop(&self.child);
         }
+        // The directory goes after this, once the process has exited.
         let _ = self.child.wait();
-        let _ = fs::remove_dir_all(&self.dir);
+    }
+}
+
+/// A test directory, removed with everything in it when dropped.
+struct Dir(PathBuf);
+impl std::ops::Deref for Dir {
+    type Target = PathBuf;
+    fn deref(&self) -> &PathBuf {
+        &self.0
+    }
+}
+impl Drop for Dir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
     }
 }
 
@@ -197,13 +211,14 @@ impl Runtime {
         decisions_url: &str,
         raw_members: &str,
         router_key: Option<&str>,
-    ) -> (PathBuf, Command) {
+    ) -> (Dir, Command) {
         let dir = std::env::temp_dir().join(format!(
             "rayline-local-{}-{:x}",
             std::process::id(),
             rand::random::<u64>()
         ));
         fs::create_dir(&dir).unwrap();
+        let dir = Dir(dir);
         let script = install_core(&dir);
         // The fixture writes its requests to events.jsonl beside this config.
         let mut config = json!({"cancelled":dir.join("cancelled"), "contract_version":version,

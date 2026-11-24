@@ -270,12 +270,10 @@ mod tests {
 
     /// `text` loaded as the settings.json of a temp dir named after `name`.
     fn load(name: &str, text: &str) -> Settings {
-        let dir =
-            std::env::temp_dir().join(format!("rayline-core-config-{name}-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::test_dir::TestDir::new(&format!("rayline-core-config-{name}"));
         let file = dir.join("settings.json");
         std::fs::write(&file, text).unwrap();
-        let settings = crate::config::load(&crate::config::LoadOptions {
+        crate::config::load(&crate::config::LoadOptions {
             command: crate::config::Command::LocalStart {
                 config: Some(&file),
             },
@@ -283,9 +281,7 @@ mod tests {
             harness_protocol: None,
             router: None,
         })
-        .unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
-        settings
+        .unwrap()
     }
 
     /// The routing every test shares.

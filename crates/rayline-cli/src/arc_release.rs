@@ -432,12 +432,8 @@ mod tests {
         FakeHub { url, served }
     }
 
-    fn scratch(name: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("rayline-arc-release-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).expect("scratch");
-        dir
+    fn scratch(name: &str) -> crate::test_dir::TestDir {
+        crate::test_dir::TestDir::new(&format!("rayline-arc-release-{name}"))
     }
 
     /// A release's files under `runtime/`, its manifest, and the pin.
@@ -537,7 +533,6 @@ mod tests {
         .expect("cached");
         progress.release_ready();
         assert_eq!(out.text(), "ARC release cached\n");
-        let _ = fs::remove_dir_all(hub);
     }
 
     #[test]
@@ -575,7 +570,6 @@ mod tests {
             .expect("cached"),
             dir
         );
-        let _ = fs::remove_dir_all(hub);
     }
 
     #[cfg(unix)]
@@ -649,7 +643,6 @@ mod tests {
         )
         .expect_err("refused");
         assert!(error.contains("runtime/manifest.json"), "{error}");
-        let _ = fs::remove_dir_all(hub);
     }
 
     #[test]
@@ -681,7 +674,6 @@ mod tests {
             fs::read(dir.join("heads.safetensors")).expect("read"),
             b"heads"
         );
-        let _ = fs::remove_dir_all(hub);
     }
 
     #[cfg(unix)]
@@ -754,7 +746,6 @@ mod tests {
         fs::remove_file(&recorded).expect("remove");
         std::os::unix::fs::symlink(&elsewhere, &recorded).expect("link stamp");
         assert!(!stamped(&stamps, &file, &sha));
-        let _ = fs::remove_dir_all(hub);
     }
 
     #[cfg(unix)]
@@ -785,7 +776,6 @@ mod tests {
         // Settled by both times: stamped.
         assert!(hashes_to(&stamps, &file, &sha, || changed + 2 * SETTLED));
         assert!(stamped(&stamps, &file, &sha));
-        let _ = fs::remove_dir_all(hub);
     }
 
     #[test]
@@ -820,7 +810,6 @@ mod tests {
         .expect("repaired");
         assert_eq!(fs::read(&blob).expect("blob"), b"heads");
         assert_eq!(fs::read(&snapshot).expect("snapshot"), b"heads");
-        let _ = fs::remove_dir_all(hub);
     }
 
     #[test]
@@ -843,7 +832,6 @@ mod tests {
             "{error}"
         );
         assert!(error.contains("404"), "{error}");
-        let _ = fs::remove_dir_all(hub);
     }
 
     #[test]
@@ -861,7 +849,6 @@ mod tests {
         )
         .expect_err("refused");
         assert!(error.contains("outside the release"), "{error}");
-        let _ = fs::remove_dir_all(hub);
     }
 
     #[test]
@@ -909,6 +896,5 @@ mod tests {
         .expect_err("401");
         assert!(error.contains("has no access"), "{error}");
         assert!(!error.contains("hf_other"), "{error}");
-        let _ = fs::remove_dir_all(hub);
     }
 }

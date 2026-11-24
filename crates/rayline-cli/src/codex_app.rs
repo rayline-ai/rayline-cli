@@ -698,7 +698,6 @@ mod tests {
 
         // A changed model no longer matches.
         assert!(!running_app_config_matches(&app, &snippet("gpt-5.5")));
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[cfg(unix)]
@@ -718,7 +717,6 @@ mod tests {
             codex_home: Some(dir.to_string_lossy().into_owned()),
         };
         assert!(!running_app_config_matches(&empty, "anything"));
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[cfg(unix)]
@@ -734,12 +732,8 @@ mod tests {
         ));
     }
 
-    fn unique_tmp_dir(tag: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("rayline-codex-app-{tag}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        dir
+    fn unique_tmp_dir(tag: &str) -> crate::test_dir::TestDir {
+        crate::test_dir::TestDir::new(&format!("rayline-codex-app-{tag}"))
     }
 
     /// The snippet a run generates for `model`.
@@ -812,7 +806,6 @@ mod tests {
             fs::read_to_string(dir.join("config.toml")).unwrap(),
             "[desktop\nx = 1\n"
         );
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -838,7 +831,6 @@ name = \"Rayline\"
             fs::read_to_string(dir.join("config.toml")).unwrap(),
             existing
         );
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -868,7 +860,6 @@ name = \"Rayline\"
             error.to_string().contains(&path.display().to_string()),
             "{error}"
         );
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -934,7 +925,6 @@ name = \"Rayline\"
             "{invalid}"
         );
         assert!(!invalid_home.join("config.toml").exists());
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -989,8 +979,6 @@ name = \"Rayline\"
         assert!(written.contains("model = \"gpt-5.5\""));
         assert!(written.contains("[mcp_servers.foo]"));
         assert!(written.contains("[desktop]\nqueue = true"));
-        let _ = fs::remove_dir_all(&dir);
-        let _ = fs::remove_dir_all(&user_home);
     }
 
     #[cfg(unix)]
@@ -1026,8 +1014,6 @@ name = \"Rayline\"
         let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode(&dir), 0o700);
         assert_eq!(mode(&dir.join("config.toml")), 0o600);
-        let _ = fs::remove_dir_all(&dir);
-        let _ = fs::remove_dir_all(&user_home);
     }
 
     #[test]
@@ -1046,7 +1032,7 @@ name = \"Rayline\"
         }
         written.unwrap();
         crate::harness::tests::assert_only_harness_files(&home, "codex-app", &[]);
-        fs::remove_dir_all(home).unwrap();
-        fs::remove_dir_all(user_home).unwrap();
+        user_home.remove().unwrap();
+        home.remove().unwrap();
     }
 }

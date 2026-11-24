@@ -1459,10 +1459,8 @@ mod tests {
         }
     }
 
-    fn temp_home(name: &str) -> PathBuf {
-        let home =
-            std::env::temp_dir().join(format!("rayline-status-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&home);
+    fn temp_home(name: &str) -> crate::test_dir::TestDir {
+        let home = crate::test_dir::TestDir::new(&format!("rayline-status-{name}"));
         fs::create_dir_all(home.join(".config").join(crate::CONFIG_DIR)).unwrap();
         home
     }
@@ -1593,7 +1591,6 @@ mod tests {
         let explicit = resolve(Some("prod"), &home).unwrap();
         assert_eq!(explicit.base_url, "https://other.example.test");
         assert_eq!((explicit.name(), explicit.slot()), ("prod", Some("prod")));
-        let _ = fs::remove_dir_all(&home);
     }
 
     #[test]
@@ -1616,7 +1613,6 @@ mod tests {
             }
         );
         assert_eq!((dev.name(), dev.slot()), ("dev", Some("dev")));
-        let _ = fs::remove_dir_all(&home);
     }
 
     #[test]
@@ -1645,7 +1641,6 @@ mod tests {
         let error = resolve(None, &home).unwrap_err();
         assert!(matches!(error, ConfigError::Parse { .. }), "{error:?}");
         assert!(!error.to_string().contains("secret-value"), "{error}");
-        let _ = fs::remove_dir_all(&home);
     }
 
     #[test]
@@ -1685,7 +1680,6 @@ mod tests {
         let output = render_status_from_home(&dev, &home, NOW).unwrap();
         assert!(output.contains("  Environment: dev\n"), "{output}");
         assert!(output.contains("  Token:       expired"), "{output}");
-        let _ = fs::remove_dir_all(&home);
     }
 
     #[test]
@@ -1705,7 +1699,6 @@ mod tests {
             message.contains("auth login") && !message.contains("secret-value"),
             "{message}"
         );
-        let _ = fs::remove_dir_all(&home);
     }
 
     #[tokio::test]
@@ -1714,7 +1707,6 @@ mod tests {
         save_account(&home, None, account(LATER));
         let token = access_token_at(&hosted(None, UNREACHABLE), &home, NOW).await;
         assert_eq!(token.unwrap().as_deref(), Some(ACCESS_TOKEN));
-        let _ = fs::remove_dir_all(&home);
     }
 
     #[tokio::test]
@@ -1743,7 +1735,6 @@ mod tests {
         expected.session.refresh_token_expires_at = LATER + 86_400;
         assert_eq!(prod, expected);
         assert_eq!(stored(&home, Some("dev")).unwrap(), dev_before);
-        let _ = fs::remove_dir_all(&home);
     }
 
     #[tokio::test]
@@ -1763,7 +1754,6 @@ mod tests {
         assert!(matches!(error, AuthError::RefreshFailed(_)), "{error:?}");
         assert!(error.to_string().contains("HTTP 401"), "{error}");
         assert_eq!(credentials_text(&home), before);
-        let _ = fs::remove_dir_all(&home);
     }
 
     #[tokio::test]
@@ -1783,7 +1773,6 @@ mod tests {
             ),
             "{error:?}"
         );
-        let _ = fs::remove_dir_all(&home);
     }
 
     #[tokio::test]
@@ -1830,7 +1819,6 @@ mod tests {
         // Written together: the key is saved when the session signs in.
         assert_eq!(dev.router_key.saved_at, dev.session.signed_in_at);
         assert_eq!(stored(&home, None).unwrap(), prod_before);
-        let _ = fs::remove_dir_all(&home);
     }
 
     fn device_start_body(expires_in_seconds: Option<Value>) -> Value {
@@ -1983,7 +1971,6 @@ mod tests {
         );
         assert!(message.contains("Replaced invalid "), "{message}");
         assert_eq!(stored(&home, None).unwrap().router_key.api_key, "rlk-new");
-        let _ = fs::remove_dir_all(&home);
     }
 
     #[tokio::test]
@@ -2003,7 +1990,6 @@ mod tests {
             .unwrap_err();
         assert!(matches!(error, AuthError::MintFailed(_)), "{error:?}");
         assert_eq!(credentials_text(&home), before);
-        let _ = fs::remove_dir_all(&home);
     }
 
     #[tokio::test]
@@ -2034,7 +2020,6 @@ mod tests {
         assert_eq!(message, "Logged out (prod)\n");
         let text = credentials_text(&home).unwrap();
         assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), json!({}));
-        let _ = fs::remove_dir_all(&home);
     }
 
     #[tokio::test]
@@ -2053,7 +2038,6 @@ mod tests {
         );
         assert!(stored(&home, None).is_some());
         assert!(fs::read_to_string(&codex).unwrap().contains(API_KEY));
-        let _ = fs::remove_dir_all(&home);
     }
 
     #[tokio::test]
@@ -2077,7 +2061,6 @@ mod tests {
         );
         assert_eq!(stored(&home, None), None);
         assert!(!fs::read_to_string(&codex).unwrap().contains(API_KEY));
-        let _ = fs::remove_dir_all(&home);
     }
 
     #[tokio::test]
@@ -2140,7 +2123,6 @@ mod tests {
         assert!(!backups.parent().unwrap().exists(), "{}", backups.display());
         assert!(fs::read_to_string(&other).unwrap().contains("rlk-other"));
         assert_eq!(fs::read_to_string(&session).unwrap(), "{\"turn\": 1}\n");
-        let _ = fs::remove_dir_all(&home);
     }
 
     fn write_text(home: &Path, dir: &str, name: &str, text: &str) -> PathBuf {
@@ -2178,7 +2160,6 @@ mod tests {
             .unwrap_err();
         assert!(matches!(error, AuthError::Credentials(_)), "{error:?}");
         assert_eq!(credentials_text(&home).as_deref(), Some("not json"));
-        let _ = fs::remove_dir_all(&home);
     }
 
     #[tokio::test]
@@ -2202,7 +2183,6 @@ mod tests {
             stored_router_key(&prod, &home).unwrap().as_deref(),
             Some(API_KEY)
         );
-        let _ = fs::remove_dir_all(&home);
     }
 
     #[test]

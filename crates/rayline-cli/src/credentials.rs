@@ -413,7 +413,6 @@ mod tests {
         fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
         fs::write(&path, contents).expect("write");
         let error = load(&home).expect_err("invalid credentials");
-        let _ = fs::remove_dir_all(&home);
         let message = error.to_string();
         let reason = match error {
             CredentialsError::Invalid {
@@ -439,17 +438,8 @@ mod tests {
         reason
     }
 
-    fn temp_home(name: &str) -> PathBuf {
-        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("clock after epoch")
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "rayline-credentials-{name}-{}-{unique}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        ))
+    fn temp_home(name: &str) -> crate::test_dir::TestDir {
+        crate::test_dir::TestDir::new(&format!("rayline-credentials-{name}"))
     }
 
     #[test]
@@ -489,7 +479,6 @@ mod tests {
 
         assert_eq!(written, valid_file());
         assert_eq!(load(&home).expect("load"), credentials);
-        let _ = fs::remove_dir_all(&home);
     }
 
     #[test]
@@ -505,7 +494,6 @@ mod tests {
             fs::read_to_string(credentials_file(&home)).expect("read"),
             "{}"
         );
-        let _ = fs::remove_dir_all(&home);
     }
 
     #[test]
@@ -523,7 +511,6 @@ mod tests {
             message.ends_with(&format!("Run: {} auth login", crate::CLI_BIN)),
             "{message}"
         );
-        let _ = fs::remove_dir_all(&home);
     }
 
     #[test]

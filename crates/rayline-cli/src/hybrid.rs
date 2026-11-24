@@ -2316,7 +2316,8 @@ mod tests {
 
     #[test]
     fn a_failed_start_shows_the_error_the_local_process_printed() {
-        let log = temp_dir("exit-reason").join("runtime.log");
+        let dir = temp_dir("exit-reason");
+        let log = dir.join("runtime.log");
         fs::write(&log, "Error: an earlier start failed\n").unwrap();
         let start = fs::metadata(&log).unwrap().len();
         let mut file = fs::OpenOptions::new().append(true).open(&log).unwrap();
@@ -2454,7 +2455,6 @@ mod tests {
             while_no_local_process(&home, || ran.set(ran.get() + 1));
             assert_eq!(ran.get(), 3);
         }
-        let _ = fs::remove_dir_all(&home);
     }
 
     #[test]
@@ -2513,7 +2513,7 @@ mod tests {
     /// `env-names.txt` beside it. The caller holds ENV_LOCK; Drop restores
     /// `PATH`.
     struct FakeOpenCode {
-        dir: PathBuf,
+        dir: crate::test_dir::TestDir,
         prior: Option<std::ffi::OsString>,
     }
 
@@ -2583,17 +2583,8 @@ mod tests {
         }
     }
 
-    fn temp_dir(name: &str) -> PathBuf {
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|elapsed| elapsed.as_nanos())
-            .unwrap_or_default();
-        let dir = std::env::temp_dir().join(format!(
-            "rayline-local-{name}-{}-{unique}",
-            std::process::id()
-        ));
-        fs::create_dir_all(&dir).unwrap();
-        dir
+    fn temp_dir(name: &str) -> crate::test_dir::TestDir {
+        crate::test_dir::TestDir::new(&format!("rayline-local-{name}"))
     }
 
     #[cfg(unix)]
@@ -2622,7 +2613,6 @@ mod tests {
         std::os::unix::fs::symlink(&victim, state.join("runtime.log")).unwrap();
         assert!(private_log(&state.join("runtime.log")).is_err());
         assert_eq!(fs::read_to_string(&victim).unwrap(), "keep");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[cfg(unix)]
@@ -2658,7 +2648,6 @@ mod tests {
             .map(|entry| entry.unwrap().file_name())
             .collect();
         assert_eq!(names.len(), 2, "{names:?}");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[cfg(windows)]
@@ -2690,7 +2679,6 @@ mod tests {
         // A folder is not a log file.
         fs::create_dir(state.join("folder.log")).unwrap();
         assert!(private_log(&state.join("folder.log")).is_err());
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[cfg(windows)]
@@ -2711,7 +2699,6 @@ mod tests {
         drop(first);
         rx.recv_timeout(Duration::from_secs(5)).unwrap();
         waiter.join().unwrap();
-        let _ = fs::remove_dir_all(&dir);
     }
 
     /// Every file under `dir`, with its bytes.
@@ -2777,7 +2764,7 @@ mod tests {
             assert_eq!(files_under(&cloud_dir), cloud_files, "{harness:?}");
             cloud();
             assert_eq!(files_under(&local_dir), local_files, "{harness:?}");
-            fs::remove_dir_all(&home).unwrap();
+            home.remove().unwrap();
         }
     }
 
@@ -2866,7 +2853,6 @@ mod tests {
                 "{name} reached the probe"
             );
         }
-        let _ = fs::remove_dir_all(&home);
     }
 
     #[test]
@@ -3089,7 +3075,6 @@ mod tests {
                 == "model_providers.rayline-local.base_url=\"http://127.0.0.1:20815/h/codex/v1\""),
             "{args:?}"
         );
-        let _ = fs::remove_dir_all(&home);
     }
 
     #[test]
@@ -3365,7 +3350,6 @@ mod tests {
                 "{error}"
             );
         }
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -3460,7 +3444,6 @@ mod tests {
             "the local process (pid 7) was started with no `--env`, and this run has \
              `--env dev`; stop it with `rayline local stop` first"
         );
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -3474,7 +3457,6 @@ mod tests {
         assert!(!paths.ready().exists());
         // Nothing to clear is not an error.
         clear_state(&paths).unwrap();
-        let _ = fs::remove_dir_all(&dir);
     }
 
     /// `rayline top` names endpoints from the running process's record,
@@ -3499,7 +3481,6 @@ mod tests {
             endpoints.get("qwen-chat").map(String::as_str),
             Some("spark")
         );
-        let _ = fs::remove_dir_all(&home);
     }
 
     #[test]
@@ -3576,6 +3557,5 @@ mod tests {
                 "{error}"
             );
         }
-        let _ = fs::remove_dir_all(&dir);
     }
 }

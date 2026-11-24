@@ -314,7 +314,7 @@ pub(crate) mod tests {
             super::write_profile(&home, &provider("arc-sage")).unwrap()
         });
         assert_eq!(path, exported.join("rayline.config.toml"));
-        std::fs::remove_dir_all(home).unwrap();
+        home.remove().unwrap();
     }
 
     /// On Windows the profile carries the user's sandbox, else `unelevated`;
@@ -339,7 +339,7 @@ pub(crate) mod tests {
         assert_eq!(sandbox(false), None);
         let error = super::profile_toml(&provider("arc-sage"), true, &user_config).unwrap_err();
         assert!(error.to_string().contains("config.toml"), "{error}");
-        std::fs::remove_dir_all(dir).unwrap();
+        dir.remove().unwrap();
     }
 
     /// Logout deletes a profile that holds its key, and leaves one that holds
@@ -355,7 +355,7 @@ pub(crate) mod tests {
         assert!(path.exists());
         assert!(super::remove_profile(&path, "rlk-b").unwrap());
         assert!(!path.exists());
-        std::fs::remove_dir_all(dir).unwrap();
+        dir.remove().unwrap();
     }
 
     /// The launch runs the `rayline` profile ahead of the user's arguments,
@@ -419,7 +419,6 @@ pub(crate) mod tests {
                 .get_envs()
                 .any(|(key, value)| key == "RAYLINE_ROUTER_API_KEY" && value.is_none())
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
