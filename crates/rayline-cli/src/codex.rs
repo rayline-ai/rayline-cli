@@ -1,9 +1,10 @@
 //! `rayline run codex`: run Codex CLI on ARC through the Rayline router.
 //!
 //! Codex talks to the environment's router directly over the OpenAI Responses
-//! API. Rayline gives it its own `CODEX_HOME` (`~/.rayline/harness/codex/`),
-//! whose owner-only `config.toml` names the `rayline` provider, the model and
-//! the router key. The key never goes in Codex's argv or environment.
+//! API. It runs on the user's own Codex home (`CODEX_HOME`, else `~/.codex`)
+//! with `--profile rayline`. Each launch rewrites that profile,
+//! `rayline.config.toml`, owner-only: the `rayline` provider, the model and the
+//! router key. The key never goes in Codex's argv or environment.
 
 use std::ffi::OsString;
 use std::io;
@@ -13,15 +14,6 @@ use std::process::{Command, ExitCode};
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RunRequest {
     pub codex_args: Vec<OsString>,
-    /// The hosted environment the loaded config selects, whose router Codex
-    /// talks to.
-    pub hosted: crate::status::HostedEnvironment,
-    /// `cloud`: the models the launch gives the harness.
-    pub cloud: crate::config::Cloud,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ConfigureRequest {
     /// The hosted environment the loaded config selects, whose router Codex
     /// talks to.
     pub hosted: crate::status::HostedEnvironment,
@@ -61,11 +53,75 @@ pub(crate) async fn resolve_provider(
     })
 }
 
-/// The `CODEX_HOME` `rayline run codex` runs Codex CLI on.
-fn codex_home(home: &Path) -> PathBuf {
-    home.join(crate::DOT_CONFIG_DIR)
-        .join("harness")
-        .join("codex")
+/// The Codex profile a cloud `rayline run codex` writes and runs with.
+pub(crate) const PROFILE: &str = "rayline";
+
+/// The user's Codex home: `CODEX_HOME`, else `~/.codex` under `home`, Codex's
+/// own default.
+pub(crate) fn user_codex_home(home: &Path) -> io::Result<PathBuf> {
+    Ok(match crate::harness::exported_dir("CODEX_HOME")? {
+        Some(codex_home) => codex_home,
+        None => home.join(".codex"),
+    })
+}
+
+/// The `rayline` profile in the user's Codex home: `rayline.config.toml`.
+pub(crate) fn profile_path(home: &Path) -> io::Result<PathBuf> {
+    Ok(user_codex_home(home)?.join(format!("{PROFILE}.config.toml")))
+}
+
+/// Write the `rayline` profile for `provider` into the user's Codex home,
+/// owner-only since it holds the router key. Returns its path.
+fn write_profile(home: &Path, provider: &Provider) -> io::Result<PathBuf> {
+    let path = profile_path(home)?;
+    let profile = profile_toml(provider, cfg!(windows), &path.with_file_name("config.toml"))?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    crate::harness::write_private(&path, &profile)?;
+    Ok(path)
+}
+
+/// The profile's text. On Windows (`windows`) it also sets `[windows]
+/// sandbox`: the user's own value from `user_config` (their `config.toml`),
+/// else `unelevated`, since Codex with no sandbox setting rejects every shell
+/// command. A `user_config` that can't be read or parsed is an error naming it;
+/// it is read only on Windows.
+fn profile_toml(provider: &Provider, windows: bool, user_config: &Path) -> io::Result<String> {
+    let profile = provider_config_toml(provider);
+    if !windows {
+        return Ok(profile);
+    }
+    let seed = crate::codex_app::read_if_present(user_config)?;
+    crate::codex_app::with_windows_sandbox(&profile, seed.as_deref()).map_err(|error| {
+        crate::codex_app::toml_parse_error(user_config, seed.as_deref().unwrap_or(""), &error)
+    })
+}
+
+/// Delete the `rayline` profile at `path` when it holds `key`: the whole file
+/// is Rayline's, and the next cloud `rayline run codex` writes it again. A
+/// profile holding another environment's key, or none, is left alone. Returns
+/// whether it was deleted.
+pub(crate) fn remove_profile(path: &Path, key: &str) -> io::Result<bool> {
+    let in_path =
+        |error: io::Error| io::Error::new(error.kind(), format!("{}: {error}", path.display()));
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(in_path(error)),
+    };
+    if key.is_empty() || !String::from_utf8_lossy(&bytes).contains(key) {
+        return Ok(false);
+    }
+    std::fs::remove_file(path).map_err(in_path)?;
+    Ok(true)
+}
+
+/// `codex --profile rayline <args>`, on the user's own Codex home.
+fn run_command(codex_args: Vec<OsString>) -> Command {
+    let mut command = codex_command();
+    command.arg("--profile").arg(PROFILE).args(codex_args);
+    command
 }
 
 pub async fn run(request: RunRequest) -> ExitCode {
@@ -83,17 +139,11 @@ pub async fn run(request: RunRequest) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let codex_home = codex_home(&home);
-    if let Err(error) =
-        crate::codex_app::write_codex_home(&codex_home, &provider_config_toml(&provider))
-    {
-        eprintln!("Error: failed to prepare {}: {error}", codex_home.display());
+    if let Err(error) = write_profile(&home, &provider) {
+        eprintln!("Error: failed to write the Codex `{PROFILE}` profile: {error}");
         return ExitCode::from(1);
     }
-    let mut command = codex_command();
-    command.env("CODEX_HOME", &codex_home);
-    command.args(request.codex_args);
-    exec_or_status(&mut command)
+    exec_or_status(&mut run_command(request.codex_args))
 }
 
 /// Keep the router key out of Codex's environment (#84). Codex reads the key
@@ -123,8 +173,8 @@ fn toml_string(value: &str) -> String {
 }
 
 /// The Codex `config.toml` settings that point Codex at the `rayline` provider.
-/// `rayline run codex` and `rayline run codex app` merge them into their `CODEX_HOME`'s
-/// `config.toml`; `rayline run codex configure` writes them as the profile.
+/// `rayline run codex` writes them as the `rayline` profile; `rayline run codex
+/// app` merges them into its own `CODEX_HOME`'s `config.toml`.
 pub(crate) fn provider_config_toml(provider: &Provider) -> String {
     format!(
         "model = {}\nmodel_provider = \"rayline\"\n\n[model_providers.rayline]\nname = \"Rayline\"\nbase_url = {}\nwire_api = \"responses\"\nexperimental_bearer_token = {}\n",
@@ -132,28 +182,6 @@ pub(crate) fn provider_config_toml(provider: &Provider) -> String {
         toml_string(&provider.base_url),
         toml_string(&provider.key),
     )
-}
-
-/// Write the `rayline` profile to `$CODEX_HOME/rayline.config.toml` (Codex's
-/// default home is `~/.codex`), owner-only since it holds the router key.
-pub async fn configure(request: &ConfigureRequest) -> io::Result<String> {
-    let provider = resolve_provider(&request.hosted, &request.cloud)
-        .await
-        .map_err(io::Error::other)?;
-    let codex_home = match crate::harness::exported_dir("CODEX_HOME")? {
-        Some(codex_home) => codex_home,
-        None => crate::home()
-            .map_err(|error| io::Error::new(io::ErrorKind::NotFound, error))?
-            .join(".codex"),
-    };
-    std::fs::create_dir_all(&codex_home)?;
-    let profile_path = codex_home.join("rayline.config.toml");
-    crate::harness::write_private(&profile_path, &provider_config_toml(&provider))?;
-    Ok(format!(
-        "Wrote Codex Rayline profile: {}\nUse Codex profile `rayline`.\nBase URL: {}\n",
-        profile_path.display(),
-        provider.base_url
-    ))
 }
 
 #[cfg(unix)]
@@ -179,6 +207,7 @@ fn exec_or_status(command: &mut Command) -> ExitCode {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::{Provider, codex_command, codex_command_on, provider_config_toml};
+    use std::ffi::OsString;
 
     /// A provider as a launch resolves it, with a placeholder key.
     pub(crate) fn provider(model: &str) -> Provider {
@@ -210,27 +239,115 @@ pub(crate) mod tests {
         }
     }
 
-    #[test]
-    fn codex_writes_only_under_its_harness_folder() {
-        let home = crate::harness::tests::temp_dir("codex-home");
-        // The user's Codex home, with no config.toml to seed from.
-        let user_home = crate::harness::tests::temp_dir("codex-home-user");
+    /// Runs `act` with `CODEX_HOME` set to `value` (or unset), restoring it.
+    fn with_codex_home<T>(value: Option<&std::path::Path>, act: impl FnOnce() -> T) -> T {
         let saved = std::env::var_os("CODEX_HOME");
         // SAFETY: the workspace tests run with --test-threads=1; restored below.
-        unsafe { std::env::set_var("CODEX_HOME", &user_home) };
-        let written = crate::codex_app::write_codex_home(
-            &super::codex_home(&home),
-            &provider_config_toml(&provider("arc-sage")),
-        );
+        match value {
+            Some(value) => unsafe { std::env::set_var("CODEX_HOME", value) },
+            None => unsafe { std::env::remove_var("CODEX_HOME") },
+        }
+        let result = act();
         // SAFETY: as above.
         match saved {
             Some(value) => unsafe { std::env::set_var("CODEX_HOME", value) },
             None => unsafe { std::env::remove_var("CODEX_HOME") },
         }
-        written.unwrap();
-        crate::harness::tests::assert_only_harness_files(&home, "codex", &[]);
+        result
+    }
+
+    /// The profile goes into the user's Codex home, owner-only, and replaces
+    /// the last launch's; the user's own files there are left alone, and
+    /// nothing is written under `~/.rayline`.
+    #[test]
+    fn the_profile_is_written_into_the_users_codex_home() {
+        let home = crate::harness::tests::temp_dir("codex-profile");
+        let user_config = "model = \"gpt-x\"\n[mcp_servers.docs]\ncommand = \"docs-mcp\"\n";
+        let default_home = home.join(".codex");
+        std::fs::create_dir_all(&default_home).unwrap();
+        std::fs::write(default_home.join("config.toml"), user_config).unwrap();
+        let path = with_codex_home(None, || {
+            super::write_profile(&home, &provider("arc-sage")).unwrap();
+            super::write_profile(&home, &provider("arc-swift")).unwrap()
+        });
+        assert_eq!(path, default_home.join("rayline.config.toml"));
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(written, provider_config_toml(&provider("arc-swift")));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        assert_eq!(
+            std::fs::read_to_string(default_home.join("config.toml")).unwrap(),
+            user_config
+        );
+        assert!(!home.join(crate::DOT_CONFIG_DIR).exists());
+
+        // `CODEX_HOME` names the user's Codex home, created when missing.
+        let exported = home.join("elsewhere").join("codex");
+        let path = with_codex_home(Some(&exported), || {
+            super::write_profile(&home, &provider("arc-sage")).unwrap()
+        });
+        assert_eq!(path, exported.join("rayline.config.toml"));
         std::fs::remove_dir_all(home).unwrap();
-        std::fs::remove_dir_all(user_home).unwrap();
+    }
+
+    /// On Windows the profile carries the user's sandbox, else `unelevated`;
+    /// elsewhere it is the provider alone and the user's config isn't read.
+    #[test]
+    fn the_profile_sets_the_windows_sandbox_only_on_windows() {
+        let dir = crate::harness::tests::temp_dir("codex-profile-sandbox");
+        let user_config = dir.join("config.toml");
+        let sandbox = |windows| {
+            let text = super::profile_toml(&provider("arc-sage"), windows, &user_config).unwrap();
+            let doc: toml_edit::DocumentMut = text.parse().unwrap();
+            doc.get("windows")
+                .and_then(|windows| windows.get("sandbox"))
+                .and_then(|sandbox| sandbox.as_str())
+                .map(ToOwned::to_owned)
+        };
+        assert_eq!(sandbox(false), None);
+        assert_eq!(sandbox(true).as_deref(), Some("unelevated"));
+        std::fs::write(&user_config, "[windows]\nsandbox = \"elevated\"\n").unwrap();
+        assert_eq!(sandbox(true).as_deref(), Some("elevated"));
+        std::fs::write(&user_config, "not toml = = =\n").unwrap();
+        assert_eq!(sandbox(false), None);
+        let error = super::profile_toml(&provider("arc-sage"), true, &user_config).unwrap_err();
+        assert!(error.to_string().contains("config.toml"), "{error}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Logout deletes a profile that holds its key, and leaves one that holds
+    /// another environment's key.
+    #[test]
+    fn remove_profile_deletes_only_a_profile_with_the_key() {
+        let dir = crate::harness::tests::temp_dir("codex-remove-profile");
+        let path = dir.join("rayline.config.toml");
+        assert!(!super::remove_profile(&path, "rlk-a").unwrap());
+        std::fs::write(&path, "experimental_bearer_token = \"rlk-b\"\n").unwrap();
+        assert!(!super::remove_profile(&path, "rlk-a").unwrap());
+        assert!(!super::remove_profile(&path, "").unwrap());
+        assert!(path.exists());
+        assert!(super::remove_profile(&path, "rlk-b").unwrap());
+        assert!(!path.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// The launch runs the `rayline` profile ahead of the user's arguments,
+    /// on the inherited `CODEX_HOME`, without the router key.
+    #[test]
+    fn the_run_uses_the_rayline_profile_on_the_users_home() {
+        let command = super::run_command(vec![OsString::from("exec"), OsString::from("hi")]);
+        let args: Vec<_> = command.get_args().collect();
+        assert_eq!(args, ["--profile", "rayline", "exec", "hi"]);
+        assert!(command.get_envs().all(|(key, _)| key != "CODEX_HOME"));
+        assert!(
+            command
+                .get_envs()
+                .any(|(key, value)| key == "RAYLINE_ROUTER_API_KEY" && value.is_none())
+        );
     }
 
     /// #84: every Codex child is built by `codex_command`, which withholds the

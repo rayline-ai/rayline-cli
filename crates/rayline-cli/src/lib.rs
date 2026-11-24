@@ -275,7 +275,7 @@ async fn run_local(run: cli::Run, settings: &config::Settings) -> ExitCode {
         cli::Launch::Claude { args, .. } => ("claude", args),
         cli::Launch::Codex { args, .. } => ("codex", args),
         cli::Launch::Harness { harness, args } => (harness.name(), args),
-        cli::Launch::CodexApp { .. } | cli::Launch::CodexConfigure => {
+        cli::Launch::CodexApp { .. } => {
             unreachable!("not_in_local_mode refuses these launches")
         }
     };
@@ -313,13 +313,6 @@ async fn run_cloud(
                 cloud,
             })
             .await
-        }
-        cli::Launch::CodexConfigure => {
-            let request = codex::ConfigureRequest { hosted, cloud };
-            print_or_fail(
-                codex::configure(&request).await,
-                "Error: failed to configure Codex profile",
-            )
         }
         cli::Launch::Harness { harness, args } => {
             harness::run(harness::RunRequest {
