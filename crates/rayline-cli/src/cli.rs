@@ -48,7 +48,6 @@ Options:
 
 Codex:
   rayline run codex app [WORKSPACE]   Launch the Codex desktop app
-  rayline run codex configure         Write a Rayline profile for Codex
 
 Arguments after the harness name, or after --, go to the harness.
 ";
@@ -99,16 +98,6 @@ The desktop app-server ignores -c overrides and is single-instance, so this
 writes the Rayline provider into an isolated CODEX_HOME
 (~/.rayline/harness/codex-app) and launches the app there. If the app is already
 running on a different config, you'll be prompted to restart it.
-
-Options:
-  --help                  Show this message and exit
-";
-
-const CODEX_CONFIGURE_HELP: &str = "\
-Usage: rayline run codex configure [OPTIONS]
-
-Write a Codex profile at $CODEX_HOME/rayline.config.toml (or ~/.codex) that
-reaches ARC through Rayline Platform with your router key.
 
 Options:
   --help                  Show this message and exit
@@ -271,7 +260,6 @@ pub(crate) enum Launch {
     CodexApp {
         args: Vec<OsString>,
     },
-    CodexConfigure,
     Harness {
         harness: Harness,
         args: Vec<OsString>,
@@ -292,9 +280,7 @@ impl Launch {
     pub(crate) fn protocol(&self) -> Protocol {
         match self {
             Launch::Claude { .. } => Protocol::AnthropicMessages,
-            Launch::Codex { .. } | Launch::CodexApp { .. } | Launch::CodexConfigure => {
-                Protocol::OpenaiResponses
-            }
+            Launch::Codex { .. } | Launch::CodexApp { .. } => Protocol::OpenaiResponses,
             Launch::Harness { harness, .. } => match harness {
                 Harness::OpenCode | Harness::Pi | Harness::Omp => Protocol::AnthropicMessages,
                 Harness::Hermes => Protocol::OpenaiResponses,
@@ -314,7 +300,7 @@ impl Launch {
             Launch::Claude { args, .. } => ("claude", args),
             Launch::Codex { args } => ("codex", args),
             Launch::Harness { harness, args } => (harness.binary(), args),
-            Launch::CodexApp { .. } | Launch::CodexConfigure => return None,
+            Launch::CodexApp { .. } => return None,
         };
         match args.as_slice() {
             [arg]
@@ -332,7 +318,6 @@ impl Launch {
         match self {
             Launch::Claude { isolated: true, .. } => Some("`--isolated`"),
             Launch::CodexApp { .. } => Some("`run codex app`"),
-            Launch::CodexConfigure => Some("`run codex configure`"),
             Launch::Claude { .. } | Launch::Codex { .. } | Launch::Harness { .. } => None,
         }
     }
@@ -387,10 +372,6 @@ const AUTH_TOKEN: Help = Help {
 const CODEX_APP: Help = Help {
     words: " run codex app",
     text: CODEX_APP_HELP,
-};
-const CODEX_CONFIGURE: Help = Help {
-    words: " run codex configure",
-    text: CODEX_CONFIGURE_HELP,
 };
 const LOCAL: Help = Help {
     words: " local",
@@ -823,7 +804,6 @@ enum Target {
     Claude,
     Codex,
     CodexApp,
-    CodexConfigure,
     Harness(Harness),
 }
 
@@ -852,13 +832,6 @@ fn parse_run(args: &mut Args<'_>) -> Result<OrHelp<Run>, UsageError> {
                 args.next();
                 (Target::CodexApp, RunGrammar::new(CODEX_APP, true, true))
             }
-            Some("configure") => {
-                args.next();
-                (
-                    Target::CodexConfigure,
-                    RunGrammar::new(CODEX_CONFIGURE, true, false),
-                )
-            }
             _ => (Target::Codex, RunGrammar::new(RUN, false, true)),
         },
         name => match Harness::from_command(name) {
@@ -876,7 +849,6 @@ fn parse_run(args: &mut Args<'_>) -> Result<OrHelp<Run>, UsageError> {
         },
         Target::Codex => Launch::Codex { args: options.args },
         Target::CodexApp => Launch::CodexApp { args: options.args },
-        Target::CodexConfigure => Launch::CodexConfigure,
         Target::Harness(harness) => Launch::Harness {
             harness,
             args: options.args,
@@ -1064,10 +1036,6 @@ mod tests {
             (&["top", "--help"], TOP_HELP),
             (&["update", "--help"], UPDATE_HELP),
             (&["run", "codex", "app", "--help"], CODEX_APP_HELP),
-            (
-                &["run", "codex", "configure", "--help"],
-                CODEX_CONFIGURE_HELP,
-            ),
         ] {
             assert_eq!(parsed(args), Parsed::Help(help), "{args:?}");
         }
@@ -1084,7 +1052,6 @@ mod tests {
             AUTH_STATUS_HELP,
             AUTH_TOKEN_HELP,
             CODEX_APP_HELP,
-            CODEX_CONFIGURE_HELP,
             LOCAL_HELP,
             LOCAL_START_HELP,
             LOCAL_STATUS_HELP,
@@ -1356,7 +1323,6 @@ mod tests {
             &["auth", "--env", "dev"][..],
             &["auth", "login", "--env", "dev"],
             &["auth", "status", "--env", "dev"],
-            &["run", "codex", "configure", "--env", "dev"],
             &["top", "--env", "dev"],
             &["update", "--env=dev"],
         ] {
@@ -1444,10 +1410,6 @@ mod tests {
                 args: os(&["--auth", "none"]),
             }
         );
-        assert_error(
-            &["run", "codex", "configure", "--auth", "none"],
-            "unexpected `--auth`",
-        );
     }
 
     #[test]
@@ -1474,22 +1436,12 @@ mod tests {
     }
 
     #[test]
-    fn codex_configure_takes_no_arguments() {
+    fn configure_is_a_codex_argument() {
         assert_eq!(
             run(&["run", "codex", "configure"]).launch,
-            Launch::CodexConfigure
-        );
-        assert_error(
-            &["run", "codex", "configure", "--model", "m"],
-            "unexpected `--model`",
-        );
-        assert_error(
-            &["run", "codex", "configure", "--base-url", "http://x"],
-            "unexpected `--base-url`",
-        );
-        assert_error(
-            &["run", "codex", "configure", "extra"],
-            "unexpected `extra`",
+            Launch::Codex {
+                args: os(&["configure"]),
+            }
         );
     }
 
@@ -1501,10 +1453,6 @@ mod tests {
             Some("`--isolated`")
         );
         assert_eq!(local(&["run", "codex", "app"]), Some("`run codex app`"));
-        assert_eq!(
-            local(&["run", "codex", "configure"]),
-            Some("`run codex configure`")
-        );
         for args in [
             &["run", "claude", "-p", "hi"][..],
             &["run", "claude", "--model", "m"],
@@ -1685,14 +1633,6 @@ mod tests {
 
     #[test]
     fn a_flag_given_a_value_is_a_usage_error_where_nothing_follows() {
-        assert_error(
-            &["run", "codex", "configure", "--local=yes"],
-            "unexpected `--local=…`",
-        );
-        assert_error(
-            &["run", "codex", "configure", "--help=yes"],
-            "unexpected `--help=…`",
-        );
         assert_error(&["top", "--json=yes"], "unexpected `--json=…`");
     }
 
@@ -1734,10 +1674,6 @@ mod tests {
             (&["top"], "rayline top"),
             (&["update"], "rayline update"),
             (&["run"], "rayline run"),
-            (
-                &["run", "codex", "configure"],
-                "rayline run codex configure",
-            ),
         ] {
             let error = match parse(&then_not_utf8(args)) {
                 Err(error) => error.to_string(),
@@ -1943,7 +1879,6 @@ mod tests {
             &["run", word],
             &["auth", word],
             &["top", word],
-            &["run", "codex", "configure", word],
             &["update", "--version", word],
             &["update", "--install-path", word],
             &[&format!("--{word}")],

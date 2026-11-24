@@ -52,7 +52,6 @@ Options:
 
 Codex:
   rayline run codex app [WORKSPACE]   Launch the Codex desktop app
-  rayline run codex configure         Write a Rayline profile for Codex
 
 Arguments after the harness name, or after --, go to the harness.
 ```
@@ -81,7 +80,7 @@ rayline run <HARNESS> [--mode <cloud|local>] [--config <file>] [HARNESS ARGS]...
 5. Rayline options come first, right after the harness name. The first argument that is not a Rayline option, or everything after `--`, goes to the harness unchanged, including `--help`. When the harness arguments are exactly one of `--help`, `-h`, `--version` and `-v`, for `claude`, `codex` and every harness in the list above, Rayline runs the harness with that argument alone and does nothing else: it reads no config or credentials, signs nobody in, starts no local process and doesn't check Claude Code's daemon. A harness not on `PATH` fails with ``Error: `<harness>` not found on PATH``.
 6. `rayline run --help` prints the usage above. `rayline run <HARNESS>` with an unknown harness is a usage error.
 7. Each harness keeps today's behaviour in both modes, apart from what this spec removes.
-8. Local mode refuses these kept options and commands (section 9) before anything starts: `rayline run claude --isolated`, `rayline run codex app` and `rayline run codex configure`. A lone `--help`, `-h`, `--version` or `-v` (item 5) runs the harness first, so `rayline run claude --mode local --isolated --help` prints Claude Code's help. `app` and `configure` are Rayline commands only as the word right after `rayline run codex`. After Rayline's options they are codex arguments, so `rayline run codex --mode local app` passes `app` to codex.
+8. Local mode refuses these kept options and commands (section 9) before anything starts: `rayline run claude --isolated` and `rayline run codex app`. A lone `--help`, `-h`, `--version` or `-v` (item 5) runs the harness first, so `rayline run claude --mode local --isolated --help` prints Claude Code's help. `app` is a Rayline command only as the word right after `rayline run codex`. After Rayline's options it is a codex argument, so `rayline run codex --mode local app` passes `app` to codex.
 9. Local mode refuses OpenClaw container mode, before anything starts: `rayline run openclaw` when `OPENCLAW_CONTAINER` is set to a non-empty value, or when any harness argument is `--container` or `--container=<value>`.
 10. Before every `rayline run hermes` launch, cloud or local mode, on every OS, Rayline runs `hermes --version` with the launch's environment (`HERMES_HOME` set to Rayline's Hermes home). When Hermes refuses and names `hermes pm repair` (a home with no dependency environment), Rayline runs `hermes pm repair` with that home once, then goes on; later launches of the same Hermes on an unchanged home run neither. When `hermes --version` can't run, or fails without naming the repair, the launch stops with that error or Hermes' last output and the home. A failed repair stops it with Hermes' last output and the command to run by hand with that home. In cloud mode this runs before the version check below.
 
@@ -609,7 +608,7 @@ When the local process starts, before it serves anything, it also refuses:
 
 ## 6. `credentials.json`
 
-One file: `~/.config/rayline/credentials.json`. `rayline auth login` writes `session` and `router_key` together (it mints the router key at sign-in), `rayline auth logout` revokes the session, then removes them, cuts the router key out of the harness configs Rayline wrote (`~/.rayline/harness/*/` and the Codex `rayline` profile) and deletes Hermes' copies of its config in Rayline's Hermes home (`~/.rayline/harness/hermes/backups/config/`), and a token refresh rewrites `session` only, because refresh tokens rotate. When the router refuses the revoke (HTTP 401), logout still does all of this, then exits 1 with ``Logged out of <environment> on this machine. The router refused to revoke the session (HTTP 401<: body>), so the router key may still be valid on the router.`` Nothing else writes it. It is the only source for Rayline's session and router key: no env var or flag overrides it.
+One file: `~/.config/rayline/credentials.json`. `rayline auth login` writes `session` and `router_key` together (it mints the router key at sign-in), `rayline auth logout` revokes the session, then removes them, cuts the router key out of the harness configs Rayline wrote (`~/.rayline/harness/*/` ), deletes the Codex `rayline` profile (section 9 item 4) when it holds that key, and deletes Hermes' copies of its config in Rayline's Hermes home (`~/.rayline/harness/hermes/backups/config/`), and a token refresh rewrites `session` only, because refresh tokens rotate. When the router refuses the revoke (HTTP 401), logout still does all of this, then exits 1 with ``Logged out of <environment> on this machine. The router refused to revoke the session (HTTP 401<: body>), so the router key may still be valid on the router.`` Nothing else writes it. It is the only source for Rayline's session and router key: no env var or flag overrides it.
 
 ```json
 {
@@ -674,7 +673,7 @@ One file: `~/.config/rayline/credentials.json`. `rayline auth login` writes `ses
    - `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, in cloud mode: set to the router's auto-compact window for the main ARC model (the `ANTHROPIC_MODEL` value), or removed when the router gives none.
    - `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, in cloud mode: set to the main model's `context_length` from `GET /v1/models` when the router gives an auto-compact window (Claude Code doesn't know the id and would assume 200K) and the listing has `cloud.model.id`, removed otherwise; in local mode: the admitted context window.
    - `CLAUDE_CODE_AUTO_MODE_SERVER`, in local mode: always `0`.
-2. Other harnesses: `CODEX_HOME` (cloud-mode Codex and the Codex desktop app, set to Rayline's own folder for it, section 8.2), `HERMES_HOME`, `PI_CODING_AGENT_DIR`, `OPENCODE_CONFIG`, `OPENCLAW_CONFIG_PATH`.
+2. Other harnesses: `CODEX_HOME` (the Codex desktop app, set to Rayline's own folder for it, section 8.2; Codex CLI runs on the user's own, section 9 item 4), `HERMES_HOME`, `PI_CODING_AGENT_DIR`, `OPENCODE_CONFIG`, `OPENCLAW_CONFIG_PATH`.
 3. Removed from the Claude Code environment: `ANTHROPIC_API_KEY`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, `CLAUDE_CODE_USE_FOUNDRY`.
 4. Removed from the `omp` environment: `CLAUDE_CONFIG_DIR`, `PI_PROFILE`, `OMP_PROFILE`.
 5. Removed from every harness command Rayline starts: `RAYLINE_ROUTER_API_KEY`.
@@ -739,7 +738,7 @@ Only these files:
     harness/<name>/             files Rayline generates per harness in local mode:
                                 pi, hermes, omp, opencode, openclaw
   harness/<name>/               files Rayline generates per harness in cloud mode: pi, hermes, omp,
-                                opencode, openclaw, codex, codex-app,
+                                opencode, openclaw, codex-app,
                                 claude-code (only with --isolated)
   harness/claude-code/daemon-launches.json
                                 Claude Code daemons Rayline started
@@ -758,7 +757,7 @@ Each mode has its own harness folder because each writes its own endpoint, key a
 Rayline writes nothing else under `~/.rayline` or `~/.config/rayline`. Outside them it writes only:
 - the harness's own files named in 9.4;
 - tokenizer files, and the ARC release and encoder weights of local decisions, in the Hugging Face cache: `$HF_HUB_CACHE`, else `$HF_HOME/hub`, else `<home>/.cache/huggingface/hub`;
-- with `rayline run codex configure` (9.4), `rayline.config.toml` in the user's Codex home (`CODEX_HOME`, else `~/.codex`, Codex's own default);
+- with a cloud `rayline run codex` (9.4), the Codex profile `rayline.config.toml` in the user's Codex home (`CODEX_HOME`, else `~/.codex`, Codex's own default);
 - with `rayline run claude --isolated` (9.3), in the user's Claude config folder (`CLAUDE_CONFIG_DIR`, else `~/.claude`): the folders `projects/`, `sessions/`, `plans/` and `paste-cache/` and an empty `history.jsonl`, each only if missing, which the isolated folder links to.
 
 Tests use a temporary home folder.
@@ -770,7 +769,10 @@ These keep today's behaviour for now, under the new command shape. Their aliases
 1. `rayline auth login`: `-b, --no-browser` (device-code login) and `-p, --paste` (paste the callback URL). `--paste` with `--no-browser` behaves as today (`--paste` wins). Launching a harness while signed out signs in on the spot with the default flow when stdin and stdout are both terminals. Otherwise the launch fails as signed out. A local-mode launch that reuses a running local process doesn't read the credentials, so it runs even when signed out.
 2. `rayline update`: `--check`, `--version <version>`, `--force`, `--dry-run`.
 3. `rayline run claude --isolated`: gives Claude Code its own config folder (`~/.rayline/harness/claude-code/`) so it can run beside other sessions.
-4. `rayline run codex`: the subcommands `rayline run codex app [WORKSPACE]` (launches the Codex desktop app on its own `CODEX_HOME`, `~/.rayline/harness/codex-app/`) and `rayline run codex configure` (writes a Codex profile, `rayline.config.toml`, to the user's Codex home: `CODEX_HOME`, else `~/.codex`, Codex's own default). On Windows, the `config.toml` of each Rayline Codex home (`rayline run codex`'s and the app's) gets `[windows] sandbox` when it has none: the user's own value from `config.toml` in their Codex home, else `unelevated`, which needs no admin setup. A value already in the Rayline home is kept. A user `config.toml` that can't be read or parsed is an error naming it.
+4. `rayline run codex`:
+   - In cloud mode it runs Codex CLI on the user's own Codex home (`CODEX_HOME`, else `~/.codex`, Codex's own default), which it doesn't change, as `codex --profile rayline <harness args>`. Before each launch it writes the profile, `rayline.config.toml` in that home, owner-only, replacing the last launch's: `model` (`cloud.model.id`), `model_provider` `rayline`, and `[model_providers.rayline]` with the router's Responses URL, `wire_api` `responses` and the router key as `experimental_bearer_token`; on Windows also `[windows] sandbox`: the user's own value from `config.toml` in their Codex home, else `unelevated`, which needs no admin setup (a user `config.toml` that can't be read or parsed is an error naming it). Codex's own `-m` overrides the profile's model. The profile keeps working for plain `codex -p rayline` until the key changes. Rayline and the user's other Codex sessions share one history: resuming a Rayline session with plain `codex` sends its Rayline model id to OpenAI, which fails with a model error. Rayline writes nothing else in the user's Codex home. The key is never in Codex's argv or environment.
+   - In local mode it runs Codex CLI on the user's own Codex home with the local provider given as `-c` settings (section 7.2 item 7), and writes no profile.
+   - `rayline run codex app [WORKSPACE]` launches the Codex desktop app on its own `CODEX_HOME`, `~/.rayline/harness/codex-app/`. On Windows, that home's `config.toml` gets `[windows] sandbox` when it has none: the user's own value from `config.toml` in their Codex home, else `unelevated`, which needs no admin setup. A value already in the app home is kept. A user `config.toml` that can't be read or parsed is an error naming it.
 
 ## 10. Removed
 
@@ -790,6 +792,7 @@ Everything below is deleted outright: code, tests, docs and help text.
 10. The `rl` alias.
 11. `rayline run claude-desktop` and all its commands and options (`start`, `status`, `validate`, `stop`, `install-service`, `uninstall-service`, `off`, `uninstall`, `--manual`, `--prefixed-ids`, `--desktop-config`), with its LaunchAgent and its state folder and lock. `rayline run claude-desktop` is an unknown harness.
 12. `rayline run --local`. `--mode local` and the config's `mode` replace it.
+13. `rayline run codex configure`. A cloud `rayline run codex` writes the same `rayline` profile on every launch (section 9 item 4); `configure` after `rayline run codex` goes to Codex as an argument.
 
 ### 10.2 The old local stack
 
@@ -806,6 +809,7 @@ Everything below is deleted outright: code, tests, docs and help text.
 3. The old settings file location and its migration.
 4. Today's `credentials.json` shape (`version`, camelCase fields, `authKind`, `router_keys.<env>`, `apiKey`).
 5. The earlier shape's keys in a file with `mode`: top-level `endpoints`, `models` and `routing`, `routing.router` `hosted` (`cloud` replaces it) and a string `decisions_model`. Only the conversion of section 5.9 reads it.
+6. `~/.rayline/harness/codex/`, the Codex home cloud-mode Codex CLI ran on in earlier releases, and its one-time copy of the tables of the user's `config.toml`. Rayline no longer creates or seeds it, or runs Codex on it; logout still cuts the router key out of its files (section 6).
 
 ### 10.4 Aliases, extra values and guesses
 

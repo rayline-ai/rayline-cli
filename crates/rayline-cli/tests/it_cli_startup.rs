@@ -297,7 +297,6 @@ fn local_mode_refuses_the_kept_options_it_does_not_run() {
     for (args, option) in [
         (&["run", "claude", "--isolated"][..], "`--isolated`"),
         (&["run", "codex", "app"], "`run codex app`"),
-        (&["run", "codex", "configure"], "`run codex configure`"),
     ] {
         assert_fails(
             &home.run(args),

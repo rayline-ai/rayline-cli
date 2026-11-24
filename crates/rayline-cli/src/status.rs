@@ -342,6 +342,7 @@ async fn logout_from_home(hosted: &HostedEnvironment, home: &Path) -> Result<Str
     // The files to clean, listed before anything is revoked: a harness folder
     // or `CODEX_HOME` that can't be used fails here, with nothing changed.
     let key_files = crate::harness::router_key_files(home).map_err(AuthError::WriteFailed)?;
+    let codex_profile = crate::codex::profile_path(home).map_err(AuthError::WriteFailed)?;
     // Revoke first: the router deletes the router keys minted under the
     // session. A revoke the router could not judge (unreachable, 5xx) keeps the
     // session, so the user can run logout again; one it refused (the session
@@ -356,6 +357,8 @@ async fn logout_from_home(hosted: &HostedEnvironment, home: &Path) -> Result<Str
     // Rayline wrote the key into the harness configs; cut it out of them
     // before the stored account goes, so a failure here can be run again.
     crate::harness::remove_router_key(&key_files, &account.router_key.api_key)
+        .map_err(AuthError::WriteFailed)?;
+    crate::codex::remove_profile(&codex_profile, &account.router_key.api_key)
         .map_err(AuthError::WriteFailed)?;
     crate::harness::remove_hermes_config_backups(home).map_err(AuthError::WriteFailed)?;
     // Read the file again: another command may have written it during the
@@ -2093,13 +2096,18 @@ mod tests {
             ("hermes", "config.yaml"),
         ]
         .map(|(dir, name)| write_harness_file(&home, dir, name));
-        let profile = home.join(".codex").join("rayline.config.toml");
-        fs::create_dir_all(profile.parent().unwrap()).unwrap();
+        // The Codex `rayline` profile is deleted; the user's own Codex config
+        // beside it stays.
+        let codex_home = home.join(".codex");
+        let profile = codex_home.join("rayline.config.toml");
+        fs::create_dir_all(&codex_home).unwrap();
         fs::write(
             &profile,
-            format!("experimental_bearer_token = \"{API_KEY}\"\nsetting = kept\n"),
+            format!("experimental_bearer_token = \"{API_KEY}\"\n"),
         )
         .unwrap();
+        let user_config = codex_home.join("config.toml");
+        fs::write(&user_config, "model = \"gpt-x\"\n").unwrap();
         // Hermes' own copies of its config, which hold the key, are deleted.
         let backups = write_text(
             &home,
@@ -2120,7 +2128,12 @@ mod tests {
             unsafe { std::env::set_var("CODEX_HOME", value) };
         }
         assert_eq!(result.unwrap(), "Logged out (prod)\n");
-        for path in written.iter().chain([&profile]) {
+        assert!(!profile.exists(), "{}", profile.display());
+        assert_eq!(
+            fs::read_to_string(&user_config).unwrap(),
+            "model = \"gpt-x\"\n"
+        );
+        for path in &written {
             let text = fs::read_to_string(path).unwrap();
             assert!(!text.contains(API_KEY), "{}", path.display());
             assert!(text.contains("setting = kept"), "{}", path.display());

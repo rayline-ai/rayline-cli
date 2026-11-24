@@ -102,9 +102,9 @@ rayline run codex -- exec "summarize this repo"
   [Local mode](local-mode.md).
 - A harness's own `--mode` option, such as pi's, goes after `--`:
   `rayline run pi -- --mode json`.
-- Local mode refuses `rayline run claude --isolated`,
-  `rayline run codex app` and `rayline run codex configure`. The error says
-  the option isn't available in local mode.
+- Local mode refuses `rayline run claude --isolated` and
+  `rayline run codex app`. The error says the option isn't available in
+  local mode.
 - Local mode resumes and forks saved sessions with the harness's own
   options. A session the running local process didn't serve, such as one
   saved before it started, continues as a new session: its text and tool
@@ -121,7 +121,8 @@ rayline run codex -- exec "summarize this repo"
 Rayline writes the files it generates for a harness under
 `~/.rayline/harness/<name>/` in cloud mode and under
 `~/.rayline/local/harness/<name>/` in local mode. Each mode writes its own
-endpoint, key and model list there.
+endpoint, key and model list there. Codex CLI is the exception: it runs on
+your own Codex home (see [Codex](#codex)).
 
 ### Models
 
@@ -154,10 +155,26 @@ rayline run claude --isolated
 
 ### Codex
 
-| Option or subcommand | Does |
+`rayline run codex` runs Codex on your own Codex home: `CODEX_HOME`, or
+`~/.codex` if it isn't set. Your MCP servers, projects, `AGENTS.md`, skills
+and sessions are the ones plain `codex` uses.
+
+In cloud mode, each launch writes the Codex profile `rayline`
+(`rayline.config.toml` in your Codex home, readable only by you, since it
+holds your router key) and runs `codex --profile rayline`. The profile uses
+`cloud.model.id`; Codex's own `-m` overrides it. In local mode Rayline gives
+Codex its local settings on the command line and writes no profile.
+
+- After one cloud `rayline run codex`, plain `codex -p rayline` uses Rayline
+  without Rayline running. The next `rayline run codex` refreshes the
+  profile, and `rayline auth logout` deletes it.
+- Rayline and your other Codex sessions share one history. Resuming a
+  Rayline session with plain `codex` fails with a model error: resume it
+  with `rayline run codex resume` instead.
+
+| Subcommand | Does |
 |---|---|
 | `rayline run codex app [WORKSPACE]` | Launches the Codex desktop app on its own `CODEX_HOME`, `~/.rayline/harness/codex-app/`, and opens `WORKSPACE` if you give one. |
-| `rayline run codex configure` | Writes a Codex profile, `rayline.config.toml`, to your Codex home: `CODEX_HOME`, or `~/.codex` if it isn't set. |
 
 ### opencode, pi, oh-my-pi, Hermes Agent and OpenClaw
 

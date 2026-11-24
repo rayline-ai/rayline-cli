@@ -97,15 +97,11 @@ pub async fn run(request: AppRunRequest) -> ExitCode {
     }
 }
 
-/// Resolve the user's real Codex home (`$CODEX_HOME` or `~/.codex`), whose
-/// `config.toml` tables seed a new Rayline Codex home.
+/// The user's real Codex home (`$CODEX_HOME` or `~/.codex`), whose
+/// `config.toml` tables seed a new app home.
 fn user_codex_home() -> io::Result<PathBuf> {
-    match crate::harness::exported_dir("CODEX_HOME")? {
-        Some(codex_home) => Ok(codex_home),
-        None => Ok(crate::home()
-            .map_err(|error| io::Error::new(io::ErrorKind::NotFound, error))?
-            .join(".codex")),
-    }
+    let home = crate::home().map_err(|error| io::Error::new(io::ErrorKind::NotFound, error))?;
+    crate::codex::user_codex_home(&home)
 }
 
 /// The stable isolated home Rayline points the desktop app at:
@@ -144,12 +140,12 @@ fn generated_config_differs(existing: &str, generated: &str) -> bool {
         || !provider_table_current(&doc, &generated)
 }
 
-/// Write a Rayline Codex home (`rayline run codex`'s or the desktop app's): its
+/// Write the desktop app's Rayline Codex home: its
 /// `config.toml` is the Rayline settings merged into whatever the file already
 /// holds, written owner-only since it holds the router key. The app writes
 /// this only after the launch is committed, so a declined restart never changes
 /// the home.
-pub(crate) fn write_codex_home(home: &Path, config: &str) -> io::Result<()> {
+fn write_codex_home(home: &Path, config: &str) -> io::Result<()> {
     let config_path = home.join("config.toml");
     // The document to merge into:
     //  - the home's config.toml when it exists (Codex persists its own settings
@@ -193,7 +189,7 @@ pub(crate) fn write_codex_home(home: &Path, config: &str) -> io::Result<()> {
 /// An `InvalidData` error naming `path`, the line of `text` that fails to
 /// parse and the parser's message. It never quotes `text`: a Codex config line
 /// can hold a credential.
-fn toml_parse_error(path: &Path, text: &str, error: &TomlError) -> io::Error {
+pub(crate) fn toml_parse_error(path: &Path, text: &str, error: &TomlError) -> io::Error {
     let line = error
         .span()
         .and_then(|span| text.get(..span.start))
@@ -211,7 +207,7 @@ fn toml_parse_error(path: &Path, text: &str, error: &TomlError) -> io::Error {
 
 /// The contents of `path`, or `None` when it does not exist. Any other read
 /// error fails with the path.
-fn read_if_present(path: &Path) -> io::Result<Option<String>> {
+pub(crate) fn read_if_present(path: &Path) -> io::Result<Option<String>> {
     match fs::read_to_string(path) {
         Ok(text) => Ok(Some(text)),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
@@ -325,7 +321,7 @@ fn has_windows_sandbox(config: &str) -> bool {
 /// rejects every shell command as "blocked by policy", and its setup prompt
 /// writes the choice only to the home it ran in. A value already in `config`
 /// is kept.
-fn with_windows_sandbox(config: &str, seed: Option<&str>) -> Result<String, TomlError> {
+pub(crate) fn with_windows_sandbox(config: &str, seed: Option<&str>) -> Result<String, TomlError> {
     if has_windows_sandbox(config) {
         return Ok(config.to_owned());
     }

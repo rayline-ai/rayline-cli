@@ -5,6 +5,23 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 
 ## 0.5.10 (2026-11-24)
 
+### Changed (breaking)
+
+- **`rayline run codex` runs Codex on your own Codex home.** In cloud mode
+  it used a separate home, `~/.rayline/harness/codex/`, seeded once from
+  your `~/.codex/config.toml`, so MCP servers you added later, your
+  sessions, `AGENTS.md` and skills weren't there. It now runs on `CODEX_HOME`
+  (or `~/.codex`) with `codex --profile rayline`, and writes that profile,
+  `rayline.config.toml`, on every launch. Plain `codex -p rayline` then works
+  without Rayline. Resuming a Rayline session with plain `codex` fails with a
+  model error; use `rayline run codex resume`. You can delete
+  `~/.rayline/harness/codex/`; your `~/.codex` is not changed.
+- **`rayline run codex configure` is removed.** One cloud `rayline run codex`
+  writes the same `rayline` profile, and keeps it current.
+  `rayline run codex configure` now passes `configure` to Codex.
+- `rayline auth logout` deletes the Codex `rayline` profile instead of
+  removing the key from it.
+
 ### Security
 
 - **Updates and the ARC encoder check reject another release's signed
