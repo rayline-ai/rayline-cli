@@ -715,11 +715,11 @@ pub(crate) fn installed_version(mut command: Command) -> Result<(u64, u64, u64),
         .ok_or_else(|| format!("{shown} printed no version: {:?}", printed.trim()))
 }
 
-/// The files Rayline may have written a router key into: the top-level files
-/// of each harness folder under `~/.rayline/harness/` (cloud-mode configs, the
-/// Codex and Codex app homes) and the Codex `rayline` profile
-/// (`$CODEX_HOME/rayline.config.toml`, else `~/.codex/`). Logout lists them
-/// before it revokes, so a folder or `CODEX_HOME` it can't use fails first.
+/// The files Rayline may have written a router key into and keeps: the
+/// top-level files of each harness folder under `~/.rayline/harness/`
+/// (cloud-mode configs and the Codex app home). Logout lists them before it
+/// revokes, so a folder it can't use fails first. The Codex `rayline` profile
+/// is deleted instead ([`crate::codex::remove_profile`]).
 pub(crate) fn router_key_files(home: &Path) -> io::Result<Vec<PathBuf>> {
     let mut candidates = Vec::new();
     let harness_root = home.join(crate::DOT_CONFIG_DIR).join("harness");
@@ -745,11 +745,6 @@ pub(crate) fn router_key_files(home: &Path) -> io::Result<Vec<PathBuf>> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(in_path(&harness_root)(error)),
     }
-    let codex_home = match exported_dir("CODEX_HOME")? {
-        Some(codex_home) => codex_home,
-        None => home.join(".codex"),
-    };
-    candidates.push(codex_home.join("rayline.config.toml"));
     Ok(candidates)
 }
 
