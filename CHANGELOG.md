@@ -25,8 +25,8 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 - **The local process keeps running when it can't accept a connection.**
   Running out of file descriptors, or a client abandoning a connection
   before it was accepted, stopped the local process and every harness
-  using it, and stopped a prompt counter's server for good. Both now log
-  the error, wait briefly and accept again.
+  using it, and stopped a prompt counter's server for good. The local
+  process's servers now log the error, wait briefly and accept again.
 
 ## 0.5.9 (2026-11-23)
 

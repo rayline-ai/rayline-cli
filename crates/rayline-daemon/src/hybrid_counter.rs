@@ -139,7 +139,7 @@ pub(crate) async fn serve(listener: TcpListener, counter: Arc<Counter>) -> Infal
     let mut failures = 0;
     loop {
         tokio::select! {
-            socket = crate::hybrid::accept(&listener, "token counter", &mut failures) => {
+            socket = rayline_arc_routes::accept(&listener, "token counter", &mut failures) => {
                 let counter = counter.clone();
                 connections.spawn(async move {
                     let service = service_fn(move |request| {
