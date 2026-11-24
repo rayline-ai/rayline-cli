@@ -2057,11 +2057,11 @@ fn process_is_zombie(pid: i32) -> bool {
 
 /// Whether `pid` runs `rayline local start`'s local process for the ready
 /// file `ready`, by its command line.
-#[cfg(unix)]
 /// `ps` joins the arguments with spaces; `launch` passes `--router-url`
 /// right after the ready file, which marks where its path ends. A command
 /// line that can't be read is an error, so the record of a process that may
 /// still run is kept.
+#[cfg(unix)]
 fn runs_local_process(pid: i32, ready: &Path) -> io::Result<bool> {
     let output = Command::new("ps")
         .args(["-ww", "-o", "command=", "-p", &pid.to_string()])
