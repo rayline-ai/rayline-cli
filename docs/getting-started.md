@@ -171,6 +171,9 @@ Codex its local settings on the command line and writes no profile.
 - Rayline and your other Codex sessions share one history. Resuming a
   Rayline session with plain `codex` fails with a model error: resume it
   with `rayline run codex resume` instead.
+- If your `config.toml` has a `[profiles.rayline]` table or
+  `profile = "rayline"`, remove it: Codex refuses `--profile rayline` while
+  either is there.
 
 | Subcommand | Does |
 |---|---|
