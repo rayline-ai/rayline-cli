@@ -177,7 +177,8 @@ async fn run_on(
     // Removed however the update ends.
     let temp_dir = TempDir(temp_update_dir()?);
     let temp_dir = temp_dir.0.as_path();
-    let artifacts = download_and_verify(base_url, &target, platform_tag, temp_dir, pubkeys).await;
+    let artifacts =
+        download_and_verify(base_url, &target, &current, platform_tag, temp_dir, pubkeys).await;
     // The encoder is refreshed only for a user who already fetched one.
     let encoder_dir = has_encoder(&arc_dir(home)).then(|| encoder_dir(home, &target));
     match artifacts {
@@ -303,7 +304,13 @@ pub fn evaluate_check(
     let update_available = if explicit_intent {
         target.normalized != current.normalized || force
     } else {
-        target.public_cmp(current) == Ordering::Greater || force
+        // `--force` reinstalls the channel's latest, never one older than the
+        // running version: a replayed older `latest.txt` can't roll back.
+        match target.public_cmp(current) {
+            Ordering::Greater => true,
+            Ordering::Equal => force,
+            Ordering::Less => false,
+        }
     };
 
     if update_available {
@@ -410,7 +417,53 @@ fn checksums_sig_url_for(base_url: &str, version: &str) -> String {
     format!("{base_url}/cli/v{version}/SHA256SUMS.minisig")
 }
 
-/// Verify that `sums` is signed by at least one of the pinned `pubkeys`.
+/// The first release whose SHA256SUMS signature names its version in the
+/// trusted comment (`version:<full version>`).
+const FIRST_VERSION_SIGNED_SUMS: [u64; 3] = [0, 5, 10];
+
+/// Verify that `sums` is the signed SHA256SUMS of release `target`: signed by
+/// one of `pubkeys`, with `version:<target>` in the trusted comment.
+///
+/// A release before 0.5.10 is signed without the field. One without it is
+/// accepted only when `target` is older than both 0.5.10 and `running`, the
+/// version this check runs in: an explicit `--version` downgrade. An update
+/// (newer than `running`) and the encoder check (`running` itself) always
+/// need the field, so a host can't serve an older release under their
+/// version.
+pub(crate) fn verify_release_sums(
+    sums: &[u8],
+    sig_bytes: &[u8],
+    pubkeys: &[&str],
+    target: &Version,
+    running: &Version,
+) -> Result<(), UpdateError> {
+    let signature = verify_signature(sums, sig_bytes, pubkeys)?;
+    let signed: Vec<&str> = signature
+        .trusted_comment()
+        .split('\t')
+        .filter_map(|field| field.strip_prefix("version:"))
+        .collect();
+    match signed.as_slice() {
+        [version] if *version == target.normalized => Ok(()),
+        [] if target.base < FIRST_VERSION_SIGNED_SUMS
+            && target.public_cmp(running) == Ordering::Less =>
+        {
+            Ok(())
+        }
+        [] => Err(UpdateError::Signature(format!(
+            "SHA256SUMS for {} is signed without its version \u{2014} refusing to install",
+            target.normalized
+        ))),
+        _ => Err(UpdateError::Signature(format!(
+            "SHA256SUMS for {} is signed for version {} \u{2014} refusing to install",
+            target.normalized,
+            signed.join(", ")
+        ))),
+    }
+}
+
+/// Verify that `sums` is signed by at least one of the pinned `pubkeys`, and
+/// return the signature.
 ///
 /// Fails closed: returns `Err` if `sig_bytes` is empty, malformed, or no
 /// pinned key validates the signature. The caller must call this BEFORE
@@ -419,7 +472,7 @@ pub fn verify_signature(
     sums: &[u8],
     sig_bytes: &[u8],
     pubkeys: &[&str],
-) -> Result<(), UpdateError> {
+) -> Result<Signature, UpdateError> {
     if sig_bytes.is_empty() {
         return Err(UpdateError::Signature(
             "SHA256SUMS.minisig is empty — refusing to install unsigned update".to_owned(),
@@ -439,7 +492,7 @@ pub fn verify_signature(
             UpdateError::Signature(format!("invalid pinned public key: {error}"))
         })?;
         if pk.verify(sums, &sig, true).is_ok() {
-            return Ok(());
+            return Ok(sig);
         }
     }
 
@@ -464,10 +517,12 @@ pub(crate) fn detect_platform_tag() -> Result<&'static str, UpdateError> {
 }
 
 /// Downloads the release's SHA256SUMS and its signature into `dest_dir` and
-/// returns SHA256SUMS once the signature checks out against `pubkeys`.
+/// returns SHA256SUMS once [`verify_release_sums`] accepts it for `target`
+/// from `running`.
 async fn fetch_verified_sums(
     base_url: &str,
     target: &Version,
+    running: &Version,
     dest_dir: &Path,
     pubkeys: &[&str],
 ) -> Result<String, UpdateError> {
@@ -485,7 +540,7 @@ async fn fetch_verified_sums(
     // Fail closed: missing or invalid signature aborts the update.
     let sums_bytes = fs::read(&sums_path).map_err(io_failed("read", &sums_path))?;
     let sig_bytes = fs::read(&sig_path).map_err(io_failed("read", &sig_path))?;
-    verify_signature(&sums_bytes, &sig_bytes, pubkeys)?;
+    verify_release_sums(&sums_bytes, &sig_bytes, pubkeys, target, running)?;
 
     String::from_utf8(sums_bytes)
         .map_err(|_| UpdateError::Checksum("SHA256SUMS contains invalid UTF-8".to_owned()))
@@ -494,11 +549,12 @@ async fn fetch_verified_sums(
 async fn download_and_verify(
     base_url: &str,
     target: &Version,
+    running: &Version,
     platform_tag: &str,
     dest_dir: &Path,
     pubkeys: &[&str],
 ) -> Result<UpdateArtifacts, UpdateError> {
-    let sums = fetch_verified_sums(base_url, target, dest_dir, pubkeys).await?;
+    let sums = fetch_verified_sums(base_url, target, running, dest_dir, pubkeys).await?;
     let version = target.normalized.as_str();
     let launcher_name = format!("{}-{platform_tag}", crate::CLI_ASSET);
     let launcher_path = dest_dir.join(&launcher_name);
@@ -602,19 +658,20 @@ pub(crate) fn encoder_files(
     Ok(files)
 }
 
-/// The encoder already fetched into `dir`: its signed SHA256SUMS checks out
-/// against `pubkeys`, and `matches` accepts each file it lists for
-/// `platform_tag` (given the path and its listed sha256). `None` when
-/// anything is missing or doesn't match.
+/// Version `version`'s encoder already fetched into `dir`: its SHA256SUMS
+/// is signed for `version` by one of `pubkeys`, and `matches` accepts each
+/// file it lists for `platform_tag` (given the path and its listed sha256).
+/// `None` when anything is missing or doesn't match.
 pub(crate) fn fetched_encoder(
     dir: &Path,
+    version: &Version,
     platform_tag: &str,
     pubkeys: &[&str],
     matches: &dyn Fn(&Path, &str) -> bool,
 ) -> Option<PathBuf> {
     let sums = fs::read(dir.join("SHA256SUMS")).ok()?;
     let signature = fs::read(dir.join("SHA256SUMS.minisig")).ok()?;
-    verify_signature(&sums, &signature, pubkeys).ok()?;
+    verify_release_sums(&sums, &signature, pubkeys, version, version).ok()?;
     fetched_files(dir, &String::from_utf8(sums).ok()?, platform_tag, matches)
 }
 
@@ -664,7 +721,7 @@ pub(crate) async fn fetch_encoder(
 ) -> Result<(), UpdateError> {
     let staging = staging_dir(dir)?;
     let result = async {
-        let sums = fetch_verified_sums(base_url, version, &staging, pubkeys).await?;
+        let sums = fetch_verified_sums(base_url, version, version, &staging, pubkeys).await?;
         fetch_encoder_into(
             base_url,
             version,
@@ -1770,9 +1827,19 @@ mod tests {
             false,
         );
         assert_eq!(asked.message, "Already on latest (0.5.3).\n");
-        // Forced, it offers the older release.
-        let forced = evaluate_check(&current, &latest, UpdateChannel::Dev, false, true);
-        assert_eq!(forced.exit_code, 1);
+        // Forced, it still names the older release instead of installing it:
+        // a replayed older `latest.txt` can't roll back.
+        let forced = evaluate_check(&current, &latest, UpdateChannel::Prod, false, true);
+        assert_eq!(forced, result);
+        // Forced on the latest itself, it reinstalls it.
+        let reinstall = evaluate_check(
+            &latest,
+            &version("0.5.3+3bc25bc98f31"),
+            UpdateChannel::Prod,
+            false,
+            true,
+        );
+        assert_eq!(reinstall.exit_code, 1);
     }
 
     fn version(raw: &str) -> Version {
@@ -1974,9 +2041,12 @@ mod tests {
 
     // ── update against a fake release server ─────────────────────────────────
 
-    // Signs tests/fixtures/release-*SHA256SUMS. Testing only — NOT the
+    // Signs tests/fixtures/release-*SHA256SUMS (`release-SHA256SUMS.minisig`
+    // and `release-no-core-SHA256SUMS.minisig` with `version:99.0.0`,
+    // `.unversioned.minisig` without the field, `.v98.minisig` with
+    // `version:98.0.0`) and latest-old.txt. Testing only — NOT the
     // production key.
-    const RELEASE_TEST_PUBKEY: &str = "RWQ7upEBuCoV7z5WLNio5DhgB/JWqJVgNLY9gCH96m8L8UV+8rhE6fUV";
+    const RELEASE_TEST_PUBKEY: &str = "RWRQa4k3QozRjJ+bh4kqT2y92XNLSXAe9OS0J0mfYsfCIHWPFzDAUS2p";
     const TEST_RELEASE: &str = "99.0.0";
     const LAUNCHER: &[u8] = b"fixture launcher\n";
     const CORE: &[u8] = b"fixture core\n";
@@ -2046,12 +2116,18 @@ mod tests {
     /// Release files for TEST_RELEASE on this platform, with `sums` naming the
     /// SHA256SUMS fixture (signed with RELEASE_TEST_PUBKEY).
     fn release_files(sums: &str) -> Files {
-        let release = format!("/cli/v{TEST_RELEASE}");
+        release_files_signed(TEST_RELEASE, sums, &format!("{sums}.minisig"))
+    }
+
+    /// Release files for `release` on this platform: the `sums` fixture with
+    /// the signature fixture `signature`.
+    fn release_files_signed(release: &str, sums: &str, signature: &str) -> Files {
+        let release = format!("/cli/v{release}");
         let mut files = Files::from([
             (format!("{release}/SHA256SUMS"), signed_fixture(sums)),
             (
                 format!("{release}/SHA256SUMS.minisig"),
-                signed_fixture(&format!("{sums}.minisig")),
+                signed_fixture(signature),
             ),
             (format!("{release}/{CORE_LICENSE_NAME}"), LICENSE.to_vec()),
         ]);
@@ -2220,6 +2296,175 @@ mod tests {
         Ok(())
     }
 
+    /// `verify_release_sums` of the release-SHA256SUMS fixture with the
+    /// signature fixture `signature`, for `target` from `running`.
+    fn release_sums_check(signature: &str, target: &str, running: &str) -> Result<(), String> {
+        verify_release_sums(
+            &signed_fixture("release-SHA256SUMS"),
+            &signed_fixture(signature),
+            &[RELEASE_TEST_PUBKEY],
+            &version(target),
+            &version(running),
+        )
+        .map_err(|error| error.to_string())
+    }
+
+    #[test]
+    fn a_release_signature_must_name_the_version_fetched() {
+        let signed = "release-SHA256SUMS.minisig";
+        let unversioned = "release-SHA256SUMS.unversioned.minisig";
+        assert_eq!(release_sums_check(signed, "99.0.0", "0.5.10"), Ok(()));
+        // Another release's valid signature, served under 99.0.0.
+        assert_eq!(
+            release_sums_check("release-SHA256SUMS.v98.minisig", "99.0.0", "0.5.10"),
+            Err(
+                "SHA256SUMS for 99.0.0 is signed for version 98.0.0 \u{2014} refusing to install"
+                    .to_owned()
+            )
+        );
+        // The field binds old releases too when it is there.
+        assert!(release_sums_check(signed, "0.5.4+abc", "0.6.0").is_err());
+        // Without it: an update, the encoder check, or any release from 0.5.10
+        // on (pre-releases of 0.5.10 included).
+        let unsigned = |target: &str| {
+            format!(
+                "SHA256SUMS for {target} is signed without its version \u{2014} refusing to install"
+            )
+        };
+        for (target, running) in [
+            ("99.0.0", "0.5.10"),
+            ("0.5.10+abc", "0.6.0"),
+            ("0.5.10-dev.3+abc", "0.6.0"),
+            ("0.5.9+abc", "0.5.3"),
+            ("0.5.9+abc", "0.5.9+abc"),
+        ] {
+            assert_eq!(
+                release_sums_check(unversioned, target, running),
+                Err(unsigned(target)),
+                "{target} from {running}"
+            );
+        }
+        // Only an explicit downgrade to a release before 0.5.10 may lack it.
+        assert_eq!(
+            release_sums_check(unversioned, "0.5.9+abc", "0.5.10+def"),
+            Ok(())
+        );
+        assert_eq!(
+            release_sums_check(unversioned, "0.5.4-dev.2+abc", "0.5.10-dev.7+def"),
+            Ok(())
+        );
+    }
+
+    /// 0.5.9 and older check only `verify_signature`: the `version:` field
+    /// the release workflow now signs must not break them.
+    #[test]
+    fn a_signature_naming_its_version_verifies_for_older_clients() {
+        assert!(
+            verify_signature(
+                &signed_fixture("release-SHA256SUMS"),
+                &signed_fixture("release-SHA256SUMS.minisig"),
+                &[RELEASE_TEST_PUBKEY],
+            )
+            .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn update_refuses_another_releases_sums_under_its_version() -> TestResult {
+        let server = FakeReleaseServer::start(release_files_signed(
+            TEST_RELEASE,
+            "release-SHA256SUMS",
+            "release-SHA256SUMS.v98.minisig",
+        ));
+        let (install, request) = install_from(&server)?;
+        let error = run_on(
+            &request,
+            UpdateChannel::Prod,
+            &no_home(),
+            &releases().base_url,
+            KEYS,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("is signed for version 98.0.0"), "{error}");
+        assert_eq!(fs::read(exe(&install, crate::CLI_BIN))?, b"installed");
+        assert!(!exe(&install, "rayline-core").exists());
+        fs::remove_dir_all(install)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn update_installs_an_older_release_signed_without_its_version() -> TestResult {
+        let old = "0.1.0+0123456789ab";
+        let server = FakeReleaseServer::start(release_files_signed(
+            old,
+            "release-SHA256SUMS",
+            "release-SHA256SUMS.unversioned.minisig",
+        ));
+        let (install, request) = install_from(&server)?;
+        let request = UpdateRequest {
+            pinned_version: Some(version(old)),
+            ..request
+        };
+        let result = run_on(
+            &request,
+            UpdateChannel::Prod,
+            &no_home(),
+            UNUSED_RELEASES,
+            &[RELEASE_TEST_PUBKEY],
+        )
+        .await?;
+        assert_eq!(result.exit_code, 0, "{}", result.message);
+        assert_eq!(fs::read(exe(&install, crate::CLI_BIN))?, LAUNCHER);
+        fs::remove_dir_all(install)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn force_doesnt_install_an_older_channel_latest() -> TestResult {
+        let server = FakeReleaseServer::start(Files::from([
+            (
+                "/cli/latest.txt".to_owned(),
+                signed_fixture("latest-old.txt"),
+            ),
+            (
+                "/cli/latest.txt.minisig".to_owned(),
+                signed_fixture("latest-old.txt.minisig"),
+            ),
+        ]));
+        let (install, request) = install_from(&server)?;
+        let request = UpdateRequest {
+            pinned_version: None,
+            force: true,
+            ..request
+        };
+        let result = run_on(
+            &request,
+            UpdateChannel::Prod,
+            &no_home(),
+            UNUSED_RELEASES,
+            &[RELEASE_TEST_PUBKEY],
+        )
+        .await?;
+        assert_eq!(result.exit_code, 0, "{}", result.message);
+        assert!(
+            result.message.starts_with("Already up to date: ")
+                && result
+                    .message
+                    .contains("run: rayline update --version 0.1.0+0123456789ab"),
+            "{}",
+            result.message
+        );
+        assert_eq!(
+            server.requests(),
+            ["/cli/latest.txt", "/cli/latest.txt.minisig"]
+        );
+        assert_eq!(fs::read(exe(&install, crate::CLI_BIN))?, b"installed");
+        fs::remove_dir_all(install)?;
+        Ok(())
+    }
+
     const ENCODER: &[u8] = b"fixture encoder\n";
     const ENCODER_LICENSE: &[u8] = b"fixture encoder license\n";
     const DLL: &[u8] = b"fixture cublas\n";
@@ -2327,7 +2572,13 @@ mod tests {
         fs::write(dir.join("SHA256SUMS"), &sums)?;
         fs::write(dir.join("SHA256SUMS.minisig"), b"not a signature")?;
         assert_eq!(
-            fetched_encoder(&dir, platform, &[RELEASE_TEST_PUBKEY], &|_, _| true),
+            fetched_encoder(
+                &dir,
+                &version(TEST_RELEASE),
+                platform,
+                &[RELEASE_TEST_PUBKEY],
+                &|_, _| true
+            ),
             None
         );
         fs::remove_dir_all(dir)?;
