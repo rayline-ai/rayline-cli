@@ -69,7 +69,9 @@ fn sleeper(home: &Home, ready: Option<PathBuf>) -> Child {
     // drop the arguments below from the command line.
     command.args(["-c", "sleep 60; :", "__local-process", "--ready-file"]);
     command.arg(ready.unwrap_or_else(|| home.0.join("elsewhere").join("ready.json")));
-    command.arg("--router-url").stdin(Stdio::null());
+    command
+        .args(["--router-url", "http://127.0.0.1:1"])
+        .stdin(Stdio::null());
     // SAFETY: setsid is async-signal-safe and touches no Rust state.
     unsafe {
         command.pre_exec(|| {
@@ -98,11 +100,19 @@ fn stop_ends_a_local_process_that_never_became_ready() {
         "Local process stopped.\n"
     );
     let deadline = Instant::now() + Duration::from_secs(5);
+    let group = process.id();
     while process.try_wait().expect("wait").is_none() {
         assert!(Instant::now() < deadline, "the process is still running");
         std::thread::sleep(Duration::from_millis(50));
     }
+    end_group(group);
     assert!(!home.state().join("supervisor.json").exists());
+}
+
+/// End what is left of the process group `group` (the shell's `sleep`).
+fn end_group(group: u32) {
+    // SAFETY: killpg takes plain integers and touches no memory.
+    unsafe { libc::killpg(group as libc::pid_t, libc::SIGKILL) };
 }
 
 #[test]
@@ -113,7 +123,7 @@ fn stop_leaves_alone_a_reused_pid_that_is_not_a_local_process() {
     home.record(process.id());
     let output = home.stop();
     let alive = process.try_wait().expect("wait").is_none();
-    let _ = process.kill();
+    end_group(process.id());
     let _ = process.wait();
     assert!(
         output.status.success(),

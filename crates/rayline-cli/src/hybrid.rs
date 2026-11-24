@@ -1855,7 +1855,7 @@ async fn stop_spawned(child: &mut Child) -> io::Result<()> {
 /// nothing is signalled.
 async fn stop_unready(pid: i32, paths: &Paths) -> io::Result<bool> {
     #[cfg(unix)]
-    if !runs_local_process(pid, &paths.ready()) {
+    if !runs_local_process(pid, &paths.ready())? {
         return Ok(false);
     }
     // On Windows only a local process has the stop event named for its pid.
@@ -2058,19 +2058,28 @@ fn process_is_zombie(pid: i32) -> bool {
 /// Whether `pid` runs `rayline local start`'s local process for the ready
 /// file `ready`, by its command line.
 #[cfg(unix)]
-fn runs_local_process(pid: i32, ready: &Path) -> bool {
-    Command::new("ps")
+/// `ps` joins the arguments with spaces; `launch` passes `--router-url`
+/// right after the ready file, which marks where its path ends. A command
+/// line that can't be read is an error, so the record of a process that may
+/// still run is kept.
+fn runs_local_process(pid: i32, ready: &Path) -> io::Result<bool> {
+    let output = Command::new("ps")
         .args(["-ww", "-o", "command=", "-p", &pid.to_string()])
         .stdin(Stdio::null())
         .stderr(Stdio::null())
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .is_some_and(|output| {
-            let command = String::from_utf8_lossy(&output.stdout);
-            command.contains(&format!(" {} ", crate::cli::LOCAL_PROCESS))
-                && command.contains(&format!(" --ready-file {} ", ready.display()))
-        })
+        .output()?;
+    if !output.status.success() {
+        // `ps` fails for a pid that has exited.
+        if process_exists(pid)? {
+            return Err(io::Error::other(format!("ps -p {pid}: {}", output.status)));
+        }
+        return Ok(false);
+    }
+    let command = String::from_utf8_lossy(&output.stdout);
+    Ok(
+        command.contains(&format!(" {} ", crate::cli::LOCAL_PROCESS))
+            && command.contains(&format!(" --ready-file {} --router-url ", ready.display())),
+    )
 }
 
 #[cfg(unix)]
