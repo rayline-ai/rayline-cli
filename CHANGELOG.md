@@ -20,6 +20,15 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   "Already up to date" message as without `--force`. Use
   `rayline update --version <version>` to install an older release.
 
+### Fixed
+
+- **Ctrl-C during `rayline local start` no longer leaves the local process
+  running.** Interrupting a start (or a local-mode `rayline run` that
+  starts the local process) before the process was ready left it starting
+  in the background. The interrupt now stops it and removes its state
+  first. `rayline local stop` also stops a local process whose start was
+  killed before it was ready.
+
 ## 0.5.9 (2026-11-23)
 
 ### Changed

@@ -20,6 +20,7 @@ pub mod harness;
 pub mod hybrid;
 pub(crate) mod hybrid_profile;
 pub(crate) mod hybrid_tokenizer;
+pub(crate) mod interrupt;
 pub(crate) mod start_progress;
 pub mod status;
 mod top;

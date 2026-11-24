@@ -411,6 +411,18 @@ pub(crate) async fn stop() -> ExitCode {
                 return Ok(());
             };
             let pid = i32::try_from(supervisor.pid).map_err(io::Error::other)?;
+            if !paths.ready().exists() {
+                // A start whose launcher was killed before the process was
+                // ready leaves only `supervisor.json`: stop it by its pid.
+                if !stop_unready(pid).await? {
+                    clear_state(&paths)?;
+                    println!("Local process: not running");
+                    return Ok(());
+                }
+                clear_state(&paths)?;
+                println!("Local process stopped.");
+                return Ok(());
+            }
             let state = ready(&paths)?;
             // Shutdown remains available when core health fails. The private
             // gateway token authenticates this command independently.
@@ -843,6 +855,10 @@ async fn launch(
         command.arg("--token-counter-dir").arg(deployment).arg(dir);
     }
     command.env(crate::hybrid_profile::ROUTER_KEY_ENV, &router_key);
+    // The process is detached, so Ctrl-C here never reaches it: until it is
+    // ready, an interrupt stops it and removes its state before this process
+    // ends, so no half-started process is left behind.
+    let interrupt = crate::interrupt::Watch::start()?;
     let mut child = crate::detach::spawn_detached(&mut command)?;
     let progress = crate::start_progress::Progress::stderr();
     progress.phase(if local_arc.is_some() {
@@ -878,6 +894,9 @@ async fn launch(
         let client = gateway_client()?;
         let started = Instant::now();
         loop {
+            if interrupt.caught() {
+                return Err(io::Error::from(io::ErrorKind::Interrupted));
+            }
             if let Some(status) = child.try_wait()? {
                 let exited = format!(
                     "the local process exited ({status}); see {}",
@@ -896,6 +915,9 @@ async fn launch(
                     return Err(io::Error::other("local process startup identity mismatch"));
                 }
                 health(&client, paths, &state).await?;
+                if interrupt.caught() {
+                    return Err(io::Error::from(io::ErrorKind::Interrupted));
+                }
                 progress.clear();
                 for line in skipped_models(&state) {
                     say(line);
@@ -922,6 +944,9 @@ async fn launch(
         progress.clear();
         stop_spawned(&mut child).await?;
         clear_state(paths)?;
+        if interrupt.caught() {
+            interrupt.finish();
+        }
         return Err(error);
     }
     Ok(())
@@ -1821,6 +1846,37 @@ async fn stop_spawned(child: &mut Child) -> io::Result<()> {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     Ok(())
+}
+
+/// Stop the local process `pid` that has no ready file yet, as a failed
+/// start stops the one it spawned. `false` when `pid` is not a local process
+/// (the recorded one exited and its pid was reused): nothing is signalled.
+async fn stop_unready(pid: i32) -> io::Result<bool> {
+    // The local process leads its own session (`spawn_detached`).
+    // SAFETY: getsid takes a plain pid and touches no memory.
+    #[cfg(unix)]
+    if unsafe { libc::getsid(pid) } != pid {
+        return Ok(false);
+    }
+    // On Windows only a local process has the stop event named for its pid.
+    match request_supervisor_stop(pid) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    }
+    let deadline = Instant::now() + Duration::from_secs(7);
+    while process_exists(pid)? {
+        if Instant::now() >= deadline {
+            force_stop_process_group(pid)?;
+            let gone_by = Instant::now() + Duration::from_secs(2);
+            while Instant::now() < gone_by && process_exists(pid).unwrap_or(false) {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    Ok(true)
 }
 
 /// Ask a supervisor we spawned to stop and clean up after itself. Unix sends
