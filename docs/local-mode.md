@@ -271,10 +271,7 @@ These keys can be set from the environment:
   overrides, then flags.
 - An override is validated the same way as the file value.
 - An override only changes a value. The config file still has to have a
-  `local.routing` section. The exception is `rayline local start --router
-  <cloud|local>` with no `local.routing`: the overrides apply to its built-in
-  defaults, and so do they for a local-mode `rayline run <harness>` without
-  `local.routing` while that local process runs.
+  `local.routing` section, also for `rayline local start --router`.
 - Commands that don't use `local` (`auth`, `top`, `update`, `local status`,
   `local stop`, and a cloud-mode run) don't read the `RAYLINE_LOCAL_*` env
   vars.
@@ -302,7 +299,7 @@ so a local-mode `rayline run pi` refuses it.
 
 | Command | Does |
 |---|---|
-| `rayline local start [--config <file>] [--router <cloud\|local>]` | Starts the local process from the `local` section of the default config file, or of `<file>`, whatever `mode` says. The config must have `local.routing`, except with `--router`. `--router` overrides `local.routing.router`. |
+| `rayline local start [--config <file>] [--router <cloud\|local>]` | Starts the local process from the `local` section of the default config file, or of `<file>`, whatever `mode` says. The config must have `local.routing`. `--router` overrides `local.routing.router`. |
 | `rayline local status [--json]` | Shows whether the local process is running, its address, and the config file and environment it was started from. `--json` prints it as JSON (see [Local decisions for your own Pi](#local-decisions-for-your-own-pi)). |
 | `rayline local stop` | Stops the local process. Your endpoints keep running. |
 | `rayline run <HARNESS> [--mode <cloud\|local>] [--config <file>]` | Runs the harness in the mode `--mode` names, else `RAYLINE_MODE`, else the config's `mode`. In local mode it starts the local process if it isn't running. `--config <file>` uses `<file>` instead of `~/.config/rayline/settings.json`, never merged with it. |
@@ -338,8 +335,19 @@ rayline auth login
 rayline local start --router local
 ```
 
-`--router` needs no `local` section. Without `local.routing`, `cloud` and
-`local` both use `arc-swift-1.0` and the `arc-policy.prefer-local.v1` preset.
+The config needs a `local.routing` section; `--router` sets only its
+`router`. For example, in `~/.config/rayline/settings.json`:
+
+```json
+"local": {
+  "routing": {
+    "router": "local",
+    "decisions_model": { "id": "arc-swift-1.0" },
+    "policy": { "preset": "arc-policy.prefer-local.v1" }
+  }
+}
+```
+
 `local.routing.classifier_model` is needed only to run Claude Code.
 
 pi-arc finds the local Routes API with `rayline local status --json`:

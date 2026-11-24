@@ -5,6 +5,34 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 
 ## 0.5.10 (2026-11-24)
 
+### Changed (breaking)
+
+- **`rayline local start --router` needs a `local.routing` section.** With
+  no `local.routing` in the config, or with no config file, it used to start
+  from `arc-swift-1.0` and `arc-policy.prefer-local.v1`. It now fails at load
+  with an error naming the missing key (`local` or `local.routing`), like
+  `rayline local start` without `--router`. So does a local-mode `rayline
+  run` without `local.routing`, also while a local process started that way
+  runs, and a `RAYLINE_LOCAL_ROUTING_*` override with no `local.routing` in
+  the file. To keep the old behaviour, add this to the `local` section of
+  `~/.config/rayline/settings.json` (or your `--config` file):
+
+  ```json
+  "routing": {
+    "router": "local",
+    "decisions_model": { "id": "arc-swift-1.0" },
+    "policy": { "preset": "arc-policy.prefer-local.v1" }
+  }
+  ```
+
+  `--router` still overrides `router`.
+- Stop a local process you started with `--router` and no `local.routing`
+  (`rayline local stop`) before updating: this version can't read its
+  record, and `rayline local status`, `rayline local stop` and local-mode
+  runs fail naming `supervisor.json` while it runs. If you already updated,
+  run `rayline update --version 0.5.9`, `rayline local stop`, then
+  `rayline update`.
+
 ### Security
 
 - **Updates and the ARC encoder check reject another release's signed

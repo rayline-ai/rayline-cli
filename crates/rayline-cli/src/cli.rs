@@ -128,8 +128,7 @@ Usage: rayline local start [--config <file>] [--router <cloud|local>]
 
 Start the local process from the `local` section of
 ~/.config/rayline/settings.json, or of <file>, whatever `mode` says. The config
-must have `local.routing`, except with `--router`: without it, it uses
-arc-swift-1.0 and arc-policy.prefer-local.v1.
+must have `local.routing`.
 
 Options:
   --config <file>                Read the config from <file> instead of the default file
@@ -187,7 +186,7 @@ Homebrew installs update through brew.
 pub(crate) const LOCAL_PROCESS: &str = "__local-process";
 
 /// The first argument that runs the relay for Claude Code's stderr in a
-/// `rayline run claude -p` launch (section 3.2 item 13), followed by the model
+/// `rayline run claude -p` launch (section 3.2 item 15), followed by the model
 /// ids whose notices it drops. It is in no help text.
 #[cfg(unix)]
 pub(crate) const CLAUDE_STDERR: &str = "__claude-stderr";
