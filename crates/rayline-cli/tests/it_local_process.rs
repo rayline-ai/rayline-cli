@@ -175,7 +175,8 @@ impl Runtime {
             rlim_max: open_files as libc::rlim_t,
         };
         // SAFETY: the closure runs in the forked child before exec and only
-        // calls setrlimit, which is async-signal-safe, on a value it owns.
+        // makes the setrlimit system call on a value it owns: it neither
+        // allocates nor takes a lock.
         unsafe {
             command.pre_exec(move || {
                 if libc::setrlimit(libc::RLIMIT_NOFILE, &limit) == 0 {
@@ -666,13 +667,17 @@ async fn running_out_of_file_descriptors_does_not_stop_the_gateway() {
     let mut runtime = Runtime::start_with_open_file_limit(64);
     let (url, token) = runtime.ready().await;
     let address = url.trim_start_matches("http://").to_owned();
-    // Far more connections than the process has descriptors: the gateway
-    // accepts until it runs out, then its accepts fail (EMFILE). Once its
-    // listen backlog is full too, the system may refuse or reset a connect.
+    // More connections than the process has descriptors: the gateway
+    // accepts until it runs out, then its accepts fail (EMFILE) and the rest
+    // wait in its listen backlog (128). A full backlog may drop a connect
+    // rather than refuse it, so each gets a deadline and the first miss ends
+    // the loop.
     let mut held = Vec::new();
-    for _ in 0..200 {
-        if let Ok(stream) = tokio::net::TcpStream::connect(&address).await {
-            held.push(stream);
+    for _ in 0..100 {
+        let connect = tokio::net::TcpStream::connect(&address);
+        match tokio::time::timeout(Duration::from_millis(500), connect).await {
+            Ok(Ok(stream)) => held.push(stream),
+            _ => break,
         }
     }
     assert!(held.len() > 64, "only {} connections opened", held.len());

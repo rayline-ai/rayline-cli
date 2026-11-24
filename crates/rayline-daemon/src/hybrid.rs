@@ -450,9 +450,10 @@ async fn read_handshake(child: &mut Child) -> Result<CoreHandshake> {
 
 async fn serve(listener: TcpListener, state: Arc<Gateway>) -> Infallible {
     let mut connections = JoinSet::new();
+    let mut failures = 0;
     loop {
         tokio::select! {
-            socket = accept(&listener, "gateway") => {
+            socket = accept(&listener, "gateway", &mut failures) => {
                 let state = state.clone();
                 connections.spawn(async move {
                     let service = service_fn(move |request| {
@@ -474,25 +475,31 @@ async fn serve(listener: TcpListener, state: Arc<Gateway>) -> Infallible {
 /// out of file descriptors (EMFILE), a connection the client abandoned
 /// before it was accepted (ECONNABORTED) and the like clear on their own, so
 /// the accept is retried after `ACCEPT_RETRY_DELAY`, which keeps a lasting
-/// error from spinning. The first error of a run is a warning; its repeats
-/// are debug, and the recovery is logged.
-pub(crate) async fn accept(listener: &TcpListener, server: &'static str) -> tokio::net::TcpStream {
-    let mut failures = 0_u64;
+/// error from spinning. `failures` counts the errors since the last accepted
+/// connection and outlives a cancelled call (a server's `select!` drops it
+/// when a connection ends), so the first error of a run is a warning, its
+/// repeats are debug, and the recovery is logged.
+pub(crate) async fn accept(
+    listener: &TcpListener,
+    server: &'static str,
+    failures: &mut u64,
+) -> tokio::net::TcpStream {
     loop {
         match listener.accept().await {
             Ok((socket, _)) => {
-                if failures > 0 {
-                    tracing::info!(server, failures, "accepting connections again");
+                if *failures > 0 {
+                    tracing::info!(server, failures = *failures, "accepting connections again");
+                    *failures = 0;
                 }
                 return socket;
             }
             Err(error) => {
-                if failures == 0 {
+                if *failures == 0 {
                     tracing::warn!(server, %error, "accept failed; retrying");
                 } else {
                     tracing::debug!(server, %error, "accept failed again; retrying");
                 }
-                failures += 1;
+                *failures += 1;
                 tokio::time::sleep(ACCEPT_RETRY_DELAY).await;
             }
         }
