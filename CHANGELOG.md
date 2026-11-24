@@ -20,6 +20,14 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   "Already up to date" message as without `--force`. Use
   `rayline update --version <version>` to install an older release.
 
+### Fixed
+
+- **The local process keeps running when it can't accept a connection.**
+  Running out of file descriptors, or a client abandoning a connection
+  before it was accepted, stopped the local process and every harness
+  using it. It now logs the error, waits briefly and accepts again; the
+  same holds for its prompt counters.
+
 ## 0.5.9 (2026-11-23)
 
 ### Changed

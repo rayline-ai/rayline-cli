@@ -145,6 +145,58 @@ impl Runtime {
         raw_members: &str,
         router_key: Option<&str>,
     ) -> Self {
+        let (dir, mut command) = Self::command(
+            version,
+            delay,
+            deadline,
+            capabilities,
+            decisions_url,
+            raw_members,
+            router_key,
+        );
+        let child = command.spawn().unwrap();
+        Self { dir, child }
+    }
+    /// The local process at `open_files` file descriptors.
+    #[cfg(unix)]
+    fn start_with_open_file_limit(open_files: u64) -> Self {
+        use std::os::unix::process::CommandExt;
+        let (dir, mut command) = Self::command(
+            1,
+            0,
+            120,
+            None,
+            "http://127.0.0.1:9/v1/routes",
+            "",
+            Some(ROUTER_KEY),
+        );
+        let limit = libc::rlimit {
+            rlim_cur: open_files as libc::rlim_t,
+            rlim_max: open_files as libc::rlim_t,
+        };
+        // SAFETY: the closure runs in the forked child before exec and only
+        // calls setrlimit, which is async-signal-safe, on a value it owns.
+        unsafe {
+            command.pre_exec(move || {
+                if libc::setrlimit(libc::RLIMIT_NOFILE, &limit) == 0 {
+                    Ok(())
+                } else {
+                    Err(std::io::Error::last_os_error())
+                }
+            });
+        }
+        let child = command.spawn().unwrap();
+        Self { dir, child }
+    }
+    fn command(
+        version: u32,
+        delay: u64,
+        deadline: u64,
+        capabilities: Option<Value>,
+        decisions_url: &str,
+        raw_members: &str,
+        router_key: Option<&str>,
+    ) -> (PathBuf, Command) {
         let dir = std::env::temp_dir().join(format!(
             "rayline-local-{}-{:x}",
             std::process::id(),
@@ -172,7 +224,7 @@ impl Runtime {
         if let Some(key) = router_key {
             command.env("RAYLINE_ROUTER_API_KEY", key);
         }
-        let child = command
+        command
             .arg("__local-process")
             .arg("--core")
             .arg(script)
@@ -187,10 +239,8 @@ impl Runtime {
             .args(["--router-url", "https://api.rayline.ai"])
             .args(["--classifier-model", "claude-haiku-5-5"])
             .stdout(Stdio::null())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .unwrap();
-        Self { dir, child }
+            .stderr(Stdio::inherit());
+        (dir, command)
     }
     async fn ready(&mut self) -> (String, String) {
         let deadline = Instant::now() + Duration::from_secs(15);
@@ -606,6 +656,51 @@ async fn client_leaving_a_stalled_stream_reaches_core_and_closes_the_row() {
         tokio::time::sleep(Duration::from_millis(30)).await;
     }
     assert_cancelled_snapshot(&client, &url, &token, &request_id).await;
+}
+
+/// Out of file descriptors, the gateway cannot accept: it keeps serving and
+/// accepts again once descriptors are free.
+#[cfg(unix)]
+#[tokio::test]
+async fn running_out_of_file_descriptors_does_not_stop_the_gateway() {
+    let mut runtime = Runtime::start_with_open_file_limit(64);
+    let (url, token) = runtime.ready().await;
+    let address = url.trim_start_matches("http://").to_owned();
+    // Far more connections than the process has descriptors: the gateway
+    // accepts until it runs out, then its accepts fail (EMFILE). Once its
+    // listen backlog is full too, the system may refuse or reset a connect.
+    let mut held = Vec::new();
+    for _ in 0..200 {
+        if let Ok(stream) = tokio::net::TcpStream::connect(&address).await {
+            held.push(stream);
+        }
+    }
+    assert!(held.len() > 64, "only {} connections opened", held.len());
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert!(
+        runtime.child.try_wait().unwrap().is_none(),
+        "the local process exited when it ran out of file descriptors"
+    );
+    drop(held);
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let health = client
+            .get(format!("{url}/healthz"))
+            .bearer_auth(&token)
+            .timeout(Duration::from_secs(2))
+            .send()
+            .await;
+        if health.is_ok_and(|response| response.status().is_success()) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the gateway did not serve again once descriptors were free"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(runtime.child.try_wait().unwrap().is_none());
 }
 
 #[tokio::test]

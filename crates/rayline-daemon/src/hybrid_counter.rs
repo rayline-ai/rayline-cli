@@ -134,12 +134,11 @@ fn name_counter(
     Ok(())
 }
 
-pub(crate) async fn serve(listener: TcpListener, counter: Arc<Counter>) -> Result<()> {
+pub(crate) async fn serve(listener: TcpListener, counter: Arc<Counter>) -> Infallible {
     let mut connections = JoinSet::new();
     loop {
         tokio::select! {
-            accepted = listener.accept() => {
-                let (socket, _) = accepted?;
+            socket = crate::hybrid::accept(&listener, "token counter") => {
                 let counter = counter.clone();
                 connections.spawn(async move {
                     let service = service_fn(move |request| {

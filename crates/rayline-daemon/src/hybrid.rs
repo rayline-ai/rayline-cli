@@ -34,6 +34,8 @@ const CONTRACT_VERSION: u32 = 1;
 /// local Routes API, for decisions only.
 pub const ROUTES_TOKEN_FILE: &str = "routes-token";
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+/// The pause before accepting again after an accept error.
+const ACCEPT_RETRY_DELAY: Duration = Duration::from_millis(50);
 /// The execution core's own request body limit.
 const MAX_REQUEST_BYTES: usize = 64 << 20;
 /// Wait before the one retry of a turn whose Decisions call found the routing
@@ -345,7 +347,7 @@ pub async fn run(args: Args) -> Result<()> {
             "hybrid execution gateway ready"
         );
         tokio::select! {
-            result = serve(listener, state) => result,
+            never = serve(listener, state) => match never {},
             status = child.wait() => bail!("execution core exited: {}", status?),
             () = crate::hybrid_arc::supervise_encoder(&mut arc_encoder) => {
                 bail!("local ARC encoder supervision ended")
@@ -446,12 +448,11 @@ async fn read_handshake(child: &mut Child) -> Result<CoreHandshake> {
     Ok(handshake)
 }
 
-async fn serve(listener: TcpListener, state: Arc<Gateway>) -> Result<()> {
+async fn serve(listener: TcpListener, state: Arc<Gateway>) -> Infallible {
     let mut connections = JoinSet::new();
     loop {
         tokio::select! {
-            accepted = listener.accept() => {
-                let (socket, _) = accepted?;
+            socket = accept(&listener, "gateway") => {
                 let state = state.clone();
                 connections.spawn(async move {
                     let service = service_fn(move |request| {
@@ -465,6 +466,35 @@ async fn serve(listener: TcpListener, state: Arc<Gateway>) -> Result<()> {
                 });
             }
             _ = connections.join_next(), if !connections.is_empty() => {}
+        }
+    }
+}
+
+/// The next connection on `listener`. An accept error never ends a server:
+/// out of file descriptors (EMFILE), a connection the client abandoned
+/// before it was accepted (ECONNABORTED) and the like clear on their own, so
+/// the accept is retried after `ACCEPT_RETRY_DELAY`, which keeps a lasting
+/// error from spinning. The first error of a run is a warning; its repeats
+/// are debug, and the recovery is logged.
+pub(crate) async fn accept(listener: &TcpListener, server: &'static str) -> tokio::net::TcpStream {
+    let mut failures = 0_u64;
+    loop {
+        match listener.accept().await {
+            Ok((socket, _)) => {
+                if failures > 0 {
+                    tracing::info!(server, failures, "accepting connections again");
+                }
+                return socket;
+            }
+            Err(error) => {
+                if failures == 0 {
+                    tracing::warn!(server, %error, "accept failed; retrying");
+                } else {
+                    tracing::debug!(server, %error, "accept failed again; retrying");
+                }
+                failures += 1;
+                tokio::time::sleep(ACCEPT_RETRY_DELAY).await;
+            }
         }
     }
 }
@@ -1465,7 +1495,7 @@ fn spawn_core(
 }
 
 /// Aborts the counter's server when the local process's run ends.
-struct AbortOnDrop(Vec<tokio::task::JoinHandle<Result<()>>>);
+struct AbortOnDrop(Vec<tokio::task::JoinHandle<Infallible>>);
 impl Drop for AbortOnDrop {
     fn drop(&mut self) {
         for task in &self.0 {
