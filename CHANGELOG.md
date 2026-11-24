@@ -28,9 +28,8 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
   `--router` still overrides `router`.
 - Stop a local process you started with `--router` and no `local.routing`
   (`rayline local stop`) before updating: this version can't read its
-  record. While it runs, `rayline local status`, `rayline local stop` and
-  `rayline top` fail naming `supervisor.json`, and so do `rayline local
-  start` and local-mode runs once the config has `local.routing`. If you
+  record. While it runs, commands that read it, such as `rayline local
+  status` and `rayline local stop`, fail naming `supervisor.json`. If you
   already updated, run `rayline update --version 0.5.9`, `rayline local
   stop`, then `rayline update`.
 
