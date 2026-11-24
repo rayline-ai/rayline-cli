@@ -22,6 +22,13 @@ assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock
 
 ### Fixed
 
+- **Ctrl-C during `rayline local start` no longer leaves the local process
+  running.** Interrupting a start (or a local-mode `rayline run` that
+  starts the local process) before the process was ready left it starting
+  in the background. The interrupt now stops it and removes its state
+  first. `rayline local stop` also stops a local process whose start was
+  killed before it was ready.
+
 - **The local process keeps running when it can't accept a connection.**
   Running out of file descriptors, or a client abandoning a connection
   before it was accepted, stopped the local process and every harness

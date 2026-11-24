@@ -411,6 +411,18 @@ pub(crate) async fn stop() -> ExitCode {
                 return Ok(());
             };
             let pid = i32::try_from(supervisor.pid).map_err(io::Error::other)?;
+            if !paths.ready().exists() {
+                // A start whose launcher was killed before the process was
+                // ready leaves only `supervisor.json`: stop it by its pid.
+                if !stop_unready(pid, &paths).await? {
+                    clear_state(&paths)?;
+                    println!("Local process: not running");
+                    return Ok(());
+                }
+                clear_state(&paths)?;
+                println!("Local process stopped.");
+                return Ok(());
+            }
             let state = ready(&paths)?;
             // Shutdown remains available when core health fails. The private
             // gateway token authenticates this command independently.
@@ -843,6 +855,10 @@ async fn launch(
         command.arg("--token-counter-dir").arg(deployment).arg(dir);
     }
     command.env(crate::hybrid_profile::ROUTER_KEY_ENV, &router_key);
+    // The process is detached, so Ctrl-C here never reaches it: until it is
+    // ready, an interrupt stops it and removes its state before this process
+    // ends, so no half-started process is left behind.
+    let interrupt = crate::interrupt::Watch::start()?;
     let mut child = crate::detach::spawn_detached(&mut command)?;
     let progress = crate::start_progress::Progress::stderr();
     progress.phase(if local_arc.is_some() {
@@ -878,6 +894,9 @@ async fn launch(
         let client = gateway_client()?;
         let started = Instant::now();
         loop {
+            if interrupt.caught() {
+                return Err(io::Error::from(io::ErrorKind::Interrupted));
+            }
             if let Some(status) = child.try_wait()? {
                 let exited = format!(
                     "the local process exited ({status}); see {}",
@@ -896,6 +915,9 @@ async fn launch(
                     return Err(io::Error::other("local process startup identity mismatch"));
                 }
                 health(&client, paths, &state).await?;
+                if interrupt.caught() {
+                    return Err(io::Error::from(io::ErrorKind::Interrupted));
+                }
                 progress.clear();
                 for line in skipped_models(&state) {
                     say(line);
@@ -918,13 +940,17 @@ async fn launch(
         }
     }
     .await;
-    if let Err(error) = startup {
+    // An interrupt that arrived after the readiness loop's last check still
+    // stops the process: the caller must not go on to use it.
+    if startup.is_err() || interrupt.caught() {
         progress.clear();
         stop_spawned(&mut child).await?;
         clear_state(paths)?;
-        return Err(error);
+        if interrupt.caught() {
+            interrupt.finish();
+        }
     }
-    Ok(())
+    startup
 }
 
 /// The snapshot of `repo`'s tokenizer and chat template, fetched from Hugging
@@ -1823,6 +1849,48 @@ async fn stop_spawned(child: &mut Child) -> io::Result<()> {
     Ok(())
 }
 
+/// Stop the local process `pid` that has no ready file yet, as a failed
+/// start stops the one it spawned. `false` when `pid` is not the local
+/// process of `paths` (the recorded one exited and its pid was reused):
+/// nothing is signalled.
+async fn stop_unready(pid: i32, paths: &Paths) -> io::Result<bool> {
+    #[cfg(unix)]
+    if !runs_local_process(pid, &paths.ready())? {
+        return Ok(false);
+    }
+    // On Windows only a local process has the stop event named for its pid.
+    // It creates the event as it starts, just after `supervisor.json` is
+    // written, so a live `pid` without one gets a moment to create it.
+    #[cfg(windows)]
+    let _ = paths;
+    let event_by = Instant::now() + Duration::from_secs(2);
+    loop {
+        match request_supervisor_stop(pid) {
+            Ok(()) => break,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                if cfg!(unix) || Instant::now() >= event_by || !process_exists(pid)? {
+                    return Ok(false);
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    let deadline = Instant::now() + Duration::from_secs(7);
+    while process_exists(pid)? {
+        if Instant::now() >= deadline {
+            force_stop_process_group(pid)?;
+            let gone_by = Instant::now() + Duration::from_secs(2);
+            while Instant::now() < gone_by && process_exists(pid).unwrap_or(false) {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    Ok(true)
+}
+
 /// Ask a supervisor we spawned to stop and clean up after itself. Unix sends
 /// SIGTERM; Windows sets the stop event the local process waits on. `NotFound` means it
 /// is already gone.
@@ -1985,6 +2053,105 @@ fn process_is_zombie(pid: i32) -> bool {
         .and_then(|output| output.status.success().then_some(output.stdout))
         .map(|stdout| String::from_utf8_lossy(&stdout).contains('Z'))
         .unwrap_or(false)
+}
+
+/// Whether `pid` runs `rayline local start`'s local process for the ready
+/// file `ready`: its arguments, read exactly, name the local process's entry
+/// point and `--ready-file <ready>`, followed by `--router-url` as `launch`
+/// passes them. Arguments that can't be read are an error while `pid`
+/// exists, so the record of a process that may still run is kept.
+#[cfg(unix)]
+fn runs_local_process(pid: i32, ready: &Path) -> io::Result<bool> {
+    let args = match process_args(pid) {
+        Ok(args) => args,
+        Err(error) => {
+            return if process_exists(pid)? {
+                Err(error)
+            } else {
+                Ok(false)
+            };
+        }
+    };
+    let ready = ready.as_os_str();
+    Ok(args.iter().any(|arg| arg == crate::cli::LOCAL_PROCESS)
+        && args.windows(3).any(|window| {
+            window[0] == "--ready-file" && window[1] == ready && window[2] == "--router-url"
+        }))
+}
+
+/// The arguments `pid` was started with, byte for byte.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn process_args(pid: i32) -> io::Result<Vec<OsString>> {
+    use std::os::unix::ffi::OsStrExt;
+    let bytes = fs::read(format!("/proc/{pid}/cmdline"))?;
+    let bytes = bytes.strip_suffix(&[0]).unwrap_or(&bytes);
+    Ok(bytes
+        .split(|byte| *byte == 0)
+        .map(|arg| std::ffi::OsStr::from_bytes(arg).to_os_string())
+        .collect())
+}
+
+/// The arguments `pid` was started with, byte for byte: `KERN_PROCARGS2`
+/// gives argc, the executable path, padding, then the arguments, each
+/// NUL-terminated.
+#[cfg(target_os = "macos")]
+fn process_args(pid: i32) -> io::Result<Vec<OsString>> {
+    use std::os::unix::ffi::OsStrExt;
+    let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
+    let mut size: libc::size_t = 0;
+    // SAFETY: `mib` holds 3 valid names; a null buffer asks only for the
+    // size, written to `size`.
+    if unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            3,
+            std::ptr::null_mut(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    } != 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    let mut buffer = vec![0_u8; size];
+    // SAFETY: `buffer` holds `size` writable bytes; sysctl writes at most
+    // that many and stores the count in `size`.
+    if unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            3,
+            buffer.as_mut_ptr().cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    } != 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    buffer.truncate(size);
+    let invalid = || io::Error::from(io::ErrorKind::InvalidData);
+    let (argc, rest) = buffer.split_first_chunk::<4>().ok_or_else(invalid)?;
+    let argc = usize::try_from(i32::from_ne_bytes(*argc)).map_err(|_| invalid())?;
+    let path_end = rest
+        .iter()
+        .position(|byte| *byte == 0)
+        .ok_or_else(invalid)?;
+    let args_start = rest[path_end..]
+        .iter()
+        .position(|byte| *byte != 0)
+        .map(|offset| path_end + offset)
+        .ok_or_else(invalid)?;
+    let args: Vec<OsString> = rest[args_start..]
+        .split(|byte| *byte == 0)
+        .take(argc)
+        .map(|arg| std::ffi::OsStr::from_bytes(arg).to_os_string())
+        .collect();
+    if args.len() != argc {
+        return Err(invalid());
+    }
+    Ok(args)
 }
 
 #[cfg(unix)]
