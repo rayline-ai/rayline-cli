@@ -1268,7 +1268,8 @@ fn version_encoder(
     // No local process runs while one starts: the other versions' encoders
     // are no longer needed.
     crate::update::remove_other_encoders(&dir);
-    if let Some(encoder) = crate::update::fetched_encoder(&dir, platform, keys, &verified) {
+    if let Some(encoder) = crate::update::fetched_encoder(&dir, &version, platform, keys, &verified)
+    {
         return Ok(encoder);
     }
     tokio::runtime::Handle::current()
@@ -1304,13 +1305,19 @@ fn encoder_check(home: &Path, stamps: &Path) -> io::Result<PathBuf> {
         .map_err(|_| io::Error::other(format!("invalid version {}", crate::RAYLINE_VERSION)))?;
     let dir = crate::update::encoder_dir(home, &version);
     let verified = |at: &Path, sha256: &str| crate::arc_release::verified(stamps, at, sha256);
-    crate::update::fetched_encoder(&dir, platform, crate::MINISIGN_PUBLIC_KEYS, &verified)
-        .ok_or_else(|| {
-            io::Error::other(format!(
-                "the ARC encoder downloaded into {} doesn't match its SHA256SUMS",
-                dir.display()
-            ))
-        })
+    crate::update::fetched_encoder(
+        &dir,
+        &version,
+        platform,
+        crate::MINISIGN_PUBLIC_KEYS,
+        &verified,
+    )
+    .ok_or_else(|| {
+        io::Error::other(format!(
+            "the ARC encoder downloaded into {} doesn't match its SHA256SUMS",
+            dir.display()
+        ))
+    })
 }
 
 /// On Linux the encoder runs on an NVIDIA GPU through the driver's

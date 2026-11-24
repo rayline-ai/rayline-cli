@@ -256,14 +256,17 @@ jobs:
           key_file="$(mktemp)"
           trap 'rm -f "$key_file"' EXIT
           printf '%s\n' "$MINISIGN_SECRET_KEY" > "$key_file"
-          # Sign SHA256SUMS (covers the binaries/archives).
-          minisign -S -s "$key_file" -m dist/SHA256SUMS
+          version="${RELEASE_TAG#v}"
+          # Sign SHA256SUMS (covers the binaries/archives). The trusted comment
+          # names the release's full version, which `rayline update` and the
+          # ARC encoder check require to equal the version they fetch.
+          trusted="$(printf 'timestamp:%s\tfile:SHA256SUMS\thashed\tversion:%s' "$(date +%s)" "$version")"
+          minisign -S -s "$key_file" -m dist/SHA256SUMS -t "$trusted"
           # Generate and sign the channel version pointer so `rayline update`
           # verifies the version it is told to install before trusting it
           # (defeats downgrade attacks). Signed separately from SHA256SUMS; the
           # signature is over the version bytes, so the same latest.txt /
           # latest.txt.minisig can be mirrored under any channel pointer name.
-          version="${RELEASE_TAG#v}"
           printf '%s\n' "$version" > dist/latest.txt
           minisign -S -s "$key_file" -m dist/latest.txt
 
