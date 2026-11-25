@@ -157,7 +157,7 @@ rayline top [--json]
 3. The live view (a terminal, without `--json`) waits for a local process: while none runs it shows `Local process: not running` and checks again every refresh. When the local process restarts, it follows the new one. `--json`, or output that isn't a terminal, with no local process running exits with the error ``no local process is running. Start one with `rayline local start` or `rayline run <harness> --mode local`.``
 4. The live view's header has five lines:
    - `Rayline top`, then right-aligned `local process · up <uptime> · <HH:MM>`;
-   - `Routing   <ARC name> decides <where> · policy: <preset name>`, where `<ARC name>` is the decisions model as a product name (`arc-swift-1.0` → `ARC Swift`), `<where>` is `on this Mac` (macOS), `on this PC` (Linux, Windows) or `in Rayline Platform`, and `<preset name>` is the preset in words (`arc-policy.prefer-local.v1` → `prefer local`; an unknown preset shows its id);
+   - `Routing   <ARC name> decides <where> · policy: <preset name>`, where `<ARC name>` is the decisions model as a product name (`arc-sage-1.0` → `ARC Sage`), `<where>` is `on this Mac` (macOS), `on this PC` (Linux, Windows) or `in Rayline Platform`, and `<preset name>` is the preset in words (`arc-policy.prefer-local.v1` → `prefer local`; an unknown preset shows its id);
    - `Ran on    Rayline Platform <n> · your servers <n>`;
    - `Tokens    <in> in (<p>% cached) · <out> out`, where `<p>` is all cache reads over all input tokens;
    - `Decisions <n> · median <ms> · <n> errors`.
@@ -317,7 +317,7 @@ Example 2, local mode with cloud ARC:
     },
     "routing": {
       "router": "cloud",
-      "decisions_model": { "id": "arc-swift-1.0" },
+      "decisions_model": { "id": "arc-sage-1.0" },
       "classifier_model": "anthropic/claude-haiku-5.5",
       "policy": {
         "preset": "arc-policy.prefer-local.v1",
@@ -370,7 +370,7 @@ Example 3, local mode with local ARC:
     },
     "routing": {
       "router": "local",
-      "decisions_model": { "id": "arc-swift-1.0" },
+      "decisions_model": { "id": "arc-sage-1.0" },
       "classifier_model": "anthropic/claude-haiku-5.5",
       "policy": {
         "preset": "arc-policy.prefer-local.v1",
@@ -481,7 +481,7 @@ How the local process picks a model. Required in local mode and for `rayline loc
 |---|---|---|---|
 | `router` | `cloud` or `local` | yes | Where the local process gets its decisions. `cloud`: the environment's Rayline router decides. `local`: ARC runs inside the local process from the ARC release (item 1); no decision goes to Rayline Platform. |
 | `decisions_model` | model object `{ "id": ..., "v_value": ... }` | yes | Which ARC model makes decisions. No default in code. |
-| `decisions_model.id` | non-empty string | yes | Its ARC model id (for example `arc-swift-1.0`). With `router` `local`, it must be `arc-swift-1.0` or `arc-sage-1.0` (or their short and data-mode spellings, such as `arc-swift` or `arc-sage-zdr-1.0`); any other value fails load naming the key. With `router` `cloud`, Rayline doesn't check it (section 5.1 item 2). |
+| `decisions_model.id` | non-empty string | yes | Its ARC model id (for example `arc-sage-1.0`). With `router` `local`, it must be `arc-swift-1.0` or `arc-sage-1.0` (or their short and data-mode spellings, such as `arc-swift` or `arc-sage-zdr-1.0`); any other value fails load naming the key. With `router` `cloud`, Rayline doesn't check it (section 5.1 item 2). |
 | `decisions_model.v_value` | number >= 0 | no | With `router` `cloud`, the local process asks the Rayline router for ARC's `custom` answer at this value, sent as `routing.v_value`; without it, ARC's `top` answer. With `router` `local`, it is a load error. |
 | `classifier_model` | string | to run Claude Code | The model that serves Claude Code's auto-mode safety classifier calls, sent to Rayline Platform. No default in code. A local-mode `rayline run claude` without it fails before anything starts, naming the key and showing a `settings.json` with the run's `local.routing` and `"classifier_model": "<model id>"`, and so does one that would use a local process started without it; such a process refuses classifier calls. |
 | `policy.preset` | non-empty string | yes | ARC's preset id (`arc-policy.package-default.v1`, `arc-policy.hybrid-default.v1` or `arc-policy.prefer-local.v1`). Sent to ARC unchanged; no short names. No default in code. |
@@ -569,7 +569,7 @@ Load refuses, naming the key:
 2. A wrong type, an empty string, or a value out of range.
 3. In a local-mode run, a `local.inference.endpoints` entry that doesn't list the protocol of the harness being run. Cloud mode doesn't use endpoints, and `rayline local start` has no harness, so neither checks this.
 4. A `local.inference.models` entry whose `endpoint` is not in `local.inference.endpoints`.
-5. A file without `mode`, unless it is the default file in the earlier shape (section 5.9). A cloud-mode run without `cloud`. Local mode or `rayline local start` without `local` or `local.routing`. When the file has no `local` section, the error says `local` is required in local mode and ends ``See https://docs.rayline.ai/rayline-cli/local-mode``; it prints no section, model id, preset or endpoint. Which sections must be present depends on the command; `auth`, `top`, `update`, `local status` and `local stop` need neither. A section the file has missing a required key in the file, for every command: `cloud` without `model` or `model.id`, a `cloud.smol_model` without `id`, a `local.routing` without `router`, `decisions_model`, `decisions_model.id` or `policy.preset`. An env override doesn't give a missing required key.
+5. A file without `mode`, unless it is the default file in the earlier shape (section 5.9). A cloud-mode run without `cloud`. Local mode or `rayline local start` without `local` or `local.routing`. When the file has no `local` section, the error says `local` is required in local mode, and when it has `local` without `routing`, that `local.routing` is; both end ``See https://docs.rayline.ai/rayline-cli/local-mode`` and print no section, model id, preset or endpoint. So does the error for a `local.routing` missing a required key (below), after ``is required``. Which sections must be present depends on the command; `auth`, `top`, `update`, `local status` and `local stop` need neither. A section the file has missing a required key in the file, for every command: `cloud` without `model` or `model.id`, a `cloud.smol_model` without `id`, a `local.routing` without `router`, `decisions_model`, `decisions_model.id` or `policy.preset`. An env override doesn't give a missing required key.
 6. `--env <name>` with no `environments.<name>` entry. `prod` gets no special case.
 7. An env override for a section the file lacks, for a command that uses that section: `RAYLINE_CLOUD_*` without `cloud`, and `RAYLINE_LOCAL_ROUTING_*` without `local.routing`, `rayline local start --router` included.
 8. A `--config <file>` that doesn't exist. Only the default file is optional.

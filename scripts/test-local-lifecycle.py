@@ -87,7 +87,7 @@ def main():
                                              "context_window": 98304, "max_output_tokens": 8192},
                     },
                 },
-                "routing": {"decisions_model": {"id": "arc-swift-1.0"},
+                "routing": {"decisions_model": {"id": "arc-sage-1.0"},
                             "classifier_model": "anthropic/claude-haiku-5.5",
                             "policy": {"preset": "arc-policy.prefer-local.v1"},
                             # The fixture router decides: this checks supervision,
