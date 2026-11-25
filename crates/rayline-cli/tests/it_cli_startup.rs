@@ -119,17 +119,14 @@ fn a_usage_error_exits_2() {
 #[test]
 fn local_mode_without_local_fails_before_anything_runs() {
     let home = Home::new();
+    let docs = "is required in local mode. See https://docs.rayline.ai/rayline-cli/local-mode";
     // The default file a new user gets is in cloud mode, with no `local`.
     for args in [&["run", "pi", "--mode", "local"][..], &["local", "start"]] {
-        assert_fails(&home.run(args), 1, "`local` is required in local mode");
+        assert_fails(&home.run(args), 1, &format!("`local` {docs}"));
     }
     home.settings(r#"{"mode": "local", "local": {}}"#);
     for args in [&["run", "pi"][..], &["local", "start"]] {
-        assert_fails(
-            &home.run(args),
-            1,
-            "`local.routing` is required in local mode",
-        );
+        assert_fails(&home.run(args), 1, &format!("`local.routing` {docs}"));
     }
 }
 

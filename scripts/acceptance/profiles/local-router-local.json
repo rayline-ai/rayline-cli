@@ -4,7 +4,7 @@
   "local": {
     "routing": {
       "router": "local",
-      "decisions_model": { "id": "arc-swift-1.0" },
+      "decisions_model": { "id": "arc-sage-1.0" },
       "classifier_model": "anthropic/claude-haiku-5.5",
       "policy": { "preset": "arc-policy.prefer-local.v1" }
     }

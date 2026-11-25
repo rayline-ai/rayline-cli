@@ -3,6 +3,14 @@
 User-facing changes in each Rayline release. Install commands and signed
 assets are listed on each [GitHub release](https://github.com/rayline-ai/raydock/releases).
 
+## Unreleased
+
+### Changed
+
+- The error for a missing `local.routing`, or for a `local.routing` missing
+  a required key, now ends with a link to the local-mode docs, as the one
+  for a missing `local` does.
+
 ## 0.5.10 (2026-11-24)
 
 ### Changed (breaking)

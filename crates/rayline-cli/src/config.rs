@@ -560,14 +560,11 @@ fn load_from(
         }
         None => {
             refuse_overrides(env, &ROUTING_OVERRIDES, "local.routing")?;
-            return Err(if has_local {
-                doc.err("local.routing", "is required in local mode")
-            } else {
-                doc.err(
-                    "local",
-                    format!("is required in local mode. See {LOCAL_MODE_DOCS}"),
-                )
-            });
+            let key = if has_local { "local.routing" } else { "local" };
+            return Err(doc.err(
+                key,
+                format!("is required in local mode. See {LOCAL_MODE_DOCS}"),
+            ));
         }
     };
     let update = apply_update_override(raw.update, env)?;
@@ -1399,15 +1396,20 @@ impl<'a> Doc<'a> {
             }
         }
         if let Some(routing) = routing {
-            model(
-                routing.decisions_model.as_ref(),
-                "local.routing.decisions_model",
-            )?;
+            let missing =
+                |key: &str| Err(self.err(key, format!("is required. See {LOCAL_MODE_DOCS}")));
+            match &routing.decisions_model {
+                None => return missing("local.routing.decisions_model"),
+                Some(RawModel { id: None, .. }) => {
+                    return missing("local.routing.decisions_model.id");
+                }
+                Some(_) => {}
+            }
             if routing.router.is_none() {
-                return Err(self.err("local.routing.router", "is required"));
+                return missing("local.routing.router");
             }
             if routing.preset.is_none() {
-                return Err(self.err("local.routing.policy.preset", "is required"));
+                return missing("local.routing.policy.preset");
             }
         }
         Ok(())
@@ -2657,7 +2659,7 @@ pub(crate) mod tests {
         for (name, router, decisions_model) in [
             ("local-cloud-arc-swift", Router::Cloud, "arc-swift-1.0"),
             ("local-cloud-arc-sage", Router::Cloud, "arc-sage-1.0"),
-            ("local-router-local", Router::Local, "arc-swift-1.0"),
+            ("local-router-local", Router::Local, "arc-sage-1.0"),
         ] {
             let settings = profile(name);
             assert!(settings.local, "{name}");
@@ -3247,6 +3249,16 @@ pub(crate) mod tests {
         }
     }
 
+    /// The problem a missing required `key` is reported with: a
+    /// `local.routing` key's also links the local-mode docs.
+    fn required(key: &str) -> String {
+        if key.starts_with("local.routing.") {
+            format!("is required. See {LOCAL_MODE_DOCS}")
+        } else {
+            "is required".to_owned()
+        }
+    }
+
     #[test]
     fn missing_required_keys_are_load_errors() {
         let glm = |name: &str| format!("local.inference.models.\"z-ai/glm-5.3-flash\".{name}");
@@ -3302,7 +3314,7 @@ pub(crate) mod tests {
             remove(&mut doc, &path);
             assert_eq!(
                 key_error(load_doc(&doc)),
-                (key, "is required".to_owned()),
+                (key.clone(), required(&key)),
                 "{path}"
             );
         }
@@ -3351,7 +3363,7 @@ pub(crate) mod tests {
             ] {
                 assert_eq!(
                     key_error(load_doc_for(&doc, command)),
-                    (key.to_owned(), "is required".to_owned()),
+                    (key.to_owned(), required(key)),
                     "{path} {command:?}"
                 );
             }
@@ -3390,18 +3402,9 @@ pub(crate) mod tests {
         for command in [run(None), START, start_file(&file)] {
             assert_eq!(
                 key_error(load(&home, opts(command))),
-                (
-                    "local.routing".to_owned(),
-                    "is required in local mode".to_owned()
-                )
+                ("local.routing".to_owned(), no_local.clone())
             );
         }
-        // The default file of a new user is in cloud mode.
-        let empty = temp_home();
-        assert_eq!(
-            key_error(load(&empty, opts(run(Some(Mode::Local))))),
-            ("local".to_owned(), no_local)
-        );
     }
 
     #[test]
@@ -3410,8 +3413,12 @@ pub(crate) mod tests {
             router: Some(router),
             ..opts(START)
         };
-        // A new user's default file has no `local`.
+        // A file with no `local`.
         let empty = temp_home();
+        write_default(
+            &empty,
+            &json!({"mode": "cloud", "cloud": {"model": {"id": "m"}}}),
+        );
         let no_local = format!("is required in local mode. See {LOCAL_MODE_DOCS}");
         for router in [Router::Local, Router::Cloud] {
             assert_eq!(
@@ -3428,10 +3435,7 @@ pub(crate) mod tests {
         };
         assert_eq!(
             key_error(load(&empty, start_file)),
-            (
-                "local.routing".to_owned(),
-                "is required in local mode".to_owned()
-            )
+            ("local.routing".to_owned(), no_local.clone())
         );
         assert_eq!(
             env_error(load_env(
@@ -3914,7 +3918,7 @@ pub(crate) mod tests {
             for command in [run(Some(Mode::Cloud)), run(Some(Mode::Local)), START] {
                 assert_eq!(
                     key_error(load_env(&home, opts(command), &all)),
-                    (key.to_owned(), "is required".to_owned()),
+                    (key.to_owned(), required(key)),
                     "{path} {command:?}"
                 );
             }
@@ -3932,7 +3936,7 @@ pub(crate) mod tests {
             )),
             (
                 "local.routing.decisions_model.id".to_owned(),
-                "is required".to_owned()
+                required("local.routing.decisions_model.id")
             )
         );
         // Optional keys: `cloud.smol_model` and `update.channel`.

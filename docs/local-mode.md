@@ -52,7 +52,7 @@ Platform.
 
 - Rayline, installed and signed in with `rayline auth login`.
 - A config with a `local.routing` section: `~/.config/rayline/settings.json`,
-  or a file you pass with `--config`.
+  or a file you pass with `--config`. See [Configure](#configure).
 - On macOS, macOS 13 or later.
 
 Your endpoints are optional. With none listed, every model ARC picks goes to
@@ -67,6 +67,27 @@ ARC makes every routing decision. See
 Set `mode` to `local`, and add a `local` section. `local.routing` says how a
 model is picked. `local.inference` lists your endpoints
 (`endpoints`) and the models they serve (`models`); it is optional.
+
+This `settings.json` runs local mode with no server of your own: ARC Sage in
+Rayline Platform decides each turn, and every model it picks runs on Rayline
+Platform.
+
+```json
+{
+  "mode": "local",
+
+  "local": {
+    "routing": {
+      "router": "cloud",
+      "decisions_model": { "id": "arc-sage-1.0" },
+      "classifier_model": "anthropic/claude-haiku-5.5",
+      "policy": { "preset": "arc-policy.prefer-local.v1" }
+    }
+  }
+}
+```
+
+To run some turns on your own servers, add `local.inference`:
 
 ```json
 {
@@ -103,7 +124,7 @@ model is picked. `local.inference` lists your endpoints
     },
     "routing": {
       "router": "cloud",
-      "decisions_model": { "id": "arc-swift-1.0" },
+      "decisions_model": { "id": "arc-sage-1.0" },
       "classifier_model": "anthropic/claude-haiku-5.5",
       "policy": {
         "preset": "arc-policy.prefer-local.v1",
@@ -191,7 +212,7 @@ Every entry works the same way. No setting marks a model as local.
 | Key | Type | Required | Meaning |
 |---|---|---|---|
 | `router` | `cloud` or `local` | yes | `cloud`: Rayline Platform's ARC decides. `local`: ARC runs inside the local process on this machine, and no routing decision goes to Rayline Platform. |
-| `decisions_model` | object with `id`, and optionally `v_value` | yes | The ARC model that makes the decisions, for example `{ "id": "arc-swift-1.0" }`. With `router` `local`, `id` must be `arc-swift-1.0` or `arc-sage-1.0`, and `v_value` isn't allowed. With `router` `cloud`, a `v_value` (a number >= 0) asks ARC for its answer at that value: `{ "id": "arc-1.0", "v_value": 2 }`. |
+| `decisions_model` | object with `id`, and optionally `v_value` | yes | The ARC model that makes the decisions, for example `{ "id": "arc-sage-1.0" }`. With `router` `local`, `id` must be `arc-swift-1.0` or `arc-sage-1.0`, and `v_value` isn't allowed. With `router` `cloud`, a `v_value` (a number >= 0) asks ARC for its answer at that value: `{ "id": "arc-1.0", "v_value": 2 }`. |
 | `classifier_model` | string | to run Claude Code | The model that serves Claude Code's auto-mode safety classifier calls. These calls go to Rayline Platform. |
 | `policy.preset` | non-empty string | yes | The id of an ARC preset: `arc-policy.package-default.v1`, `arc-policy.hybrid-default.v1` or `arc-policy.prefer-local.v1`. It is sent to ARC unchanged. |
 | `policy.overrides` | object | no | Overrides in ARC's own `routing.policy.overrides` shape, sent to ARC unchanged. ARC validates them. |
@@ -365,7 +386,7 @@ The config needs a `local.routing` section; `--router` sets only its
 "local": {
   "routing": {
     "router": "local",
-    "decisions_model": { "id": "arc-swift-1.0" },
+    "decisions_model": { "id": "arc-sage-1.0" },
     "policy": { "preset": "arc-policy.prefer-local.v1" }
   }
 }
@@ -383,7 +404,7 @@ pi-arc finds the local Routes API with `rayline local status --json`:
   "config": "/Users/you/.config/rayline/settings.json",
   "environment": "prod",
   "router": "local",
-  "decisions_model": "arc-swift-1.0",
+  "decisions_model": "arc-sage-1.0",
   "routes": {
     "url": "http://127.0.0.1:57696/v1/routes",
     "token_file": "/Users/you/.rayline/local/routes-token"
@@ -422,7 +443,7 @@ prints one snapshot and exits.
 
 ```
 Rayline top                                    local process · up 12 min · 14:35
-Routing   ARC Swift decides on this Mac · policy: prefer local
+Routing   ARC Sage decides on this Mac · policy: prefer local
 Ran on    Rayline Platform 3 · your servers 1
 Tokens    35.2k in (72% cached) · 1.4k out
 Decisions 4 · median 108 ms · 1 errors
@@ -480,8 +501,9 @@ error that names the key. It refuses:
 4. A model whose `endpoint` isn't in `local.inference.endpoints`.
 5. Local mode without `local.routing`, or a `local.routing` section that is
    missing a required key, whatever the mode. An env override doesn't give a
-   missing key. When the file has no `local` section, the error says so
-   and links this page.
+   missing key. When the file has no `local` section, a `local` section
+   with no `routing`, or a `local.routing` missing a required key, the error
+   says so and links this page.
 6. A `local.routing` env override when the config file has no `local.routing`
    section.
 7. A `decisions_model.v_value`, or a `decisions_model.id` other than
