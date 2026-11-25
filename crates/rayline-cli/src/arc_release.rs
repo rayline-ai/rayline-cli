@@ -714,7 +714,11 @@ mod tests {
         assert!(!stamped(&stamps, &file, &other));
 
         // The same length rewritten, with its modification time put back:
-        // the inode change time moved.
+        // the inode change time moved. A real stamp is only recorded once
+        // the file's times are SETTLED old, so any later change lands in a
+        // later time; the clock above skipped that wait, so wait here, or a
+        // filesystem with coarse times gives the rewrite the stamp's time.
+        settle();
         let modified = fs::metadata(&file)
             .and_then(|m| m.modified())
             .expect("mtime");
