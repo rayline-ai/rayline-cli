@@ -734,21 +734,12 @@ fn unix_now_secs() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
 
-    static NEXT_HOME_ID: AtomicU64 = AtomicU64::new(0);
     const FALLBACK: &str = "CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK";
     const RETRY: &str = "CLAUDE_CODE_DISABLE_REFUSAL_RETRY";
 
-    fn temp_home() -> PathBuf {
-        let id = NEXT_HOME_ID.fetch_add(1, Ordering::Relaxed);
-        let home = std::env::temp_dir().join(format!(
-            "rayline-cli-daemon-test-{}-{id}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&home);
-        fs::create_dir_all(&home).unwrap();
-        home
+    fn temp_home() -> crate::test_dir::TestDir {
+        crate::test_dir::TestDir::new("rayline-cli-daemon-test")
     }
 
     fn launch_request() -> RequestSpec<'static> {

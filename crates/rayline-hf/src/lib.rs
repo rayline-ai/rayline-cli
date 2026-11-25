@@ -745,9 +745,10 @@ mod tests {
     use super::*;
     use std::io::BufRead;
     use std::net::TcpListener;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
     use std::thread;
-    use std::time::{Instant, SystemTime, UNIX_EPOCH};
+    use std::time::Instant;
 
     #[test]
     fn test_repo_to_folder_name() {
@@ -810,7 +811,6 @@ mod tests {
         let empty = |name: &str| (name == "HF_TOKEN").then(|| OsString::from(" "));
         let error = hf_token_from(&home, empty).unwrap_err();
         assert!(error.contains("HF_TOKEN"), "{error}");
-        let _ = fs::remove_dir_all(home);
     }
 
     #[test]
@@ -863,7 +863,6 @@ mod tests {
     #[test]
     fn test_resumed_download_restarts_from_zero_when_range_is_ignored() {
         let test_dir = unique_test_dir("range-ignored");
-        fs::create_dir_all(&test_dir).unwrap();
         let dest_path = test_dir.join("model.gguf.tmp");
         fs::write(&dest_path, b"hello").unwrap();
 
@@ -907,8 +906,6 @@ mod tests {
         assert!(!recorded[1].to_ascii_lowercase().contains("range:"));
         assert_eq!(downloaded, 11);
         assert_eq!(fs::read(&dest_path).unwrap(), b"hello world");
-
-        let _ = fs::remove_dir_all(test_dir);
     }
 
     #[test]
@@ -980,21 +977,44 @@ mod tests {
                 .join(format!("sha256-{expected}"))
                 .is_file()
         );
-
-        let _ = fs::remove_dir_all(test_dir);
     }
 
-    fn unique_test_dir(name: &str) -> PathBuf {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "rayline-hf-{}-{}-{}",
-            name,
-            std::process::id(),
-            nanos
-        ))
+    /// A new, empty directory under the system temp directory, removed with
+    /// everything in it when dropped: when its test ends, passed or failed.
+    struct TestDir(PathBuf);
+
+    impl std::ops::Deref for TestDir {
+        type Target = PathBuf;
+
+        fn deref(&self) -> &PathBuf {
+            &self.0
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn unique_test_dir(name: &str) -> TestDir {
+        // A counter, not the clock: parallel tests can read the same time.
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        // The temp directory itself may not exist yet, e.g. a TMPDIR set to
+        // a fresh path.
+        fs::create_dir_all(std::env::temp_dir()).unwrap();
+        loop {
+            let unique = NEXT.fetch_add(1, Ordering::Relaxed);
+            let dir = std::env::temp_dir()
+                .join(format!("rayline-hf-{name}-{}-{unique}", std::process::id()));
+            match fs::create_dir(&dir) {
+                Ok(()) => return TestDir(dir),
+                // Another run with the same process id has it, or an earlier
+                // run left it: not ours, so leave it and try the next name.
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => panic!("create test directory {}: {error}", dir.display()),
+            }
+        }
     }
 
     fn sha256_hex(bytes: &[u8]) -> String {

@@ -1648,8 +1648,16 @@ mod tests {
 
     #[test]
     fn the_routes_token_is_published_beside_the_ready_file_and_removed_with_it() {
+        // Removed when the test ends, passed or failed.
+        struct RemoveOnDrop(std::path::PathBuf);
+        impl Drop for RemoveOnDrop {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
         let dir = std::env::temp_dir().join(format!("rayline-routes-token-{}", token()));
         std::fs::create_dir_all(&dir).unwrap();
+        let _remove = RemoveOnDrop(dir.clone());
         let ready_file = dir.join("ready.json");
         let path = dir.join(ROUTES_TOKEN_FILE);
         let mut cleanup = StateFiles {
@@ -1679,7 +1687,6 @@ mod tests {
         assert!(path.exists());
         drop(cleanup);
         assert!(!path.exists());
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

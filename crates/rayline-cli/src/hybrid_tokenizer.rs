@@ -166,12 +166,8 @@ mod tests {
 
     const REPO: &str = "example/model";
 
-    fn temp_hub(name: &str) -> PathBuf {
-        let hub =
-            std::env::temp_dir().join(format!("rayline-tokenizer-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&hub);
-        std::fs::create_dir_all(&hub).unwrap();
-        hub
+    fn temp_hub(name: &str) -> crate::test_dir::TestDir {
+        crate::test_dir::TestDir::new(&format!("rayline-tokenizer-{name}"))
     }
 
     #[test]
@@ -182,7 +178,6 @@ mod tests {
             cached_or(&hub, REPO, error.clone()).err(),
             Some(error.clone())
         );
-        let _ = std::fs::remove_dir_all(&hub);
     }
 
     #[test]
@@ -213,7 +208,6 @@ mod tests {
             cached(),
             format!("{}: not a commit: ../x", marker.display())
         );
-        let _ = std::fs::remove_dir_all(&hub);
     }
 
     #[test]
@@ -230,7 +224,6 @@ mod tests {
         let used = cached_or(&hub, REPO, "unused".to_owned()).unwrap();
         assert_eq!(used.dir, snapshot);
         assert!(used.cached);
-        let _ = std::fs::remove_dir_all(&hub);
     }
 
     const RATE_LIMITED: &str = "Download failed with status 429 Too Many Requests";
@@ -284,7 +277,6 @@ mod tests {
         let used = fetch_current(&hub, RATE_LIMITED).unwrap();
         assert_eq!(used.dir, snapshot);
         assert!(used.cached);
-        let _ = std::fs::remove_dir_all(&hub);
     }
 
     #[test]
@@ -297,7 +289,6 @@ mod tests {
                 rayline_tokencount::TEMPLATE_FILE
             ))
         );
-        let _ = std::fs::remove_dir_all(&hub);
     }
 
     #[test]
@@ -310,7 +301,6 @@ mod tests {
             fetch_current(&hub, NOT_FOUND).err().as_deref(),
             Some(NO_CHAT_TEMPLATE)
         );
-        let _ = std::fs::remove_dir_all(&hub);
     }
 
     /// A Hub that serves `tokenizer.json` and `tokenizer_config.json` with
@@ -347,7 +337,6 @@ mod tests {
             );
             assert_eq!(fetched.err().as_deref(), Some(NO_CHAT_TEMPLATE));
             assert!(!complete_marker(&hub, REPO).exists());
-            let _ = std::fs::remove_dir_all(&hub);
         }
     }
 
@@ -367,7 +356,6 @@ mod tests {
             fetched.err().as_deref(),
             Some("tokenizer_config.json has no default chat template")
         );
-        let _ = std::fs::remove_dir_all(&hub);
     }
 
     #[test]
@@ -385,7 +373,6 @@ mod tests {
             std::fs::read_to_string(complete_marker(&hub, REPO)).unwrap(),
             "def456"
         );
-        let _ = std::fs::remove_dir_all(&hub);
     }
 
     #[test]
@@ -404,7 +391,6 @@ mod tests {
             cached_or(&hub, REPO, "unused".to_owned()).err().as_deref(),
             Some(NO_CHAT_TEMPLATE)
         );
-        let _ = std::fs::remove_dir_all(&hub);
     }
 
     #[test]

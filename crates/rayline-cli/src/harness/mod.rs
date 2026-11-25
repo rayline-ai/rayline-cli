@@ -1064,16 +1064,8 @@ pub(crate) mod tests {
     pub(crate) const TEST_URL: &str = "https://router.example.test";
     pub(crate) const TEST_KEY: &str = "rlk-test";
 
-    pub(crate) fn temp_dir(label: &str) -> PathBuf {
-        // A counter, not the clock: parallel tests can read the same time.
-        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let unique = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
-            "rayline-harness-{label}-{}-{unique}",
-            std::process::id()
-        ));
-        fs::create_dir_all(&dir).unwrap();
-        dir
+    pub(crate) fn temp_dir(label: &str) -> crate::test_dir::TestDir {
+        crate::test_dir::TestDir::new(&format!("rayline-harness-{label}"))
     }
 
     /// Asserts that Rayline wrote files under `home` and that each one is
@@ -1303,7 +1295,7 @@ pub(crate) mod tests {
                     harness.name()
                 );
             }
-            fs::remove_dir_all(home).unwrap();
+            home.remove().unwrap();
         }
     }
 
@@ -1394,7 +1386,22 @@ pub(crate) mod tests {
     }
 
     /// Render `harness` into a temp dir and return (dir, plan).
-    pub(crate) fn render(harness: Harness) -> (PathBuf, Plan) {
+    /// A harness config folder inside a test home, which is removed when this
+    /// is dropped. Dereferences to the folder.
+    pub(crate) struct ConfigDir {
+        dir: PathBuf,
+        home: crate::test_dir::TestDir,
+    }
+
+    impl std::ops::Deref for ConfigDir {
+        type Target = PathBuf;
+
+        fn deref(&self) -> &PathBuf {
+            &self.dir
+        }
+    }
+
+    pub(crate) fn render(harness: Harness) -> (ConfigDir, Plan) {
         let home = temp_dir(harness.name());
         let dir = config_dir(&home, harness);
         let ctx = RenderContext {
@@ -1407,7 +1414,7 @@ pub(crate) mod tests {
         };
         let plan = harness.plan(&ctx).unwrap();
         write_files(&dir, &plan.files).unwrap();
-        (dir, plan)
+        (ConfigDir { dir, home }, plan)
     }
 
     pub(crate) fn env_value<'a>(plan: &'a Plan, name: &str) -> Option<&'a OsString> {
@@ -1432,7 +1439,7 @@ pub(crate) mod tests {
             let (dir, _) = render(harness);
             let home = dir.ancestors().nth(3).unwrap();
             assert_only_harness_files(home, harness.name(), &[]);
-            fs::remove_dir_all(home).unwrap();
+            dir.home.remove().unwrap();
         }
     }
 
@@ -1463,7 +1470,8 @@ pub(crate) mod tests {
     #[test]
     fn write_files_restricts_the_dir_and_files_to_the_owner() {
         use rayline_local_router::windows_state::is_owner_only;
-        let dir = temp_dir("write-acl").join("cfg");
+        let base = temp_dir("write-acl");
+        let dir = base.join("cfg");
         let files = [ConfigFile {
             name: "config.toml",
             contents: "secret = 1\n".to_owned(),
@@ -1476,7 +1484,8 @@ pub(crate) mod tests {
 
     #[test]
     fn write_files_rewrites_each_file() {
-        let dir = temp_dir("write").join("cfg");
+        let base = temp_dir("write");
+        let dir = base.join("cfg");
         let files = |text: &str| {
             vec![ConfigFile {
                 name: "owned.json",
@@ -1591,7 +1600,8 @@ pub(crate) mod tests {
     #[test]
     fn write_files_replaces_a_readable_file_with_an_owner_only_one() {
         use std::os::unix::fs::PermissionsExt as _;
-        let dir = temp_dir("mode").join("cfg");
+        let base = temp_dir("mode");
+        let dir = base.join("cfg");
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("owned.json");
         fs::write(&path, "old").unwrap();
@@ -1638,7 +1648,6 @@ pub(crate) mod tests {
         }
         assert_eq!(launch_program("pi", path), PathBuf::from("pi"));
         assert_eq!(launch_program("codex", None), PathBuf::from("codex"));
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[cfg(unix)]
