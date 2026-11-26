@@ -1,0 +1,41 @@
+# Dependabot: grouped SECURITY updates only (SOC 2 vulnerability SLA; same pattern as
+# atlasfutures/pathfinder .github/dependabot.yml).
+#
+# - `open-pull-requests-limit: 0` turns off routine version-update PRs. Security updates are
+#   governed by the repo's "Dependabot security updates" setting, not by this limit, so they
+#   keep flowing, and they open as soon as an alert appears.
+# - One `security` group per ecosystem: one PR per run instead of one PR per advisory.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 0
+    groups:
+      cargo-security:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  - package-ecosystem: pip
+    directory: "/examples/python"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 0
+    groups:
+      pip-security:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: "/examples/typescript"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 0
+    groups:
+      npm-security:
+        applies-to: security-updates
+        patterns: ["*"]
